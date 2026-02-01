@@ -1,228 +1,49 @@
 import logging
-import torch
-import numpy as np
-
 
 class VersionWarningFilter(logging.Filter):
     def filter(self, record):
         # avoid lerobot warning
         return "is in 2.0 format" not in record.getMessage()
 
-
 logging.getLogger().addFilter(VersionWarningFilter())
-# needed to load LIBERO initial states
-torch.serialization.add_safe_globals(
-    [
-        np.core.multiarray._reconstruct,  # noqa
-        np.ndarray,
-        np.dtype,
-        np.dtypes.Float64DType,
-    ]
-)
-
+# TODO: this seems to be needed due to conflicts with jax - is it?
+# allows using subprocenvs
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)
 
 import dataclasses
 import functools
 import logging
 import platform
-from typing import Any
-import collections
-import pathlib
-import shutil
 
 import etils.epath as epath
 import flax.nnx as nnx
 from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
-import jax.experimental
 import jax.numpy as jnp
-import lerobot.datasets.lerobot_dataset as lerobot_dataset
-from libero.libero import benchmark
-from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
+from jax.sharding import Mesh, PartitionSpec, NamedSharding
+from jax.experimental import mesh_utils
+import numpy as np
 import optax
-from openpi_client import image_tools
-from robosuite.utils.transform_utils import quat2axisangle
 import tqdm_loggable.auto as tqdm
+from typing import Any
 import wandb
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
-import openpi.training.config as _config
-import openpi.training.data_loader as _data_loader
 import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
 from openpi.policies import policy_config
 
-
-def collect_data(config, checkpoint_path, data_path, step):
-    """Dummy script to collect data using the trained policy. Untested."""
-
-    benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict[config.task_suite_name]()
-    policy = policy_config.create_trained_policy(config, checkpoint_path)
-    if data_path.exists():
-        shutil.rmtree(data_path)
-
-    allowed_keys = {"image", "wrist_image", "state", "actions"}
-    collected_dataset = lerobot_dataset.LeRobotDataset.create(
-        repo_id=config.data.repo_id,
-        root=data_path,
-        robot_type="panda",
-        fps=10,
-        features={k: v for k, v in lerobot_dataset.LeRobotDatasetMetadata(config.data.repo_id).features.items() if k in allowed_keys},
-        image_writer_threads=10,
-        image_writer_processes=5,
-    )
-
-    total_episodes, total_successes = 0, 0
-    # TODO: move environment-specific logic to its own file
-    # tasks that may not be fully solved or unsolved in libero90: 6, 20, 27, 29, 32, 55, 56, 59
-    task = task_suite.get_task(config.task_id)
-    initial_states = task_suite.get_task_init_states(config.task_id)
-    task_description = task.language
-    task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    env_args = {
-        "bddl_file_name": task_bddl_file,
-        "camera_heights": config.env_resolution,
-        "camera_widths": config.env_resolution,
-    }
-    env = OffScreenRenderEnv(**env_args)
-    # TODO: check seeding behavior
-    env.seed(42)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
-    for episode_idx in tqdm.tqdm(range(config.num_trials_per_task)):
-        logging.info(f"\nTask: {task_description}")
-        env.reset()
-        action_plan = collections.deque()
-        obs = env.set_init_state(initial_states[episode_idx])
-        t = 0
-        logging.info(f"Starting episode {episode_idx + 1}...")
-        frames = []
-        while t < config.max_steps + config.num_steps_wait:
-            # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
-            if t < config.num_steps_wait:
-                obs, reward, done, info = env.step([0.0] * 6 + [-1.0])
-                t += 1
-                continue
-
-            # Get preprocessed image
-            # IMPORTANT: rotate 180 degrees to match train preprocessing
-            og_img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-            og_wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-            img = image_tools.convert_to_uint8(image_tools.resize_with_pad(og_img, 224, 224))
-            wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(og_wrist_img, 224, 224))
-
-            if not action_plan:
-                element = {
-                    "observation/image": img,
-                    "observation/wrist_image": wrist_img,
-                    "observation/state": np.concatenate(
-                        (
-                            obs["robot0_eef_pos"],
-                            quat2axisangle(obs["robot0_eef_quat"]),
-                            obs["robot0_gripper_qpos"],
-                        )
-                    ),
-                    "prompt": str(task_description),
-                }
-
-                action_chunk = policy.infer(element)["actions"]
-
-                assert len(action_chunk) >= config.replan_steps, (
-                    f"We want to replan every {config.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
-                )
-                action_plan.extend(action_chunk[:config.replan_steps])
-
-            action = action_plan.popleft()
-
-            obs, _reward, done, _info = env.step(action.tolist())
-
-            # optionally zero-out low-norm actions
-            action = np.where(np.abs(action) < 0.0011, 0.0, action)
-
-            frames.append(
-                {
-                    "image": og_img,
-                    "wrist_image": og_wrist_img,
-                    "state": np.concatenate(
-                        (
-                            obs["robot0_eef_pos"],
-                            quat2axisangle(obs["robot0_eef_quat"]),
-                            obs["robot0_gripper_qpos"],
-                        )
-                    ).astype(np.float32),
-                    "actions": np.asarray(action, dtype=np.float32),
-                }
-            )
-
-            if done:
-                total_successes += 1
-                break
-            t += 1
-
-        if done:
-            [collected_dataset.add_frame(f, task=str(task_description)) for f in frames]
-            collected_dataset.save_episode()
-        total_episodes += 1
-
-        logging.info(f"Success: {done}")
-        logging.info(f"# episodes completed so far: {total_episodes}")
-        logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
-
-    logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
-    wandb.log({"total_success_rate": float(total_successes) / float(total_episodes)}, step=step)
-    logging.info(f"Total episodes: {total_episodes}")
-
-    # free up VRAM
-    del policy
-    return collected_dataset.num_episodes
-
-
-def init_logging():
-    """Custom logging format for better readability."""
-    level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
-
-    class CustomFormatter(logging.Formatter):
-        def format(self, record):
-            record.levelname = level_mapping.get(record.levelname, record.levelname)
-            return super().format(record)
-
-    formatter = CustomFormatter(
-        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
-        datefmt="%H:%M:%S",
-    )
-
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logger.handlers[0].setFormatter(formatter)
-
-
-def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = False, enabled: bool = True):
-    if not enabled:
-        wandb.init(mode="disabled")
-        return
-
-    ckpt_dir = config.checkpoint_dir
-    if not ckpt_dir.exists():
-        raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
-    if resuming:
-        run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
-    else:
-        wandb.init(
-            name=config.exp_name,
-            config=dataclasses.asdict(config),
-            project=config.project_name,
-        )
-        (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
-
-    if log_code:
-        wandb.run.log_code(epath.Path(__file__).parent.parent)
+from src.training.data_loader import create_data_loader
+import src.training.config as _config
+from src.training.utils import init_logging, init_wandb, log_images
+from src.training.collect import collect_data
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -347,23 +168,23 @@ def train_step(
 
 
 def main(config: _config.TrainConfig):
+
+    # prepare logging, rng
     init_logging()
     logging.info(f"Running on: {platform.node()}")
-
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
-
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    train_rng, init_rng = jax.random.split(jax.random.key(config.seed))
 
-    rng = jax.random.key(config.seed)
-    train_rng, init_rng = jax.random.split(rng)
-
+    # set up sharding
     mesh = sharding.make_mesh(config.fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
+    # initialize checkopointing, wandb
     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
         config.checkpoint_dir,
         keep_period=config.keep_period,
@@ -372,36 +193,27 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-    )
+    # initialize data loader
+    data_loader = create_data_loader(config, sharding=data_sharding, shuffle=True)
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+    log_images(batch)  # log images from first batch to sanity check
 
-    # Log images from first batch to sanity check.
-    images_to_log = [
-        wandb.Image(np.concatenate([(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
-
+    # initialize training_state
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
     logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
-
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    # prepare train_step
     ptrain_step = jax.jit(
         functools.partial(train_step, config),
         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
-
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
@@ -412,9 +224,13 @@ def main(config: _config.TrainConfig):
 
     infos, collected_data_paths = [], []
     for step in pbar:
+
+        # perform a training step
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
+
+        # logging
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
@@ -423,30 +239,29 @@ def main(config: _config.TrainConfig):
             wandb.log(reduced_info, step=step)
             infos = []
 
-        if step % config.collect_interval == 0:
-            # checkpoint policy and free up GPU memory; alternatively, offload to RAM
+        if step % config.collect.collect_interval == 0:
+
+            # checkpoint policy and free up GPU memory
+            # TODO: explore offloading to RAM
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
             checkpoint_manager.wait_until_finished()
             del train_state, train_state_sharding, ptrain_step
 
-            # the new dataset will be saved here with the same repo_id but different path
+            # by default, new data is saved in checkpoint directory
             new_data_path = epath.Path(config.checkpoint_base_dir) / "data" / str(step)
-            dataset_size = collect_data(config, checkpoint_manager._directory / str(step), data_path=new_data_path, step=step)
-            if dataset_size:
+            model_load_path = checkpoint_manager._directory / str(step)
+            collect_info, n_collected_episodes = collect_data(config, model_load_path, data_path=new_data_path)
+            wandb.log(collect_info, step=step)
+            if n_collected_episodes > 0:
                 collected_data_paths.append(new_data_path)
 
-            # now recreate data loader adding the newly collected data
-            new_base_data_config = dataclasses.replace(config.data.base_config, additional_repo_paths=tuple(collected_data_paths))
-            new_data_config = dataclasses.replace(config.data, base_config=new_base_data_config)
-            new_config = dataclasses.replace(config, data=new_data_config)
-            data_loader = _data_loader.create_data_loader(
-                new_config,
-                sharding=data_sharding,
-                shuffle=True,
-            )
+            # now recreate the data loader adding the newly collected data
+            # TODO: simply update the existing dataset instead of reloading everything
+            data_loader = create_data_loader(config, sharding=data_sharding, shuffle=True, collected_data_paths=collected_data_paths)
             data_iter = iter(data_loader)
 
             # reload policy from checkpoint
+            # TODO: load from RAM if possible
             train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=True)
             train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
             jax.block_until_ready(train_state)
@@ -469,4 +284,4 @@ def main(config: _config.TrainConfig):
 if __name__ == "__main__":
     main(_config.cli())
 
-# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train_online.py pi05_libero_online --exp-name=my_experiment --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params
+# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run /users/$USER/vla-pt/scripts/train_online_batched.py pi05_libero_online --exp-name=my_experiment --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params
