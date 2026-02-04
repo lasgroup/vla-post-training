@@ -162,5 +162,4 @@ def get_frame_libero(obs, action, task_description):
             ), -1
         ).astype(np.float32),
         "actions": np.asarray(processed_action, dtype=np.float32),
-        "task": [str(task_description) for _ in range(og_img.shape[0])],
     }

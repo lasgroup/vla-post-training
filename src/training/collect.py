@@ -70,7 +70,7 @@ def collect_data(config, checkpoint_path, data_path):
                 collected_dataset.add_frame(f_single)
                 if s[i]:
                     break
-            collected_dataset.save_episode()
+            collected_dataset.save_episode(str(task_description))
             total_successes += 1
 
         logging.info(f"# Successes: {total_successes}/{total_episodes} ({total_successes / total_episodes * 100:.1f}%)")
