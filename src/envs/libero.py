@@ -2,13 +2,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pathlib
+import torch
 
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
 import openpi.models.model as _model
-import openpi.training.utils as training_utils
 from openpi_client import image_tools
 
 
@@ -72,16 +72,30 @@ def make_env_libero(config):
     return env, initial_states, task_description
 
 
+def get_max_steps_libero(task_name):
+    _max_steps_map = {
+        "libero_spatial": 220,
+        "libero_object": 280,
+        "libero_goal": 300,
+        "libero_10": 520,
+        "libero_90": 400,
+    }
+    task_name = "_".join(task_name.split("_")[:-1])
+    if task_name not in _max_steps_map:
+        raise ValueError(f"Unknown task name {task_name}. Max steps for known tasks: {_max_steps_map}")
+    return _max_steps_map[task_name]
+
+
 def init_state_libero(env, initial_states, episode_idx, config):
     env.reset()
-    obs = env.set_init_state(initial_states[episode_idx * config.env_num: (episode_idx + 1) * config.env_num]) # [_ for _ in range(config.env_num)]
+    obs = env.set_init_state(initial_states[episode_idx * config.collect.env_num: (episode_idx + 1) * config.collect.env_num])
     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
-    for _ in range(config.num_steps_wait):
-        obs, reward, done, info = env.step(np.array([[0.0]*6+[-1.] for _ in range(config.env_num)]))
+    for _ in range(config.collect.num_steps_wait):
+        obs, reward, done, info = env.step(np.array([[0.0]*6+[-1.] for _ in range(config.collect.env_num)]))
     return obs
 
 
-def get_action_chunk_libero(obs, task_description, policy, config):
+def get_action_chunk_libero(obs, task_description, policy, config, sharding_spec):
     obs = {k: np.stack([o[k] for o in obs], 0) for k, v in obs[0].items()}
     # Get preprocessed image
     # IMPORTANT: rotate 180 degrees to match train preprocessing
@@ -106,9 +120,9 @@ def get_action_chunk_libero(obs, task_description, policy, config):
     # manually replicating policy.infer
     # very hacky, only for benchmarking purposes
     inputs = policy._input_transform(element)
-    inputs['image_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.env_num, 0), inputs['image_mask'])
-    inputs['tokenized_prompt'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.env_num, 0), inputs['tokenized_prompt'])
-    inputs['tokenized_prompt_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.env_num, 0), inputs['tokenized_prompt_mask'])
+    inputs['image_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['image_mask'])
+    inputs['tokenized_prompt'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['tokenized_prompt'])
+    inputs['tokenized_prompt_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['tokenized_prompt_mask'])
     
     if sharding_spec:
         inputs = jax.device_put(inputs, sharding_spec)
@@ -123,8 +137,8 @@ def get_action_chunk_libero(obs, task_description, policy, config):
 
     actions_list = []
     # TODO: Improve slow python loop
-    for b in range(config.env_num):
-        out_b = {k: (v[b, ...] if hasattr(v, "shape") and v.shape[0] == config.env_num else v) for k, v in outputs.items()}
+    for b in range(config.collect.env_num):
+        out_b = {k: (v[b, ...] if hasattr(v, "shape") and v.shape[0] == config.collect.env_num else v) for k, v in outputs.items()}
         out_b = policy._output_transform(out_b)
         actions_list.append(out_b["actions"])
     action_chunk = np.stack(actions_list, axis=0)
@@ -148,5 +162,5 @@ def get_frame_libero(obs, action, task_description):
             ), -1
         ).astype(np.float32),
         "actions": np.asarray(processed_action, dtype=np.float32),
-        "task": [str(task_description) for _ in range(config.env_num)],
+        "task": [str(task_description) for _ in range(og_img.shape[0])],
     }

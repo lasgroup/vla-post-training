@@ -1,10 +1,10 @@
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 import etils.epath as epath
 import jax
 import logging
 import numpy as np
 import torch
-from typing import Literal, SupportsIndex
+from typing import Literal
 
 import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import openpi.training.config as _config
