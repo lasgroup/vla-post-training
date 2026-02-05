@@ -251,7 +251,7 @@ def main(config: _config.TrainConfig):
             del train_state, train_state_sharding, ptrain_step
 
             # by default, new data is saved in checkpoint directory
-            new_data_path = epath.Path(config.checkpoint_base_dir) / "data" / str(step)
+            new_data_path = checkpoint_manager._directory / "data" / str(step)
             model_load_path = checkpoint_manager._directory / str(step)
             collect_info, n_collected_episodes = collect_data(config, model_load_path, data_path=new_data_path)
             wandb.log(collect_info, step=step)

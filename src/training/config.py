@@ -10,7 +10,7 @@ import openpi.training.weight_loaders as weight_loaders
 
 @dataclasses.dataclass(frozen=True)
 class CollectionConfig:
-    collect_interval: int = 100
+    collect_interval: int = 200
     env_num: int = 4
     env_resolution: int = 256
     num_rollouts: int = 50
