@@ -14,7 +14,7 @@ class CollectionConfig:
     env_num: int = 4
     env_resolution: int = 256
     num_rollouts: int = 50
-    tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_29"])
+    tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
 

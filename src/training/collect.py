@@ -37,9 +37,10 @@ def collect_data(config, checkpoint_path, data_path):
     # rollout parallel environments
     env, initial_states, task_description = make_env_libero(config.collect)
     total_episodes, total_successes = 0, 0
-    for episode_idx in tqdm.tqdm(range(config.collect.num_rollouts // config.collect.env_num + 1)):
+    logging.info(f"Collecting for task: {task_description}")
+    pbar = tqdm.tqdm(range(config.collect.num_rollouts // config.collect.env_num + 1))
+    for episode_idx in pbar:
 
-        logging.info(f"\nTask: {task_description}")
         action_plan = collections.deque()
         obs = init_state_libero(env, initial_states, episode_idx, config)
         frames, solved = [], [np.array([False] * config.collect.env_num)]
@@ -67,13 +68,13 @@ def collect_data(config, checkpoint_path, data_path):
             for f, s in zip(frames, solved[1:]):
                 # save successful ones until success
                 f_single = {k: v[i] for k, v in f.items()}
-                collected_dataset.add_frame(f_single)
+                collected_dataset.add_frame(f_single, task=str(task_description))
                 if s[i]:
                     break
-            collected_dataset.save_episode(str(task_description))
+            collected_dataset.save_episode()
             total_successes += 1
 
-        logging.info(f"# Successes: {total_successes}/{total_episodes} ({total_successes / total_episodes * 100:.1f}%)")
+        pbar.set_postfix(SR=total_successes / total_episodes)
 
     metrics = {"success_rate": float(total_successes) / float(total_episodes)}
 

@@ -10,7 +10,7 @@ import lerobot.datasets.lerobot_dataset as lerobot_dataset
 import openpi.training.config as _config
 import openpi.models.model as _model
 import openpi.transforms as _transforms
-from openpi.training.data_loader import Dataset, DataLoader, DataLoaderImpl, transform_dataset, TorchDataLoader
+from openpi.training.data_loader import Dataset, DataLoader, DataLoaderImpl, transform_dataset, TorchDataLoader, TransformedDataset
 from openpi.training.data_loader import create_torch_dataset as original_create_torch_dataset
 
 
@@ -45,13 +45,12 @@ def create_torch_dataset(
         model_config,
     )
 
-    # if collected_data_paths is not None:
-    if data_config.additional_repo_paths:
+    if collected_data_paths:
         datasets = [dataset]
-        for repo_path in data_config.additional_repo_paths:  # collected_data_paths
-            meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, root=repo_path)
+        for repo_path in collected_data_paths:  # collected_data_paths
+            meta = lerobot_dataset.LeRobotDatasetMetadata(data_config.repo_id, root=repo_path)
             ds = lerobot_dataset.LeRobotDataset(
-                repo_id,
+                data_config.repo_id,
                 root=repo_path,
                 delta_timestamps={
                     key: [t / meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
@@ -138,7 +137,7 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
-    dataset = create_torch_dataset(data_config, action_horizon, model_config)
+    dataset = create_torch_dataset(data_config, action_horizon, model_config, collected_data_paths)
     dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks

@@ -88,10 +88,13 @@ def get_max_steps_libero(task_name):
 
 def init_state_libero(env, initial_states, episode_idx, config):
     env.reset()
-    obs = env.set_init_state(initial_states[episode_idx * config.collect.env_num: (episode_idx + 1) * config.collect.env_num])
+    start = episode_idx * config.collect.env_num
+    end = (episode_idx + 1) * config.collect.env_num
+    _initial_states = np.stack([initial_states[i % len(initial_states)] for i in range(start, end)], 0)
+    obs = env.set_init_state(_initial_states)
     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
     for _ in range(config.collect.num_steps_wait):
-        obs, reward, done, info = env.step(np.array([[0.0]*6+[-1.] for _ in range(config.collect.env_num)]))
+        obs, _, _, _ = env.step(np.array([[0.0]*6+[-1.] for _ in range(config.collect.env_num)]))
     return obs
 
 

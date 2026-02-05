@@ -1,12 +1,19 @@
-import logging
+# suppress Numba FNV hashing warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
+# suppress lerobot version warnings
+import logging
 class VersionWarningFilter(logging.Filter):
     def filter(self, record):
         # avoid lerobot warning
         return "is in 2.0 format" not in record.getMessage()
-
 logging.getLogger().addFilter(VersionWarningFilter())
-# TODO: this seems to be needed due to conflicts with jax - is it?
+
+# disable datasets progress bars
+from datasets import disable_progress_bars
+disable_progress_bars()
+
 # allows using subprocenvs
 import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
@@ -22,9 +29,6 @@ from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
-from jax.sharding import Mesh, PartitionSpec, NamedSharding
-from jax.experimental import mesh_utils
-import numpy as np
 import optax
 import tqdm_loggable.auto as tqdm
 from typing import Any
@@ -38,7 +42,6 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
-from openpi.policies import policy_config
 
 from src.training.data_loader import create_data_loader
 import src.training.config as _config
@@ -72,7 +75,7 @@ def init_train_state(
         if partial_params is not None:
             graphdef, state = nnx.split(model)
             # This will produce an error if the partial params are not a subset of the state.
-            state.replace_by_pure_dict(partial_params)
+            nnx.replace_by_pure_dict(state, partial_params)
             model = nnx.merge(graphdef, state)
 
         params = nnx.state(model)
@@ -84,7 +87,7 @@ def init_train_state(
             params=params,
             model_def=nnx.graphdef(model),
             tx=tx,
-            opt_state=tx.init(params.filter(config.trainable_filter)),
+            opt_state=tx.init(nnx.filter_state(params, config.trainable_filter)),
             ema_decay=config.ema_decay,
             ema_params=None if config.ema_decay is None else params,
         )
@@ -95,7 +98,7 @@ def init_train_state(
     if resume:
         return train_state_shape, state_sharding
 
-    partial_params = _load_weights_and_validate(config.weight_loader, train_state_shape.params.to_pure_dict())
+    partial_params = _load_weights_and_validate(config.weight_loader, nnx.to_pure_dict(train_state_shape.params))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
     # Initialize the train state and mix in the partial params.
@@ -133,7 +136,7 @@ def train_step(
     diff_state = nnx.DiffState(0, config.trainable_filter)
     loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
 
-    params = state.params.filter(config.trainable_filter)
+    params = nnx.filter_state(state.params, config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
     new_params = optax.apply_updates(params, updates)
 
