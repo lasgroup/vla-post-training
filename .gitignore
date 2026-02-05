@@ -1,0 +1,13 @@
+# Python bytecode and cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution and packaging directories
+*.egg-info/
+
+# Specifics
+checkpoints/
+wandb/
+assets/

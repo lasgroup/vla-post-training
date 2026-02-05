@@ -1,8 +1,8 @@
 # Dockerfile for custon CSCS container
 
 # Build the container:
-# cd vla-pt
-# podman build . -f scripts/docker/vla-pt.Dockerfile -t vla-pt
+# cd vla-post-training
+# podman build . -f docker/vla-pt.Dockerfile -t vla-pt
 # enroot import -x mount -o vla-pt.sqsh podman://vla-pt:latest
 # mv vla-pt.sqsh /capstor/store/cscs/swissai/a143/project-vla-pt
 
@@ -46,7 +46,8 @@ ENV UV_PROJECT_ENVIRONMENT=/.venv
 RUN uv venv --python 3.11.9 $UV_PROJECT_ENVIRONMENT
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    uv sync --frozen
 
 # Copy transformers_replace files while preserving directory structure
 COPY openpi/src/openpi/models_pytorch/transformers_replace/ /tmp/transformers_replace/
@@ -63,8 +64,8 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d && echo '{"file_format_version" : "1.
 
 # Create a default config file to avoid an input prompt from LIBERO's init script.
 # https://github.com/Lifelong-Robot-Learning/LIBERO/blob/master/libero/libero/__init__.py
-ENV LIBERO_CONFIG_PATH=/tmp/libero
-RUN mkdir -p /tmp/libero && cat <<'EOF' > /tmp/libero/config.yaml
+ENV LIBERO_CONFIG_PATH=/etc/libero
+RUN mkdir -p /etc/libero && cat <<'EOF' > /etc/libero/config.yaml
 benchmark_root: /.venv/lib/python3.11/site-packages/libero/libero
 bddl_files: /.venv/lib/python3.11/site-packages/libero/libero/./bddl_files
 init_states: /.venv/lib/python3.11/site-packages/libero/libero/./init_files
