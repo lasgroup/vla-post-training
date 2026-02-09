@@ -119,10 +119,7 @@ def get_action_chunk_libero(obs, task_description, policy, config, sharding_spec
         "prompt": str(task_description),
     }
 
-    if sharding_spec:
-        element = jax.device_put(element, sharding_spec)
-
-    return policy.infer(element)["actions"]
+    return policy.infer(element, sharding_spec=sharding_spec)["actions"]
 
 
 def get_frame_libero(obs, action, task_description):
