@@ -118,35 +118,11 @@ def get_action_chunk_libero(obs, task_description, policy, config, sharding_spec
         ),
         "prompt": str(task_description),
     }
-    # TODO: Move into batched infer functionality
-    # call policy inference in a reasonable way - I could not find batch inference methods
-    # manually replicating policy.infer
-    # very hacky, only for benchmarking purposes
-    inputs = policy._input_transform(element)
-    inputs['image_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['image_mask'])
-    inputs['tokenized_prompt'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['tokenized_prompt'])
-    inputs['tokenized_prompt_mask'] = jax.tree.map(lambda x: jnp.stack([jnp.asarray(x)]*config.collect.env_num, 0), inputs['tokenized_prompt_mask'])
-    
+
     if sharding_spec:
-        inputs = jax.device_put(inputs, sharding_spec)
+        element = jax.device_put(element, sharding_spec)
 
-    policy._rng, sample_rng_or_pytorch_device = jax.random.split(policy._rng)
-    sample_kwargs = dict(policy._sample_kwargs)
-    observation = _model.Observation.from_dict(inputs)
-    outputs = {
-        "state": inputs["state"],
-        "actions": policy._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
-    }
-
-    actions_list = []
-    # TODO: Improve slow python loop
-    for b in range(config.collect.env_num):
-        out_b = {k: (v[b, ...] if hasattr(v, "shape") and v.shape[0] == config.collect.env_num else v) for k, v in outputs.items()}
-        out_b = policy._output_transform(out_b)
-        actions_list.append(out_b["actions"])
-    action_chunk = np.stack(actions_list, axis=0)
-
-    return action_chunk
+    return policy.infer(element)["actions"]
 
 
 def get_frame_libero(obs, action, task_description):
