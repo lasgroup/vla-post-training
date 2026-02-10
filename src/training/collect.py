@@ -45,7 +45,7 @@ def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_descri
     return action_chunk
 
 
-def add_frames_to_dataset(episode_data, config, dataset, obs_prefix: str = "pi0/"):
+def add_frames_to_dataset(episode_data, config, dataset, task_description: str, obs_prefix: str = "pi0/"):
     """Adding individual frames to the dataset since lerobot add_frame only allows 1 insertion."""
     # TODO: This is a bit hacky. Perhaps we can just add the full episode all at once?
     def process_frame(ob):
@@ -63,7 +63,7 @@ def add_frames_to_dataset(episode_data, config, dataset, obs_prefix: str = "pi0/
         for ep in episode_data:
             for step in range(config.collect.replan_steps):
                 obs = jax.tree.map(lambda x: x[step], ep)
-                dataset.add_frame(process_frame(obs))
+                dataset.add_frame(process_frame(obs), task=str(task_description))
     else:
         for ep in episode_data:
             dataset.add_frame(process_frame(ep))
@@ -122,7 +122,7 @@ def collect_data(
                 success = current_terminate[env_index]
                 if success:
                     episode_data = frames[env_index]
-                    add_frames_to_dataset(episode_data, config, dataset)
+                    add_frames_to_dataset(episode_data, config, dataset, task_description=task_description)
                     dataset.save_episode()
                 total_successes += success
                 # Reset the environment
@@ -134,7 +134,6 @@ def collect_data(
                 def update_state(prev_state, new_val_leaf):
                     prev_state[env_index] = new_val_leaf[0]
                     return prev_state
-
                 next_obs = jax.tree.map(update_state, next_obs, env_obs)
 
                 # Empty the episode buffer for this environment
@@ -148,7 +147,7 @@ def collect_data(
 
 
 def collect_data_lerobot_libero(
-                  config,
+                 config,
                  checkpoint_path,
                  data_path):
     # load latest policy
