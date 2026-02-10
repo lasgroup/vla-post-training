@@ -21,6 +21,7 @@ class CollectionConfig:
     num_steps_wait: int = 10
     add_per_step_data: bool = False
     store_full_transitions: bool = True
+    seed: int = 42
 
 
 @dataclasses.dataclass(frozen=True)
