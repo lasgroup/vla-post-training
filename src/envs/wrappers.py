@@ -270,7 +270,8 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):
-    def __init__(self, env: gym.Env,
+    def __init__(self,
+                 env: gym.Env,
                  env_class: str,
                  task_description: str,
                  add_states: bool = True):
@@ -281,7 +282,11 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         logging.info(f"\nTask: {self.task_description}")
 
         # produced by the helper functions (obs_to_img, etc.)
-        dummy_obs = env.observation_space.sample()
+        if getattr(env, "observation_space", None) is not None and hasattr(env.observation_space, "sample"):
+            dummy_obs = env.observation_space.sample()
+        else:
+            reset_out = env.reset()
+            dummy_obs = reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():

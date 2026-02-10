@@ -62,9 +62,16 @@ def make_env_libero(config, discount: float = 0.99):
             # Create Libero environment
             base_env = OffScreenRenderEnv(**args)
             # Converts gym envs to gymnasium style envs
-            base_env = ensure_gymnasium_env(base_env)
+            # base_env = ensure_gymnasium_env(base_env)
             # Sets initial states for the environment
             base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
+            # Add Pi related obs to the environment
+            base_env = Pi0ObservationWrapper(
+                env=base_env,
+                env_class="libero",
+                task_description=task_description,
+                add_states=config.add_states
+            )
             # Warm ups upon reset
             base_env = WarmUpOnResetWrapper(
                 env=base_env,
@@ -76,12 +83,7 @@ def make_env_libero(config, discount: float = 0.99):
                 base_env,
                 max_episode_steps=max_steps,
             )
-            base_env = Pi0ObservationWrapper(
-                env=base_env,
-                env_class="libero",
-                task_description=task_description,
-                add_states=config.add_states
-            )
+            # Add query frequency wrapper to rollout action chunks
             base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=config.replan_steps,
