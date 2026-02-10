@@ -1,4 +1,8 @@
-from typing import Dict
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
 import jax
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
@@ -7,10 +11,15 @@ import numpy as np
 import shutil
 import tqdm_loggable.auto as tqdm
 from src.envs.venv import SubprocVectorEnv
+from src.rl_training.agent import Agent, DatasetLike
 
-
-def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_prefix_key: str = "pi0/"):
-    element = {}
+def process_obs_for_pi0(
+    observations: Mapping[str, Any],
+    config: Any,
+    task_description: str,
+    obs_prefix_key: str = "pi0/",
+) -> dict[str, Any]:
+    element: dict[str, Any] = {}
     prompt_in_obs = False
     for key, val in observations.items():
         # Extract all observations relevant for the policy
@@ -34,22 +43,33 @@ def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_p
     return element
 
 
-def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_description: str):
+def get_action_chunk_from_actor(
+    agent: Agent,
+    obs: Mapping[str, Any],
+    sharding_spec: Any,
+    config: Any,
+    task_description: str,
+) -> Any:
     if config.collect.add_per_step_data:
         current_obs = jax.tree_util.tree_map(lambda x: x[:, -1], obs["observation"])
     else:
         current_obs = obs["observation"]
     element = process_obs_for_pi0(current_obs, obs_prefix_key="pi0/", config=config, task_description=task_description)
 
-    action_chunk = policy.infer(element, sharding_spec=sharding_spec)["actions"]
+    action_chunk = agent.infer(element, sharding_spec=sharding_spec)["actions"]
     return action_chunk
 
 
-def add_frames_to_dataset(episode_data, config, dataset, obs_prefix: str = "pi0/"):
+def add_frames_to_dataset(
+    episode_data: Sequence[Mapping[str, Any]],
+    config: Any,
+    dataset: DatasetLike,
+    obs_prefix: str = "pi0/",
+) -> None:
     """Adding individual frames to the dataset since lerobot add_frame only allows 1 insertion."""
     # TODO: This is a bit hacky. Perhaps we can just add the full episode all at once?
-    def process_frame(ob):
-        frame = {}
+    def process_frame(ob: Mapping[str, Any]) -> dict[str, Any]:
+        frame: dict[str, Any] = {}
         # Extract actions and observations from total_obs
         obs, action = ob["observation"], ob["action"]
         for key, val in obs.items():
@@ -70,19 +90,20 @@ def add_frames_to_dataset(episode_data, config, dataset, obs_prefix: str = "pi0/
 
 
 def collect_data(
-        policy,
-        dataset,
-        sharding_spec,
-        env: SubprocVectorEnv,
-        task_description,
-        config):
+    agent: Agent,
+    sharding_spec: Any,
+    env: SubprocVectorEnv,
+    task_description: str,
+    config: Any,
+) -> tuple[dict[str, float], int]:
+    agent.start_data_collection()
     num_envs = len(env)
     total_episodes, total_successes = 0, 0
     logging.info(f"Collecting for task: {task_description}")
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
-    def get_env_obs(obs, env_id):
+    def get_env_obs(obs: Mapping[str, Any], env_id: int) -> Mapping[str, Any]:
         return jax.tree.map(lambda x: x[env_id], obs)
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
@@ -90,11 +111,13 @@ def collect_data(
         frames = [[] for _ in range(num_envs)]
         while total_episodes < num_rollouts:
             # Get action chunk from the policy
-            action_chunk = get_action_chunk_from_policy(policy,
-                                                        obs,
-                                                        sharding_spec,
-                                                        config,
-                                                        task_description=task_description)
+            action_chunk = get_action_chunk_from_actor(
+                agent,
+                obs,
+                sharding_spec,
+                config,
+                task_description=task_description,
+            )
             # Apply full action chunk to the policy.
             # If config.collect.add_per_step_data is True, next_obs consists of all the transitions
             # obtained during the full action_chunk
@@ -122,8 +145,8 @@ def collect_data(
                 success = current_terminate[env_index]
                 if success:
                     episode_data = frames[env_index]
-                    add_frames_to_dataset(episode_data, config, dataset)
-                    dataset.save_episode()
+                    add_frames_to_dataset(episode_data, config, agent.dataset)
+                    agent.dataset.save_episode()
                 total_successes += success
                 # Reset the environment
                 reset_out = env.reset(id=env_index)
@@ -144,13 +167,14 @@ def collect_data(
 
     metrics = {"success_rate": float(total_successes) / float(total_episodes)}
     env.close()
-    return metrics, dataset.num_episodes
+    return metrics, agent.dataset.num_episodes
 
 
 def collect_data_lerobot_libero(
-                  config,
-                 checkpoint_path,
-                 data_path):
+    config: Any,
+    checkpoint_path: str | Path,
+    data_path: Path,
+) -> tuple[dict[str, float], int]:
     # load latest policy
     import lerobot.datasets.lerobot_dataset as lerobot_dataset
     from openpi.policies import policy_config
@@ -174,9 +198,11 @@ def collect_data_lerobot_libero(
 
     # rollout parallel environments
     env, task_description = make_env_libero(config.collect)
+    agent = Agent()
+    agent.actor = policy
+    agent.dataset = collected_dataset
     return collect_data(
-        policy=policy,
-        dataset=collected_dataset,
+        agent=agent,
         sharding_spec=sharding_spec,
         env=env,
         task_description=task_description,

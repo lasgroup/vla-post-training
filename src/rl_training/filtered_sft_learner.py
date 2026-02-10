@@ -207,7 +207,7 @@ class PiFilteredSFTLearner(Agent):
                     "containing 'params' (e.g. .../openpi-assets/checkpoints/pi0_libero)."
                 )
 
-        self._policy = policy_config.create_trained_policy(
+        self.actor = policy_config.create_trained_policy(
             self.base_policy_config,
             policy_checkpoint_dir,
             default_prompt=default_prompt,
@@ -428,7 +428,7 @@ class PiFilteredSFTLearner(Agent):
             kwargs["num_steps"] = int(num_steps)
         # Vector envs expect a batch dimension for actions. Policy inference
         # un batches when batch_size == 1, so add it back for single-env runs.
-        actions = self._policy.infer_with_model(**kwargs)["actions"]
+        actions = self.actor.infer_with_model(**kwargs)["actions"]
         if batch_actions and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
         return actions
@@ -513,15 +513,16 @@ class PiFilteredSFTLearner(Agent):
         self._checkpoint_manager.wait_until_finished()
 
     def start_data_collection(self):
-        if (
-            self.episodes % self.base_policy_config.save_interval == 0
-            and self.episodes > self.online_learning_config.start_episode
-        ) or (self.training_steps == self.online_learning_config.num_train_steps - 1):
-            self.save_checkpoint(step=self.training_steps)
+        super().start_data_collection()
         # Restart episode counter for all environments
         self._episode_storage = [
             [] for _ in range(self.online_learning_config.num_envs)
         ]
+        return True
+
+    def start_training(self):
+        super().start_training()
+        return True
 
     def add_data(self, step_data: StepData):
         assert self.online_learning_config.num_envs == step_data.terminate.shape[0], (
@@ -579,6 +580,7 @@ class PiFilteredSFTLearner(Agent):
             )
 
         if should_update:
+            self.start_training()
             train_state = self._train_state
             pbar = tqdm.tqdm(
                 range(

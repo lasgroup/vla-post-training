@@ -1,0 +1,11 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/scripts",
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/openpi/src",
+        "${workspaceFolder}/openpi/packages/openpi-client/src"
+    ]
+}

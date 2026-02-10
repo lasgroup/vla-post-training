@@ -1,11 +1,9 @@
 import numpy as np
 from unittest.mock import MagicMock
-from pathlib import Path
+from typing import Any
 
-# Ensure local `openpi` and `openpi_client` packages are importable when running tests from repo root.
-_ROOT = Path(__file__).resolve().parents[2]
-
-from collect import collect_data
+from src.rl_training.agent import Agent
+from src.training.collect import collect_data
 from src.envs.venv import DummyVectorEnv
 NUM_REPLAN_STEPS = 10
 
@@ -21,7 +19,7 @@ class MockEnv:
         self._step = 0
         self._max_steps = MAX_STEPS.get(id)
 
-    def _get_obs(self):
+    def _get_obs(self) -> dict[str, Any]:
         return {
             "observation": {
                 "pi0/image": np.ones((NUM_REPLAN_STEPS, 224, 224, 3), dtype=np.uint8) * self._step,
@@ -60,15 +58,21 @@ class MockDataSet:
     def num_episodes(self):
         return self._num_episodes
 
-    def add_frame(self, frame):
+    def add_frame(self, frame: dict[str, Any]) -> None:
         self._frames.append(frame)
 
-    def save_episode(self):
+    def save_episode(self) -> None:
         self._num_episodes += 1
 
     @property
     def frames(self):
         return self._frames
+
+
+class MockAgent(Agent):
+    def __init__(self, actor: MagicMock, dataset: MockDataSet):
+        self.actor = actor
+        self.dataset = dataset
 
 
 def test_collect_data_integration():
@@ -79,13 +83,14 @@ def test_collect_data_integration():
     config.collect.resize_image = 0
     config.collect.replan_steps = NUM_REPLAN_STEPS
 
-    # 2. Setup Mock Policy
-    policy = MagicMock()
-    # Mocking policy.infer to return an action chunk
-    policy.infer.return_value = {"actions": np.zeros((2, NUM_REPLAN_STEPS, 7))}
+    # 2. Setup Mock Actor
+    actor = MagicMock()
+    # Mocking actor.infer to return an action chunk
+    actor.infer.return_value = {"actions": np.zeros((2, NUM_REPLAN_STEPS, 7))}
 
     # 3. Setup Mock Dataset
     dataset = MockDataSet()
+    agent = MockAgent(actor=actor, dataset=dataset)
 
     # 4. Initialize Mock Env
 
@@ -94,8 +99,7 @@ def test_collect_data_integration():
 
     # 5. Run the collection
     metrics, num_episodes = collect_data(
-        policy=policy,
-        dataset=dataset,
+        agent=agent,
         sharding_spec=sharding_spec,
         env=env,
         task_description="Test Task",
@@ -109,5 +113,5 @@ def test_collect_data_integration():
     assert "success_rate" in metrics
     assert metrics["success_rate"] > 0
     assert num_episodes == expected_number_of_episodes
-    assert len(dataset.frames) == expected_number_of_transitions
+    assert len(agent.dataset.frames) == expected_number_of_transitions
     print("Test passed: Data collection logic executed successfully.")
