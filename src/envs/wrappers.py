@@ -9,11 +9,12 @@ import logging
 class GymnasiumEnvAdapter(gym.Env):
     """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
 
-    def __init__(self, env):
+    def __init__(self, env, action_dim: int | None = None):
         self.env = env
         self.metadata = getattr(env, "metadata", {})
         self.reward_range = getattr(env, "reward_range", (-float("inf"), float("inf")))
         self.spec = getattr(env, "spec", None)
+        self._action_dim = action_dim
 
     @property
     def observation_space(self):
@@ -21,7 +22,14 @@ class GymnasiumEnvAdapter(gym.Env):
 
     @property
     def action_space(self):
-        return getattr(self.env, "action_space", None)
+        if self._action_dim:
+            return gym.spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(self._action_dim, )
+        )
+        else:
+            return getattr(self.env, "action_space", None)
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         if seed is not None and hasattr(self.env, "seed"):
@@ -52,11 +60,15 @@ class GymnasiumEnvAdapter(gym.Env):
             return self.env.close()
         return None
 
+    def __getattr__(self, name):
+        """Fallback to the wrapped environment for any unknown attributes."""
+        return getattr(self.env, name, None)
 
-def ensure_gymnasium_env(env):
+
+def ensure_gymnasium_env(env, action_dim: int | None = None):
     if isinstance(env, gym.Env):
         return env
-    return GymnasiumEnvAdapter(env)
+    return GymnasiumEnvAdapter(env, action_dim=action_dim)
 
 
 def _quat2axisangle(quat):
@@ -108,7 +120,7 @@ def obs_to_pi_zero_input(obs,
             ),
         }
         if include_prompt:
-            obs_pi_zero["prompt"] = str(task_description)
+            obs_pi_zero["prompt"] = np.asarray(str(task_description))
     elif env_class == 'aloha_cube':
         img = np.ascontiguousarray(obs["pixels"]["top"])
         obs_pi_zero = {
@@ -196,12 +208,45 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
             # Apply this expansion to the entire structure of the action space
             obs_space = jax.tree_util.tree_map(expand_space, self.env.observation_space)
+            act_space = self.action_space
         else:
             obs_space = self.env.observation_space
+            act_space = self.env.action_space
         return gym.spaces.Dict(
             {"observation": obs_space,
-             "action": self.action_space}
+             "action": act_space}
         )
+
+    def reset(
+        self, *, seed: int | None = None, options: dict[str, Any] | None = None
+    ):
+        # 1. Reset the underlying environment
+        obs, info = self.env.reset(seed=seed, options=options)
+
+        # 2. Get a single-step dummy action template from the INNER env
+        # We use env.action_space (not self.action_space) so we don't get the sequence dim yet
+        initial_action = jax.tree_util.tree_map(
+            lambda space: np.zeros(space.shape, dtype=space.dtype),
+            self.env.action_space
+        )
+
+        # 4. Construct the joint observation dict
+        wrapped_obs = {
+            "observation": obs,
+            "action": initial_action
+        }
+
+        # 3. Handle the 'observation' part based on store_full_transitions
+        if self._store_full_transitions:
+            # If we store full transitions, the observation space expects
+            # a sequence of shape (query_frequency, ...).
+            # We tile the initial observation to fill the buffer.
+            wrapped_obs = jax.tree_util.tree_map(
+                lambda x: np.repeat(x[None, ...], self._query_frequency, axis=0),
+                wrapped_obs
+            )
+
+        return wrapped_obs, info
 
     def step(self, action):
         """
@@ -240,9 +285,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
             if terminated or truncated:
                 break
 
-        return self.observation(data)
+        return self.step_response(data)
 
-    def observation(self, data: List[Dict]):
+    def step_response(self, data: List[Dict]):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)
         if self._store_full_transitions:
             # Returns the dictionary where every leaf has shape (query_freq, ...)
@@ -290,7 +335,13 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():
+            # This is a heuristic and we need a better way of adding prompt to the obs space.
             # Heuristic: if it looks like an image, assume 0-255
+            if 'prompt' in key:
+                spaces[key] = gym.spaces.Text(
+                    max_length=256_000
+                )
+                continue
             if 'image' in key or 'pixels' in key:
                 low, high = 0, 255
             else:

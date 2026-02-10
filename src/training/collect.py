@@ -9,13 +9,15 @@ import tqdm_loggable.auto as tqdm
 from src.envs.venv import SubprocVectorEnv
 
 
-def process_obs_for_pi0(observations: Dict, config, obs_prefix_key: str = "pi0/"):
+def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_prefix_key: str = "pi0/"):
     element = {}
+    prompt_in_obs = False
     for key, val in observations.items():
         # Extract all observations relevant for the policy
         if obs_prefix_key in key:
             obs_key = key.split(obs_prefix_key)[-1]
             if obs_key == "prompt":
+                prompt_in_obs = True
                 element[obs_key] = val
             else:
                 if 'image' in obs_key and config.collect.resize_image > 0:
@@ -26,15 +28,18 @@ def process_obs_for_pi0(observations: Dict, config, obs_prefix_key: str = "pi0/"
                                                                                    config.collect.resize_image))
                 obs_key = f'observation/{obs_key}'
                 element[obs_key] = val
+    # If prompt is not stored in obs, we add the default prompt here.
+    if not prompt_in_obs:
+        element["prompt"] = task_description
     return element
 
 
-def get_action_chunk_from_policy(policy, obs, sharding_spec, config):
+def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_description: str):
     if config.collect.add_per_step_data:
         current_obs = jax.tree_util.tree_map(lambda x: x[:, -1], obs["observation"])
     else:
         current_obs = obs["observation"]
-    element = process_obs_for_pi0(current_obs, obs_prefix_key="pi0/", config=config)
+    element = process_obs_for_pi0(current_obs, obs_prefix_key="pi0/", config=config, task_description=task_description)
 
     action_chunk = policy.infer(element, sharding_spec=sharding_spec)["actions"]
     return action_chunk
@@ -88,7 +93,8 @@ def collect_data(
             action_chunk = get_action_chunk_from_policy(policy,
                                                         obs,
                                                         sharding_spec,
-                                                        config)
+                                                        config,
+                                                        task_description=task_description)
             # Apply full action chunk to the policy.
             # If config.collect.add_per_step_data is True, next_obs consists of all the transitions
             # obtained during the full action_chunk

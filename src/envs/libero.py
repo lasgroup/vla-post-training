@@ -1,3 +1,4 @@
+import gymnasium
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -62,7 +63,7 @@ def make_env_libero(config, discount: float = 0.99):
             # Create Libero environment
             base_env = OffScreenRenderEnv(**args)
             # Converts gym envs to gymnasium style envs
-            # base_env = ensure_gymnasium_env(base_env)
+            base_env = ensure_gymnasium_env(base_env, action_dim=7)
             # Sets initial states for the environment
             base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
             # Add Pi related obs to the environment
