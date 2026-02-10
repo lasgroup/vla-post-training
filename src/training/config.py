@@ -19,8 +19,7 @@ class CollectionConfig:
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
-    add_per_step_data: bool = False
-    store_full_transitions: bool = True
+    add_per_step_data: bool = True
     seed: int = 42
 
 

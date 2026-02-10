@@ -116,7 +116,7 @@ def obs_to_pi_zero_input(obs,
                     obs["robot0_eef_pos"],
                     _quat2axisangle(obs["robot0_eef_quat"]),
                     obs["robot0_gripper_qpos"],
-                )
+                ), dtype=np.float32,
             ),
         }
         if include_prompt:
@@ -282,7 +282,19 @@ class QueryFrequencyWrapper(gym.Wrapper):
             )
 
             # If the episode ends mid-query, we stop early
+            # TODO: This is hacky
             if terminated or truncated:
+                # Repeat the data for padding.
+                for remaining_steps in range(i + 1, self._query_frequency):
+                    data.append(
+                        {
+                            'obs': obs_act,
+                            'reward': 0.0,
+                            'terminated': terminated,
+                            'truncated': truncated,
+                            'info': info,
+                        }
+                    )
                 break
 
         return self.step_response(data)
@@ -319,11 +331,13 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
                  env: gym.Env,
                  env_class: str,
                  task_description: str,
-                 add_states: bool = True):
+                 add_states: bool = True,
+                 include_prompt_in_obs: bool = False):
         super().__init__(env)
         self._task_description = task_description
         self._env_class = env_class
         self._add_states = add_states
+        self._include_prompt_in_obs = include_prompt_in_obs
         logging.info(f"\nTask: {self.task_description}")
 
         # produced by the helper functions (obs_to_img, etc.)
@@ -384,7 +398,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         obs_pi_zero = obs_to_pi_zero_input(observation,
                                            env_class=self._env_class,
                                            task_description=self._task_description,
-                                           include_prompt=False)
+                                           include_prompt=self._include_prompt_in_obs)
         obs_pi_zero = {f'pi0/{key}': val for key, val in obs_pi_zero.items()}
         obs_dict = obs_dict | obs_pi_zero
         return obs_dict

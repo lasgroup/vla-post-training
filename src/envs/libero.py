@@ -89,7 +89,7 @@ def make_env_libero(config, discount: float = 0.99):
                 env=base_env,
                 query_frequency=config.replan_steps,
                 discount=discount,
-                store_full_transitions=config.store_full_transitions,
+                store_full_transitions=config.add_per_step_data,
                 post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env

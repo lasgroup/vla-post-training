@@ -59,11 +59,11 @@ def get_action_chunk_from_actor(
     action_chunk = agent.infer(element, sharding_spec=sharding_spec)["actions"]
     return action_chunk
 
-
 def add_frames_to_dataset(
     episode_data: Sequence[Mapping[str, Any]],
     config: Any,
     dataset: DatasetLike,
+    task_description: str,
     obs_prefix: str = "pi0/",
 ) -> None:
     """Adding individual frames to the dataset since lerobot add_frame only allows 1 insertion."""
@@ -78,15 +78,22 @@ def add_frames_to_dataset(
                 frame[obs_key] = val
         frame["actions"] = action
         return frame
+
+    def add_frame_with_optional_task(frame: Mapping[str, Any]) -> None:
+        try:
+            dataset.add_frame(frame, task=str(task_description))  # type: ignore[call-arg]
+        except TypeError:
+            dataset.add_frame(frame)
+
     if config.collect.add_per_step_data:
         # Add all the per time-step transitions one by one.
         for ep in episode_data:
             for step in range(config.collect.replan_steps):
                 obs = jax.tree.map(lambda x: x[step], ep)
-                dataset.add_frame(process_frame(obs))
+                add_frame_with_optional_task(process_frame(obs))
     else:
         for ep in episode_data:
-            dataset.add_frame(process_frame(ep))
+            add_frame_with_optional_task(process_frame(ep))
 
 
 def collect_data(
@@ -145,7 +152,12 @@ def collect_data(
                 success = current_terminate[env_index]
                 if success:
                     episode_data = frames[env_index]
-                    add_frames_to_dataset(episode_data, config, agent.dataset)
+                    add_frames_to_dataset(
+                        episode_data,
+                        config,
+                        agent.dataset,
+                        task_description=task_description,
+                    )
                     agent.dataset.save_episode()
                 total_successes += success
                 # Reset the environment
@@ -157,7 +169,6 @@ def collect_data(
                 def update_state(prev_state, new_val_leaf):
                     prev_state[env_index] = new_val_leaf[0]
                     return prev_state
-
                 next_obs = jax.tree.map(update_state, next_obs, env_obs)
 
                 # Empty the episode buffer for this environment
