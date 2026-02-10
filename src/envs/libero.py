@@ -3,46 +3,34 @@ import jax.numpy as jnp
 import numpy as np
 import pathlib
 import torch
-
+import os
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
 from openpi_client import image_tools
-from src.envs.wrappers import ensure_gymnasium_env, WarmUpOnResetWrapper, SetInitialState, Pi0ObservationWrapper, QueryFrequencyWrapper
+from src.envs.wrappers import ensure_gymnasium_env, WarmUpOnResetWrapper, \
+    SetInitialStateWrapper, Pi0ObservationWrapper, QueryFrequencyWrapper
 from gymnasium.wrappers import TimeLimit
 from src.envs.venv import SubprocVectorEnv
 
 
-# wrapper to load init states inside worker processes (works with spawn)
-class OffScreenRenderEnvWithInit(OffScreenRenderEnv):
-    def __init__(self, *args, init_states_path: pathlib.Path = None, **kwargs):
-        super().__init__(*args, **kwargs)
-    #     self._init_states_path = init_states_path
-    #     self._init_states = None
-    #     torch.serialization.add_safe_globals(
-    #         [
-    #             np.core.multiarray._reconstruct,  # noqa
-    #             np.ndarray,
-    #             np.dtype,
-    #             np.dtypes.Float64DType,
-    #         ]
-    #     )
-    #
-    # def _ensure_init_states_loaded(self):
-    #     if self._init_states is None:
-    #         import torch
-    #         # load locally inside the worker process
-    #         self._init_states = torch.load(str(self._init_states_path))
-
-    def set_init_state(self, init_state):
-        # # accept either an integer index (preferred) or a full init-state object
-        # self._ensure_init_states_loaded()
-        # if isinstance(init_state_or_index, int):
-        #     init_state = self._init_states[init_state_or_index]
-        # else:
-        #     init_state = init_state_or_index
-        return super().set_init_state(init_state)
+def get_task_init_states(task_suite, task_id: int):
+    init_states_path = os.path.join(
+        get_libero_path("init_states"),
+        task_suite.tasks[task_id].problem_folder,
+        task_suite.tasks[task_id].init_states_file,
+    )
+    torch.serialization.add_safe_globals(
+                [
+                     np.core.multiarray._reconstruct,  # noqa
+                     np.ndarray,
+                     np.dtype,
+                     np.dtypes.Float64DType,
+                 ]
+             )
+    init_states = torch.load(init_states_path)
+    return init_states
 
 
 def get_libero_warm_start_action():
@@ -57,11 +45,10 @@ def make_env_libero(config, discount: float = 0.99):
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[task_suite_name]()
     task = task_suite.get_task(task_id)
-    initial_states = task_suite.get_task_init_states(task_id)
+    initial_states = get_task_init_states(task_suite, task_id)
     warm_start_action = get_libero_warm_start_action()
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    init_states_path = pathlib.Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
     env_args = {
         "bddl_file_name": task_bddl_file,
         "camera_heights": config.env_resolution,
@@ -73,11 +60,11 @@ def make_env_libero(config, discount: float = 0.99):
             args = env_args.copy()
             args["render_gpu_device_id"] = rank % 4
             # Create Libero environment
-            base_env = OffScreenRenderEnvWithInit(**args, init_states_path=init_states_path)
+            base_env = OffScreenRenderEnv(**args)
             # Converts gym envs to gymnasium style envs
             base_env = ensure_gymnasium_env(base_env)
             # Sets initial states for the environment
-            base_env = SetInitialState(base_env, initial_states=initial_states)
+            base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
             # Warm ups upon reset
             base_env = WarmUpOnResetWrapper(
                 env=base_env,
@@ -93,7 +80,6 @@ def make_env_libero(config, discount: float = 0.99):
                 env=base_env,
                 env_class="libero",
                 task_description=task_description,
-                resize_image=config.resize_image,
                 add_states=config.add_states
             )
             base_env = QueryFrequencyWrapper(
@@ -107,7 +93,8 @@ def make_env_libero(config, discount: float = 0.99):
 
         env_factories.append(_make_env)
     env = SubprocVectorEnv(env_factories)
-    # env.seed(42)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
+    env.seed(config.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
 
 

@@ -95,7 +95,7 @@ def collect_data(
             next_obs, _, terminate, truncate, _ = env.step(action_chunk)
             # Add data from each environment to its respective frame
             [frames[i].append(get_env_obs(next_obs, i)) for i in range(num_envs)]
-            # Extract terminate or truncation flagas
+            # Extract terminate or truncation flags
             if config.collect.add_per_step_data:
                 assert terminate.shape[1] == config.collect.replan_steps
                 current_terminate = jax.tree_util.tree_map(lambda x: x[:, -1], terminate)

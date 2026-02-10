@@ -120,10 +120,6 @@ def obs_to_pi_zero_input(obs,
     return obs_pi_zero
 
 
-def _stack_pi0_obs(pi0_obs_list):
-    return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *pi0_obs_list)
-
-
 def obs_to_qpos(obs, env_class):
     if env_class == 'libero':
         qpos = np.concatenate(
@@ -285,11 +281,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         logging.info(f"\nTask: {self.task_description}")
 
         # produced by the helper functions (obs_to_img, etc.)
-        if getattr(env, "observation_space", None) is not None and hasattr(env.observation_space, "sample"):
-            dummy_obs = env.observation_space.sample()
-        else:
-            reset_out = env.reset()
-            dummy_obs = reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
+        dummy_obs = env.observation_space.sample()
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():
@@ -343,7 +335,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):
-    def __init__(self, env, num_steps_wait: int = 10, warm_up_action: np.ndarray | None = None):
+    def __init__(self, env, warm_up_action: np.ndarray, num_steps_wait: int = 10):
         super().__init__(env)
         self._num_steps_wait = num_steps_wait
         if warm_up_action is None:
@@ -359,7 +351,7 @@ class WarmUpOnResetWrapper(gym.Wrapper):
         return obs, info
 
 
-class SetInitialState(gym.Wrapper):
+class SetInitialStateWrapper(gym.Wrapper):
     def __init__(self, env, initial_states: np.ndarray):
         super().__init__(env)
         self._init_states = initial_states
@@ -368,16 +360,10 @@ class SetInitialState(gym.Wrapper):
         if hasattr(self.env, 'set_init_state'):
             # If several initial states are provided, this randomly samples from the list upon reset.
             if self._init_states.ndim > 1:
-                if self.np_random is not None:
-                    # 1. Select one random row index
-                    random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
-                else:
-                    # 1. Initialize the generator
-                    rng = np.random.default_rng()
-
-                    # 2. Select one random row index
-                    random_index = rng.integers(low=0, high=self._init_states.shape[0])
-
+                # 1. Select one random row index
+                rng = self.np_random or np.random.default_rng()
+                # 2. Select one random row index
+                random_index = rng.integers(low=0, high=self._init_states.shape[0])
                 # 3. Access the row
                 init_state = self._init_states[random_index]
             else:
@@ -387,7 +373,6 @@ class SetInitialState(gym.Wrapper):
             raise AssertionError("Environment does not allow setting initial state")
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-        t = 0
         obs, info = self.env.reset(seed=seed, options=options)
         obs = self._set_init_state()
         return obs, info
