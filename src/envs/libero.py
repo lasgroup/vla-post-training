@@ -1,59 +1,55 @@
+import gymnasium
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pathlib
 import torch
-
+import os
 from libero.libero import benchmark, get_libero_path
-from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
+from libero.libero.envs import OffScreenRenderEnv
 from robosuite.utils.transform_utils import quat2axisangle
 
-import openpi.models.model as _model
 from openpi_client import image_tools
+from src.envs.wrappers import ensure_gymnasium_env, WarmUpOnResetWrapper, \
+    SetInitialStateWrapper, Pi0ObservationWrapper, QueryFrequencyWrapper
+from gymnasium.wrappers import TimeLimit
+from src.envs.venv import SubprocVectorEnv
 
 
-# wrapper to load init states inside worker processes (works with spawn)
-class OffScreenRenderEnvWithInit(OffScreenRenderEnv):
-    def __init__(self, *args, init_states_path: pathlib.Path = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._init_states_path = init_states_path
-        self._init_states = None
-        torch.serialization.add_safe_globals(
-            [
-                np.core.multiarray._reconstruct,  # noqa
-                np.ndarray,
-                np.dtype,
-                np.dtypes.Float64DType,
-            ]
-        )
-
-    def _ensure_init_states_loaded(self):
-        if self._init_states is None:
-            import torch
-            # load locally inside the worker process
-            self._init_states = torch.load(str(self._init_states_path))
-
-    def set_init_state(self, init_state_or_index):
-        # accept either an integer index (preferred) or a full init-state object
-        self._ensure_init_states_loaded()
-        if isinstance(init_state_or_index, int):
-            init_state = self._init_states[init_state_or_index]
-        else:
-            init_state = init_state_or_index
-        return super().set_init_state(init_state)
+def get_task_init_states(task_suite, task_id: int):
+    init_states_path = os.path.join(
+        get_libero_path("init_states"),
+        task_suite.tasks[task_id].problem_folder,
+        task_suite.tasks[task_id].init_states_file,
+    )
+    torch.serialization.add_safe_globals(
+                [
+                     np.core.multiarray._reconstruct,  # noqa
+                     np.ndarray,
+                     np.dtype,
+                     np.dtypes.Float64DType,
+                 ]
+             )
+    init_states = torch.load(init_states_path)
+    return init_states
 
 
-def make_env_libero(config):
+def get_libero_warm_start_action():
+    return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+
+
+def make_env_libero(config, discount: float = 0.99):
     assert len(config.tasks) == 1, "Only single-task collection is supported."
     task_suite_name = "_".join(config.tasks[0].split("_")[:-1])
     task_id = int(config.tasks[0].split("_")[-1])
+    max_steps = get_max_steps_libero(config.tasks[0])
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[task_suite_name]()
     task = task_suite.get_task(task_id)
-    initial_states = task_suite.get_task_init_states(task_id)
+    initial_states = get_task_init_states(task_suite, task_id)
+    warm_start_action = get_libero_warm_start_action()
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    init_states_path = pathlib.Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
     env_args = {
         "bddl_file_name": task_bddl_file,
         "camera_heights": config.env_resolution,
@@ -64,12 +60,45 @@ def make_env_libero(config):
         def _make_env(rank=i):
             args = env_args.copy()
             args["render_gpu_device_id"] = rank % 4
-            return OffScreenRenderEnvWithInit(**args, init_states_path=init_states_path)
+            # Create Libero environment
+            base_env = OffScreenRenderEnv(**args)
+            # Converts gym envs to gymnasium style envs
+            base_env = ensure_gymnasium_env(base_env, action_dim=7)
+            # Sets initial states for the environment
+            base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
+            # Add Pi related obs to the environment
+            base_env = Pi0ObservationWrapper(
+                env=base_env,
+                env_class="libero",
+                task_description=task_description,
+                add_states=config.add_states
+            )
+            # Warm ups upon reset
+            base_env = WarmUpOnResetWrapper(
+                env=base_env,
+                num_steps_wait=config.num_steps_wait,
+                warm_up_action=warm_start_action,
+            )
+            # Add timelimit wrapper
+            base_env = TimeLimit(
+                base_env,
+                max_episode_steps=max_steps,
+            )
+            # Add query frequency wrapper to rollout action chunks
+            base_env = QueryFrequencyWrapper(
+                env=base_env,
+                query_frequency=config.replan_steps,
+                discount=discount,
+                store_full_transitions=config.store_full_transitions,
+                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+            )
+            return base_env
+
         env_factories.append(_make_env)
     env = SubprocVectorEnv(env_factories)
-    # TODO: check seeding behavior
-    env.seed(42)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
-    return env, initial_states, task_description
+    # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
+    env.seed(config.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    return env, task_description
 
 
 def get_max_steps_libero(task_name):
@@ -84,58 +113,3 @@ def get_max_steps_libero(task_name):
     if task_name not in _max_steps_map:
         raise ValueError(f"Unknown task name {task_name}. Max steps for known tasks: {_max_steps_map}")
     return _max_steps_map[task_name]
-
-
-def init_state_libero(env, initial_states, episode_idx, config):
-    env.reset()
-    start = episode_idx * config.collect.env_num
-    end = (episode_idx + 1) * config.collect.env_num
-    _initial_states = np.stack([initial_states[i % len(initial_states)] for i in range(start, end)], 0)
-    obs = env.set_init_state(_initial_states)
-    # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
-    for _ in range(config.collect.num_steps_wait):
-        obs, _, _, _ = env.step(np.array([[0.0]*6+[-1.] for _ in range(config.collect.env_num)]))
-    return obs
-
-
-def get_action_chunk_libero(obs, task_description, policy, config, sharding_spec):
-    obs = {k: np.stack([o[k] for o in obs], 0) for k, v in obs[0].items()}
-    # Get preprocessed image
-    # IMPORTANT: rotate 180 degrees to match train preprocessing
-    img = np.ascontiguousarray(obs["agentview_image"][:, ::-1, ::-1])
-    img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, 224, 224))
-    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][:, ::-1, ::-1])
-    wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, 224, 224))
-    element = {
-        "observation/image": img,
-        "observation/wrist_image": wrist_img,
-        "observation/state": np.concatenate(
-            (
-                obs["robot0_eef_pos"],
-                np.stack([quat2axisangle(o) for o in obs["robot0_eef_quat"]], 0),
-                obs["robot0_gripper_qpos"],
-            ), -1
-        ),
-        "prompt": str(task_description),
-    }
-
-    return policy.infer(element, sharding_spec=sharding_spec)["actions"]
-
-
-def get_frame_libero(obs, action, task_description):
-    obs = {k: np.stack([o[k] for o in obs], 0) for k, v in obs[0].items()}
-    og_img = np.ascontiguousarray(obs["agentview_image"][:, ::-1, ::-1])
-    og_wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][:, ::-1, ::-1])
-    processed_action = np.where(np.abs(action) < 0.0011, 0.0, action)
-    return {
-        "image": og_img,
-        "wrist_image": og_wrist_img,
-        "state": np.concatenate(
-            (
-                obs["robot0_eef_pos"],
-                np.stack([quat2axisangle(o) for o in obs["robot0_eef_quat"]], 0),
-                obs["robot0_gripper_qpos"],
-            ), -1
-        ).astype(np.float32),
-        "actions": np.asarray(processed_action, dtype=np.float32),
-    }
