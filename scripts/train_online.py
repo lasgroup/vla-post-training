@@ -46,7 +46,7 @@ import openpi.training.weight_loaders as _weight_loaders
 from src.training.data_loader import create_data_loader
 import src.training.config as _config
 from src.training.utils import init_logging, init_wandb, log_images
-from src.training.collect import collect_data
+from src.training.collect import collect_data_lerobot_libero as collect_data
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
