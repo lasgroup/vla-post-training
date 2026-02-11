@@ -97,6 +97,27 @@ def collect_data(
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
+    def shift_window(obs_act, next_obs_act):
+        def move_obs(curr, nxt):
+            # curr shape: (E, H, D) -> Take last step: (E, 1, D)
+            last_step = curr[:, -1:]
+
+            # nxt shape: (E, H, D) -> Take all but last step: (E, H-1, D)
+            next_steps = nxt[:, :-1]
+
+            # Concatenate along the horizon axis (axis 1)
+            # Result shape: (E, H, D) containing steps H to 2H-1
+            return np.concatenate([last_step, next_steps], axis=1)
+        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs["observation"])
+        target_obs_act = {}
+        for key, val in next_obs_act.items():
+            # Replace the obs with the shiften one
+            if key == "observation":
+                target_obs_act[key] = target_obs
+            else:
+                target_obs_act[key] = val
+        return target_obs_act
+
     def get_env_value(vec, env_id):
         return jax.tree.map(lambda x: x[env_id], vec)
 
@@ -115,9 +136,11 @@ def collect_data(
             # obtained during the full action_chunk
             next_obs, _, terminate, truncate, _ = env.step(action_chunk)
             # Add data from each environment to its respective frame
+            # Apply the function to the PyTrees
+            target_obs = shift_window(obs_act=obs, next_obs_act=next_obs)
             [frames[i].append(
                 {
-                    'observation': get_env_value(next_obs, i),
+                    'observation': get_env_value(target_obs, i),
                     'terminate': get_env_value(terminate, i),
                     'truncate': get_env_value(truncate, i)
                 }) for i in range(num_envs)]
