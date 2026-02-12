@@ -415,7 +415,7 @@ class WarmUpOnResetWrapper(gym.Wrapper):
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         t = 0
         obs, info = self.env.reset(seed=seed, options=options)
-        if t < self._num_steps_wait:
+        while t < self._num_steps_wait:
             obs, reward, terminate, truncate, info = self.env.step(self._warm_up_action)
             t += 1
         return obs, info
