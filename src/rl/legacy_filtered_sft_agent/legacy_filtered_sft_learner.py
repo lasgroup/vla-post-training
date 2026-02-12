@@ -253,7 +253,9 @@ class LegacyFilteredSFTLearner(Agent):
         gc.collect()
 
         if model_ref is not None and model_ref() is not None:
-            logging.warning("Policy model object is still alive after cleanup; other references remain.")
+            logging.warning(
+                "Policy model object is still alive after cleanup; other references remain."
+            )
 
     def _setup_lerobot_dataset(self, step: int | None = None):
         if step is None:
@@ -334,16 +336,14 @@ class LegacyFilteredSFTLearner(Agent):
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
-
-        kwargs = dict(
+        # Vector envs expect a batch dimension for actions. Policy inference
+        # un batches when batch_size == 1, so add it back for single-env runs.
+        actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
             noise=noise,
             sharding_spec=self._policy_sharding_spec,
-        )
-        # Vector envs expect a batch dimension for actions. Policy inference
-        # un batches when batch_size == 1, so add it back for single-env runs.
-        actions = self._policy.infer_with_model(**kwargs)["actions"]
+        )["actions"]
         if batch_actions and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
         return actions
