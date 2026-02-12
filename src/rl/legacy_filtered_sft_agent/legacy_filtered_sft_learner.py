@@ -327,11 +327,18 @@ class LegacyFilteredSFTLearner(Agent):
         # Define model
         model = nnx.merge(train_state.model_def, train_state.params)
         # Convert observation for the policy
+        state = observations.get("observation/state")
+        if state is None:
+            raise KeyError("Expected 'observation/state' in processed observations.")
+        batch_size = int(state.shape[0]) if state.ndim > 1 else 1
+        noise = jax.random.normal(
+            rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
+        )
 
         kwargs = dict(
             model=model,
             obs=observations,
-            rng=rng,
+            noise=noise,
             sharding_spec=self._policy_sharding_spec,
         )
         # Vector envs expect a batch dimension for actions. Policy inference
