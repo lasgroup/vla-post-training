@@ -1,3 +1,7 @@
+# uncomment to force determinism
+# import os
+# os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " --xla_gpu_deterministic_ops=true"
+
 # suppress Numba FNV hashing warnings
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")

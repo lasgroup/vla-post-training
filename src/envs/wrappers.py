@@ -427,20 +427,14 @@ class SetInitialStateWrapper(gym.Wrapper):
         self._init_states = initial_states
 
     def _set_init_state(self):
-        if hasattr(self.env, 'set_init_state'):
-            # If several initial states are provided, this randomly samples from the list upon reset.
-            if self._init_states.ndim > 1:
-                # 1. Select one random row index
-                rng = self.np_random or np.random.default_rng()
-                # 2. Select one random row index
-                random_index = rng.integers(low=0, high=self._init_states.shape[0])
-                # 3. Access the row
-                init_state = self._init_states[random_index]
-            else:
-                init_state = self._init_states
-            return self.env.set_init_state(init_state)
-        else:
-            raise AssertionError("Environment does not allow setting initial state")
+        assert hasattr(self.env, 'set_init_state'), "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
+        init_state = self._init_states[random_index]
+        return self.env.set_init_state(init_state)
+
+    def seed(self, seed):
+        self.env.seed(seed)
+        self.np_random = np.random.default_rng(seed)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         obs, info = self.env.reset(seed=seed, options=options)
