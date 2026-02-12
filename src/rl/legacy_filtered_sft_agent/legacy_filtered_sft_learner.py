@@ -4,9 +4,11 @@ from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
 from typing import Dict
+import gc
 import numpy as np
 import os
 import shutil
+import weakref
 
 import functools
 import logging
@@ -219,9 +221,39 @@ class LegacyFilteredSFTLearner(Agent):
             self._config,
             policy_checkpoint_dir,
         )
+        # This learner always calls `infer_with_model(...)` with the current train-state model.
+        # Drop policy-owned model references to avoid keeping an extra model copy in memory.
+        self._drop_policy_model()
 
         # We use  a dummy data loader to store episodic data
         self._lerobot_dataset = None
+
+    def _drop_policy_model(self):
+        # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
+        # so we cannot safely drop the internal model there.
+        if getattr(self._policy, "_is_pytorch_model", False):
+            return
+
+        model = getattr(self._policy, "_model", None)
+        model_ref = None
+        if model is not None:
+            try:
+                model_ref = weakref.ref(model)
+            except TypeError:
+                model_ref = None
+
+        self._policy._model = None
+        # These JAX callables are created from bound model methods and can capture model state.
+        if hasattr(self._policy, "_sample_actions"):
+            self._policy._sample_actions = None
+        if hasattr(self._policy, "_get_prefix_rep"):
+            self._policy._get_prefix_rep = None
+
+        del model
+        gc.collect()
+
+        if model_ref is not None and model_ref() is not None:
+            logging.warning("Policy model object is still alive after cleanup; other references remain.")
 
     def _setup_lerobot_dataset(self, step: int | None = None):
         if step is None:
