@@ -21,6 +21,7 @@ class CollectionConfig:
     num_steps_wait: int = 10
     add_per_step_data: bool = True
     seed: int = 42
+    obs_prefix_key: str = "pi0/"
 
 
 @dataclasses.dataclass(frozen=True)
