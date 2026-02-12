@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Any, Dict
 import jax
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
@@ -7,6 +7,22 @@ import numpy as np
 import shutil
 import tqdm_loggable.auto as tqdm
 from src.envs.venv import SubprocVectorEnv
+
+
+def _shift_window(obs_act: dict[str, Any], next_obs_act: dict[str, Any]) -> dict[str, Any]:
+    def move_obs(curr, nxt):
+        # curr shape: (E, H, D) -> keep last step: (E, 1, D)
+        last_step = curr[:, -1:]
+        # nxt shape: (E, H, D) -> keep first H-1 steps: (E, H-1, D)
+        next_steps = nxt[:, :-1]
+        # Result shape: (E, H, D), aligned with action chunk rollout.
+        return np.concatenate([last_step, next_steps], axis=1)
+
+    shifted_observation = jax.tree.map(move_obs, obs_act["observation"], next_obs_act["observation"])
+    shifted_obs_act = {}
+    for key, val in next_obs_act.items():
+        shifted_obs_act[key] = shifted_observation if key == "observation" else val
+    return shifted_obs_act
 
 
 def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_prefix_key: str = "pi0/"):
@@ -97,27 +113,6 @@ def collect_data(
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
-    def shift_window(obs_act, next_obs_act):
-        def move_obs(curr, nxt):
-            # curr shape: (E, H, D) -> Take last step: (E, 1, D)
-            last_step = curr[:, -1:]
-
-            # nxt shape: (E, H, D) -> Take all but last step: (E, H-1, D)
-            next_steps = nxt[:, :-1]
-
-            # Concatenate along the horizon axis (axis 1)
-            # Result shape: (E, H, D) containing steps H to 2H-1
-            return np.concatenate([last_step, next_steps], axis=1)
-        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs["observation"])
-        target_obs_act = {}
-        for key, val in next_obs_act.items():
-            # Replace the obs with the shiften one
-            if key == "observation":
-                target_obs_act[key] = target_obs
-            else:
-                target_obs_act[key] = val
-        return target_obs_act
-
     def get_env_value(vec, env_id):
         return jax.tree.map(lambda x: x[env_id], vec)
 
@@ -138,7 +133,7 @@ def collect_data(
             # Add data from each environment to its respective frame
 
             # Apply the function to the PyTrees
-            target_obs = shift_window(obs_act=obs, next_obs_act=next_obs)
+            target_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
             [frames[i].append(
                 {
                     'observation': get_env_value(target_obs, i),
@@ -187,6 +182,87 @@ def collect_data(
     metrics = {"success_rate": float(total_successes) / float(total_episodes)}
     env.close()
     return metrics, dataset.num_episodes
+
+
+def collect_data_with_agent(agent, config, step: int):
+    from src.envs.libero import make_env_libero
+
+    env, task_description = make_env_libero(config.collect, discount=config.discount)
+    agent.start_data_collection(step=step)
+
+    total_episodes = 0
+    total_successes = 0
+    num_rollouts = config.collect.num_rollouts
+    collected_episodes = 0
+
+    try:
+        with tqdm.tqdm(total=num_rollouts) as pbar:
+            obs, _ = env.reset()
+
+            while total_episodes < num_rollouts:
+                action_chunk = agent.sample_actions(
+                    obs,
+                    task_description=task_description,
+                    batch_actions=True,
+                )
+                next_obs, _, terminate, truncate, _ = env.step(action_chunk)
+
+                if config.collect.add_per_step_data:
+                    aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
+                else:
+                    aligned_obs = next_obs
+
+                step_data = {
+                    "observation": aligned_obs,
+                    "terminate": terminate,
+                    "truncate": truncate,
+                }
+                agent.add_data(step_data)
+
+                if config.collect.add_per_step_data:
+                    current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
+                    current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
+                else:
+                    current_terminate, current_truncate = terminate, truncate
+
+                done = np.logical_or(current_terminate, current_truncate)
+                done_indices = np.where(done)[0]
+                if len(done_indices) > 0:
+                    total_episodes += len(done_indices)
+                    pbar.update(len(done_indices))
+
+                for env_index in done_indices:
+                    success = bool(current_terminate[env_index])
+                    total_successes += int(success)
+                    agent.save_episode(
+                        is_success=success,
+                        env_index=int(env_index),
+                        task_description=task_description,
+                    )
+
+                    reset_out = env.reset(id=int(env_index))
+                    assert isinstance(reset_out, (tuple, list)) and len(reset_out) == 2
+                    env_obs = reset_out[0]
+
+                    def update_state(prev_state, new_val_leaf):
+                        prev_state[env_index] = new_val_leaf[0]
+                        return prev_state
+
+                    next_obs = jax.tree.map(update_state, next_obs, env_obs)
+
+                if total_episodes > 0:
+                    pbar.set_postfix(SR=total_successes / total_episodes)
+
+                obs = next_obs
+
+        if agent._lerobot_dataset is not None:
+            collected_episodes = int(agent._lerobot_dataset.num_episodes)
+    finally:
+        env.close()
+        agent.end_data_collection(step=step)
+
+    success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
+    return {"success_rate": success_rate}, collected_episodes
 
 
 def collect_data_lerobot_libero(
