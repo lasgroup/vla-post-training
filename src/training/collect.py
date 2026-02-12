@@ -108,7 +108,7 @@ def collect_data(
             # Concatenate along the horizon axis (axis 1)
             # Result shape: (E, H, D) containing steps H to 2H-1
             return np.concatenate([last_step, next_steps], axis=1)
-        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs["observation"])
+        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs_act["observation"])
         target_obs_act = {}
         for key, val in next_obs_act.items():
             # Replace the obs with the shiften one
