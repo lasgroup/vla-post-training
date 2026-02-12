@@ -45,9 +45,14 @@ def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_descri
     return action_chunk
 
 
-def add_frames_to_dataset(episode_data, config, dataset, task_description: str, obs_prefix: str = "pi0/"):
+def add_episode_to_dataset(episode_data, config, dataset, task_description: str, obs_prefix: str = "pi0/",
+                           is_success: bool = False):
     """Adding individual frames to the dataset since lerobot add_frame only allows 1 insertion."""
     # TODO: This is a bit hacky. Perhaps we can just add the full episode all at once?
+    if not is_success:
+        "We are running filtered SFT to so we only add successful episode."
+        return
+
     def process_frame(ob):
         frame = {}
         # Extract actions and observations from total_obs
@@ -60,13 +65,23 @@ def add_frames_to_dataset(episode_data, config, dataset, task_description: str, 
         return frame
     if config.collect.add_per_step_data:
         # Add all the per time-step transitions one by one.
-        for ep in episode_data:
-            for step in range(config.collect.replan_steps):
-                obs = jax.tree.map(lambda x: x[step], ep)
+        total_frames = len(episode_data)
+        for n_frame, ep in enumerate(episode_data):
+            ep_obs, terminate, truncate = ep["observation"],  ep["terminate"], ep["truncate"]
+            total_chunks = config.collect.replan_steps
+            # For the last frame where termination occurred check at which step this was observed.
+            if n_frame == total_frames - 1:
+                done = np.logical_or(terminate, truncate)
+                done_indices = np.where(done)[0]
+                if len(done_indices) > 0:
+                    total_chunks = done_indices[0]
+            for step in range(total_chunks):
+                obs = jax.tree.map(lambda x: x[step], ep_obs)
                 dataset.add_frame(process_frame(obs), task=str(task_description))
     else:
         for ep in episode_data:
-            dataset.add_frame(process_frame(ep))
+            dataset.add_frame(process_frame(ep["observation"]))
+    dataset.save_episode()
 
 
 def collect_data(
@@ -82,8 +97,29 @@ def collect_data(
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
-    def get_env_obs(obs, env_id):
-        return jax.tree.map(lambda x: x[env_id], obs)
+    def shift_window(obs_act, next_obs_act):
+        def move_obs(curr, nxt):
+            # curr shape: (E, H, D) -> Take last step: (E, 1, D)
+            last_step = curr[:, -1:]
+
+            # nxt shape: (E, H, D) -> Take all but last step: (E, H-1, D)
+            next_steps = nxt[:, :-1]
+
+            # Concatenate along the horizon axis (axis 1)
+            # Result shape: (E, H, D) containing steps H to 2H-1
+            return np.concatenate([last_step, next_steps], axis=1)
+        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs["observation"])
+        target_obs_act = {}
+        for key, val in next_obs_act.items():
+            # Replace the obs with the shiften one
+            if key == "observation":
+                target_obs_act[key] = target_obs
+            else:
+                target_obs_act[key] = val
+        return target_obs_act
+
+    def get_env_value(vec, env_id):
+        return jax.tree.map(lambda x: x[env_id], vec)
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
         obs, info = env.reset()
@@ -100,7 +136,15 @@ def collect_data(
             # obtained during the full action_chunk
             next_obs, _, terminate, truncate, _ = env.step(action_chunk)
             # Add data from each environment to its respective frame
-            [frames[i].append(get_env_obs(next_obs, i)) for i in range(num_envs)]
+
+            # Apply the function to the PyTrees
+            target_obs = shift_window(obs_act=obs, next_obs_act=next_obs)
+            [frames[i].append(
+                {
+                    'observation': get_env_value(target_obs, i),
+                    'terminate': get_env_value(terminate, i),
+                    'truncate': get_env_value(truncate, i)
+                }) for i in range(num_envs)]
             # Extract terminate or truncation flags
             if config.collect.add_per_step_data:
                 assert terminate.shape[1] == config.collect.replan_steps
@@ -120,10 +164,9 @@ def collect_data(
                 # if the environment was done due to the success state being reached,
                 # the agent may use this information for filtering data.
                 success = current_terminate[env_index]
-                if success:
-                    episode_data = frames[env_index]
-                    add_frames_to_dataset(episode_data, config, dataset, task_description=task_description)
-                    dataset.save_episode()
+                episode_data = frames[env_index]
+                add_episode_to_dataset(
+                    episode_data, config, dataset, task_description=task_description, is_success=success)
                 total_successes += success
                 # Reset the environment
                 reset_out = env.reset(id=env_index)
