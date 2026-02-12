@@ -255,7 +255,9 @@ def collect_data_with_agent(agent, config, step: int):
 
                 obs = next_obs
 
-        if agent._lerobot_dataset is not None:
+        if hasattr(agent, "_collection_success_episodes"):
+            collected_episodes = int(agent._collection_success_episodes)
+        elif getattr(agent, "_lerobot_dataset", None) is not None:
             collected_episodes = int(agent._lerobot_dataset.num_episodes)
     finally:
         env.close()

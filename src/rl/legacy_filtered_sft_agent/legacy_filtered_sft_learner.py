@@ -1,5 +1,6 @@
 from src.rl.agent import Agent
 from src.rl.legacy_filtered_sft_agent.update import train_step
+from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
@@ -7,7 +8,6 @@ from typing import Dict
 import gc
 import numpy as np
 import os
-import shutil
 import weakref
 
 import functools
@@ -20,8 +20,8 @@ import flax.traverse_util as traverse_util
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from typing import Any
-import lerobot.datasets.lerobot_dataset as lerobot_dataset
 
+import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.checkpoints as _checkpoints
@@ -29,8 +29,22 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
+
+
+def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
+    actions = np.asarray(actions)
+    if actions.ndim == 2:
+        actions = actions[None, ...]
+    if actions.shape[1] < action_horizon:
+        pad = action_horizon - actions.shape[1]
+        last = actions[:, -1:, :]
+        actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
+    elif actions.shape[1] > action_horizon:
+        actions = actions[:, :action_horizon, :]
+    return actions
 
 
 def _load_weights_and_validate(
@@ -165,7 +179,8 @@ class LegacyFilteredSFTLearner(Agent):
             config, sharding=self._data_sharding, shuffle=True
         )
         self._data_iter = iter(self._data_loader)
-        self._collected_data_paths = []
+        self._online_data_buffer = self._get_online_replay_buffer(self._data_sharding)
+        self._collection_success_episodes = 0
         # batch = next(data_iter)
         # logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
         # log_images(batch)
@@ -225,9 +240,6 @@ class LegacyFilteredSFTLearner(Agent):
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
 
-        # We use  a dummy data loader to store episodic data
-        self._lerobot_dataset = None
-
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
         # so we cannot safely drop the internal model there.
@@ -257,27 +269,163 @@ class LegacyFilteredSFTLearner(Agent):
                 "Policy model object is still alive after cleanup; other references remain."
             )
 
-    def _setup_lerobot_dataset(self, step: int | None = None):
-        if step is None:
-            step = self.training_steps
-        allowed_keys = {"image", "wrist_image", "state", "actions"}
-        new_data_path = self._checkpoint_manager._directory / "data" / str(step)
-        if new_data_path.exists():
-            shutil.rmtree(new_data_path)
-        self._lerobot_dataset = lerobot_dataset.LeRobotDataset.create(
-            repo_id=self._config.data.repo_id,
-            root=new_data_path,
-            robot_type="panda",
-            fps=10,
-            features={
-                k: v
-                for k, v in lerobot_dataset.LeRobotDatasetMetadata(
-                    self._config.data.repo_id
-                ).features.items()
-                if k in allowed_keys
+    def _get_online_replay_buffer(
+        self, data_sharding: jax.sharding.NamedSharding
+    ) -> ShardedReplayBuffer:
+        train_config = self._config
+        data_config = self._data_loader.data_config()
+
+        token_transform = None
+        non_token_model_transforms = []
+        for t in data_config.model_transforms.inputs:
+            if isinstance(t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)):
+                token_transform = t
+            else:
+                non_token_model_transforms.append(t)
+
+        pre_token_transform = _transforms.compose(
+            [
+                *data_config.repack_transforms.inputs,
+                *data_config.data_transforms.inputs,
+                _transforms.Normalize(
+                    data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *non_token_model_transforms,
+            ]
+        )
+
+        obs_spec, act_spec = train_config.model.inputs_spec(batch_size=1)
+        obs_spec_dict = obs_spec.to_dict()
+
+        def _zeros_like_spec(spec, *, override_dtype=None):
+            dtype = override_dtype if override_dtype is not None else spec.dtype
+            return np.zeros(spec.shape, dtype=dtype)
+
+        dummy_obs_dict = {
+            "image": {
+                k: _zeros_like_spec(v, override_dtype=np.uint8)
+                for k, v in obs_spec_dict["image"].items()
             },
-            image_writer_threads=10,
-            image_writer_processes=5,
+            "image_mask": {
+                k: _zeros_like_spec(v) for k, v in obs_spec_dict["image_mask"].items()
+            },
+            "state": _zeros_like_spec(obs_spec_dict["state"]),
+        }
+        for k in (
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
+        ):
+            if k in obs_spec_dict and obs_spec_dict[k] is not None:
+                dummy_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
+
+        dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
+        batch_size = int(train_config.batch_size)
+        max_capacity = max(batch_size, 256, batch_size * 8)
+        token_cache = {}
+        action_horizon = int(train_config.model.action_horizon)
+        default_prompt = train_config.default_prompt
+
+        def _preprocess_insert(episode_data: Dict[str, Any]):
+            raw = dict(episode_data)
+            if "actions" not in raw and "action" in raw:
+                raw["actions"] = raw.pop("action")
+
+            prompt = raw.get("prompt", default_prompt)
+            if not isinstance(prompt, str):
+                prompt_arr = np.asarray(prompt)
+                prompt = prompt_arr.reshape(-1)[0].item() if prompt_arr.size else ""
+            prompt = str(prompt)
+            raw["prompt"] = prompt
+
+            if "observation" not in raw:
+                obs = {}
+                if "image" in raw:
+                    obs["image"] = raw.pop("image")
+                if "wrist_image" in raw:
+                    obs["wrist_image"] = raw.pop("wrist_image")
+                if "state" in raw:
+                    obs["state"] = raw.pop("state")
+                if obs:
+                    raw["observation"] = obs
+
+            raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+            data = pre_token_transform(raw)
+
+            if "actions" in data:
+                data["actions"] = _pad_actions_to_horizon(
+                    data["actions"], action_horizon
+                )
+
+            batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
+            if "image_mask" in data:
+                for k, v in data["image_mask"].items():
+                    v = np.asarray(v)
+                    if v.ndim == 0:
+                        data["image_mask"][k] = np.full(
+                            batch_shape, bool(v), dtype=np.bool_
+                        )
+
+            if token_transform is None:
+                raise ValueError(
+                    "Model transforms must include a prompt tokenization transform."
+                )
+
+            if isinstance(token_transform, _transforms.TokenizePrompt):
+                cached = token_cache.get(prompt)
+                if cached is None:
+                    tok = token_transform({"prompt": prompt})
+                    cached = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
+                    token_cache[prompt] = cached
+                tokens, token_masks = cached
+                data.pop("prompt", None)
+                data["tokenized_prompt"] = np.broadcast_to(
+                    tokens, batch_shape + tokens.shape
+                ).copy()
+                data["tokenized_prompt_mask"] = np.broadcast_to(
+                    token_masks, batch_shape + token_masks.shape
+                ).copy()
+            elif isinstance(token_transform, _transforms.TokenizeFASTInputs):
+                data.pop("prompt", None)
+                state = np.asarray(data["state"])
+                actions = np.asarray(data.get("actions"))
+                if actions is None:
+                    raise ValueError("FAST tokenization requires actions.")
+                t = int(state.shape[0])
+                toks, masks, ar_masks, loss_masks = [], [], [], []
+                for i in range(t):
+                    out = token_transform(
+                        {"prompt": prompt, "state": state[i], "actions": actions[i]}
+                    )
+                    toks.append(out["tokenized_prompt"])
+                    masks.append(out["tokenized_prompt_mask"])
+                    ar_masks.append(out["token_ar_mask"])
+                    loss_masks.append(out["token_loss_mask"])
+                data["tokenized_prompt"] = np.stack(toks, axis=0)
+                data["tokenized_prompt_mask"] = np.stack(masks, axis=0)
+                data["token_ar_mask"] = np.stack(ar_masks, axis=0)
+                data["token_loss_mask"] = np.stack(loss_masks, axis=0)
+            else:
+                raise TypeError(f"Unsupported token transform: {type(token_transform)}")
+
+            actions = np.asarray(data.pop("actions"), dtype=np.float32)
+            data["state"] = np.asarray(data["state"], dtype=np.float32)
+            return data, actions
+
+        def _postprocess_sample(batch):
+            obs_dict, actions = batch
+            return _model.Observation.from_dict(obs_dict), actions
+
+        return ShardedReplayBuffer(
+            dummy_data=(dummy_obs_dict, dummy_actions),
+            max_capacity=max_capacity,
+            batch_size=batch_size,
+            data_sharding=data_sharding,
+            seed=train_config.seed,
+            preprocess_fn=_preprocess_insert,
+            postprocess_fn=_postprocess_sample,
+            freeze_dict=False,
         )
 
     def _process_obs_for_pi0(
@@ -329,10 +477,11 @@ class LegacyFilteredSFTLearner(Agent):
         # Define model
         model = nnx.merge(train_state.model_def, train_state.params)
         # Convert observation for the policy
-        state = observations.get("observation/state")
-        if state is None:
-            raise KeyError("Expected 'observation/state' in processed observations.")
-        batch_size = int(state.shape[0]) if state.ndim > 1 else 1
+        obs_leaves = jax.tree_util.tree_leaves(observations)
+        if not obs_leaves:
+            raise ValueError("No observation leaves found for policy inference.")
+        first_leaf = np.asarray(obs_leaves[0])
+        batch_size = int(first_leaf.shape[0]) if first_leaf.ndim > 1 else 1
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
@@ -405,7 +554,6 @@ class LegacyFilteredSFTLearner(Agent):
         if not is_success:
             # We are running filtered SFT to so we only add successful episode.
             return
-        assert self._lerobot_dataset is not None, "LeRobot Dataset is not initiliazed"
         task_description = kwargs.get("task_description")
 
         def process_frame(ob):
@@ -415,10 +563,13 @@ class LegacyFilteredSFTLearner(Agent):
             for key, val in obs.items():
                 if self._config.collect.obs_prefix_key in key:
                     obs_key = key.split(self._config.collect.obs_prefix_key)[-1]
+                    if obs_key == "prompt":
+                        continue
                     frame[obs_key] = val
             frame["actions"] = action
             return frame
 
+        transitions = []
         if self._config.collect.add_per_step_data:
             # Add all the per time-step transitions one by one.
             total_frames = len(episode_data)
@@ -437,46 +588,48 @@ class LegacyFilteredSFTLearner(Agent):
                         total_chunks = done_indices[0]
                 for step in range(total_chunks):
                     obs = jax.tree.map(lambda x: x[step], ep_obs)
-                    self._lerobot_dataset.add_frame(
-                        process_frame(obs), task=str(task_description)
-                    )
+                    transitions.append(process_frame(obs))
         else:
             for ep in episode_data:
-                self._lerobot_dataset.add_frame(process_frame(ep["observation"]))
-        self._lerobot_dataset.save_episode()
+                transitions.append(process_frame(ep["observation"]))
+        if not transitions:
+            return
+        episode_batch = jax.tree_util.tree_map(
+            lambda *xs: np.stack(xs, axis=0), *transitions
+        )
+        if task_description is not None:
+            episode_batch["prompt"] = str(task_description)
+        self._online_data_buffer.insert(episode_batch)
+        self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
+        del step
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
-        # Initialize lerobot dataset
-        self._setup_lerobot_dataset(step)
-        # TODO: Move train state to CPU and policy state to GPU?
+        self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None):
+        del step
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
-        if step is None:
-            step = self.training_steps
-        # Delete/Reset Lerobot dataset
-        if self._lerobot_dataset.num_episodes > 0:
-            self._collected_data_paths.append(
-                self._checkpoint_manager._directory / "data" / str(step)
-            )
-        del self._lerobot_dataset
-        self._lerobot_dataset = None
-        # Reinitialize the data loader with the new data.
-        self._data_loader = create_data_loader(
-            self._config,
-            sharding=self._data_sharding,
-            shuffle=True,
-            collected_data_paths=self._collected_data_paths,
-        )
-        self._data_iter = iter(self._data_loader)
-        # TODO: Move policy state to CPU and train state to GPU?
 
     def update(self):
         self.training_steps += 1
         batch = next(self._data_iter)
+        use_online = (
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
+        )
+        if use_online:
+            online_batch = self._online_data_buffer.sample()
+            online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
+            if online_ratio >= 1.0:
+                batch = online_batch
+            elif online_ratio > 0:
+                batch = jax.tree.map(
+                    lambda x, y: jnp.concatenate([x, y], axis=0),
+                    batch,
+                    online_batch,
+                )
         train_rng, self._rng = jax.random.split(self._rng)
         train_state = self._train_state
         with sharding.set_mesh(self._mesh):

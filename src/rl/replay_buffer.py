@@ -7,7 +7,7 @@ import pickle
 
 import copy
 
-from src.rl_training.dataset import Dataset, DatasetDict
+from src.rl.dataset import Dataset, DatasetDict
 import collections
 from flax.core import frozen_dict
 
@@ -90,7 +90,6 @@ class ReplayBuffer(Dataset):
         rewards_list = []
         terminals_list = []
         masks_list = []
-        discount_list = []
 
         for i in self.which_trajs:
             start, end = self.traj_bounds[i]
