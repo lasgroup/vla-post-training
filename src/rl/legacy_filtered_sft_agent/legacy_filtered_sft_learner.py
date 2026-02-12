@@ -325,14 +325,21 @@ class LegacyFilteredSFTLearner(Agent):
         max_capacity = max(batch_size, 256, batch_size * 8)
         token_cache = {}
         action_horizon = int(train_config.model.action_horizon)
-        default_prompt = train_config.default_prompt
+        default_prompt = getattr(train_config, "default_prompt", None)
 
         def _preprocess_insert(episode_data: Dict[str, Any]):
             raw = dict(episode_data)
             if "actions" not in raw and "action" in raw:
                 raw["actions"] = raw.pop("action")
 
-            prompt = raw.get("prompt", default_prompt)
+            prompt = raw.get("prompt", None)
+            if prompt is None:
+                prompt = default_prompt
+            if prompt is None:
+                raise ValueError(
+                    "Prompt is required for online insertion. Provide task_description during "
+                    "collection or configure a default prompt."
+                )
             if not isinstance(prompt, str):
                 prompt_arr = np.asarray(prompt)
                 prompt = prompt_arr.reshape(-1)[0].item() if prompt_arr.size else ""
