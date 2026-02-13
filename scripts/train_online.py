@@ -291,4 +291,4 @@ def main(config: _config.TrainConfig):
 if __name__ == "__main__":
     main(_config.cli())
 
-# XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run /users/$USER/vla-pt/scripts/train_online_batched.py pi05_libero_online --exp-name=my_experiment --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params
+# uv run /users/$USER/vla-post-training/scripts/train_online.py pi05_libero_online --exp-name=my_experiment --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params
