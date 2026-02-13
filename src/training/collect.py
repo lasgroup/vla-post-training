@@ -7,6 +7,7 @@ import numpy as np
 import shutil
 import tqdm_loggable.auto as tqdm
 from src.envs.venv import SubprocVectorEnv
+from openpi_client import image_tools
 
 
 def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_prefix_key: str = "pi0/"):
@@ -21,7 +22,6 @@ def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_p
                 element[obs_key] = val
             else:
                 if 'image' in obs_key and config.collect.resize_image > 0:
-                    from openpi_client import image_tools
                     # Rescale images
                     val = image_tools.convert_to_uint8(image_tools.resize_with_pad(val,
                                                                                    config.collect.resize_image,
@@ -45,13 +45,9 @@ def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_descri
     return action_chunk
 
 
-def add_episode_to_dataset(episode_data, config, dataset, task_description: str, obs_prefix: str = "pi0/",
-                           is_success: bool = False):
+def add_episode_to_dataset(episode_data, config, dataset, task_description: str, obs_prefix: str = "pi0/"):
     """Adding individual frames to the dataset since lerobot add_frame only allows 1 insertion."""
     # TODO: This is a bit hacky. Perhaps we can just add the full episode all at once?
-    if not is_success:
-        "We are running filtered SFT to so we only add successful episode."
-        return
 
     def process_frame(ob):
         frame = {}
@@ -84,6 +80,20 @@ def add_episode_to_dataset(episode_data, config, dataset, task_description: str,
     dataset.save_episode()
 
 
+def shift_window(obs_act, next_obs_act):
+    def move_obs(curr, nxt):
+        # curr shape: (E, H, D) -> Take last step: (E, 1, D)
+        last_step = curr[:, -1:]
+        # nxt shape: (E, H, D) -> Take all but last step: (E, H-1, D)
+        next_steps = nxt[:, :-1]
+        # Concatenate along the horizon axis (axis 1)
+        # Result shape: (E, H, D) containing steps H to 2H-1
+        return np.concatenate([last_step, next_steps], axis=1)
+    target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs_act["observation"])
+    target_obs_act = {key: (target_obs if key == "observation" else val) for key, val in next_obs_act.items()}
+    return target_obs_act
+
+
 def collect_data(
         policy,
         dataset,
@@ -97,32 +107,11 @@ def collect_data(
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
-    def shift_window(obs_act, next_obs_act):
-        def move_obs(curr, nxt):
-            # curr shape: (E, H, D) -> Take last step: (E, 1, D)
-            last_step = curr[:, -1:]
-
-            # nxt shape: (E, H, D) -> Take all but last step: (E, H-1, D)
-            next_steps = nxt[:, :-1]
-
-            # Concatenate along the horizon axis (axis 1)
-            # Result shape: (E, H, D) containing steps H to 2H-1
-            return np.concatenate([last_step, next_steps], axis=1)
-        target_obs = jax.tree.map(move_obs, obs_act["observation"], next_obs_act["observation"])
-        target_obs_act = {}
-        for key, val in next_obs_act.items():
-            # Replace the obs with the shiften one
-            if key == "observation":
-                target_obs_act[key] = target_obs
-            else:
-                target_obs_act[key] = val
-        return target_obs_act
-
     def get_env_value(vec, env_id):
         return jax.tree.map(lambda x: x[env_id], vec)
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
-        obs, info = env.reset()
+        obs, _ = env.reset()
         frames = [[] for _ in range(num_envs)]
         while total_episodes < num_rollouts:
             # Get action chunk from the policy
@@ -147,12 +136,10 @@ def collect_data(
             # Extract terminate or truncation flags
             if config.collect.add_per_step_data:
                 assert terminate.shape[1] == config.collect.replan_steps
-                current_terminate = jax.tree_util.tree_map(lambda x: x[:, -1], terminate)
-                current_truncate = jax.tree_util.tree_map(lambda x: x[:, -1], truncate)
-            else:
-                current_terminate, current_truncate = terminate, truncate
+                terminate = terminate[:, -1]
+                truncate = truncate[:, -1]
             # Take the last step for terminate/truncation flag
-            done = np.logical_or(current_terminate, current_truncate)
+            done = np.logical_or(terminate, truncate)
             # Check which environment is done
             done_indices = np.where(done)[0]
             total_episodes += len(done_indices)
@@ -162,16 +149,13 @@ def collect_data(
             for env_index in done_indices:
                 # if the environment was done due to the success state being reached,
                 # the agent may use this information for filtering data.
-                success = current_terminate[env_index]
+                success = terminate[env_index]
                 episode_data = frames[env_index]
-                add_episode_to_dataset(
-                    episode_data, config, dataset, task_description=task_description, is_success=success)
+                if success:
+                    add_episode_to_dataset(episode_data, config, dataset, task_description=task_description)
                 total_successes += success
                 # Reset the environment
-                reset_out = env.reset(id=env_index)
-                assert isinstance(reset_out, (tuple, list))
-                assert len(reset_out) == 2
-                env_obs = reset_out[0]
+                env_obs, _ = env.reset(id=env_index)
 
                 def update_state(prev_state, new_val_leaf):
                     prev_state[env_index] = new_val_leaf[0]
@@ -214,7 +198,7 @@ def collect_data_lerobot_libero(
     )
 
     # rollout parallel environments
-    env, task_description = make_env_libero(config.collect)
+    env, task_description = make_env_libero(config)
     return collect_data(
         policy=policy,
         dataset=collected_dataset,

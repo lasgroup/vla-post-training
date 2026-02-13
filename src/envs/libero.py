@@ -1,19 +1,14 @@
-import gymnasium
-import jax
-import jax.numpy as jnp
-import numpy as np
-import pathlib
-import torch
-import os
+from gymnasium.wrappers import TimeLimit
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
-from robosuite.utils.transform_utils import quat2axisangle
+import numpy as np
+import pathlib
+import os
+import torch
 
-from openpi_client import image_tools
+from src.envs.venv import SubprocVectorEnv
 from src.envs.wrappers import ensure_gymnasium_env, WarmUpOnResetWrapper, \
     SetInitialStateWrapper, Pi0ObservationWrapper, QueryFrequencyWrapper
-from gymnasium.wrappers import TimeLimit
-from src.envs.venv import SubprocVectorEnv
 
 
 def get_task_init_states(task_suite, task_id: int):
@@ -39,10 +34,10 @@ def get_libero_warm_start_action():
 
 
 def make_env_libero(config, discount: float = 0.99):
-    assert len(config.tasks) == 1, "Only single-task collection is supported."
-    task_suite_name = "_".join(config.tasks[0].split("_")[:-1])
-    task_id = int(config.tasks[0].split("_")[-1])
-    max_steps = get_max_steps_libero(config.tasks[0])
+    assert len(config.collect.tasks) == 1, "Only single-task collection is supported."
+    task_suite_name = "_".join(config.collect.tasks[0].split("_")[:-1])
+    task_id = int(config.collect.tasks[0].split("_")[-1])
+    max_steps = get_max_steps_libero(config.collect.tasks[0])
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[task_suite_name]()
     task = task_suite.get_task(task_id)
@@ -52,18 +47,18 @@ def make_env_libero(config, discount: float = 0.99):
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
     env_args = {
         "bddl_file_name": task_bddl_file,
-        "camera_heights": config.env_resolution,
-        "camera_widths": config.env_resolution,
+        "camera_heights": config.collect.env_resolution,
+        "camera_widths": config.collect.env_resolution,
     }
     env_factories = []
-    for i in range(config.env_num):
+    for i in range(config.collect.env_num):
         def _make_env(rank=i):
             args = env_args.copy()
             args["render_gpu_device_id"] = rank % 4
             # Create Libero environment
             base_env = OffScreenRenderEnv(**args)
             # Converts gym envs to gymnasium style envs
-            base_env = ensure_gymnasium_env(base_env, action_dim=7)
+            base_env = ensure_gymnasium_env(base_env)
             # Sets initial states for the environment
             base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
             # Add Pi related obs to the environment
@@ -71,12 +66,12 @@ def make_env_libero(config, discount: float = 0.99):
                 env=base_env,
                 env_class="libero",
                 task_description=task_description,
-                add_states=config.add_states
+                add_states=config.collect.add_states
             )
             # Warm ups upon reset
             base_env = WarmUpOnResetWrapper(
                 env=base_env,
-                num_steps_wait=config.num_steps_wait,
+                num_steps_wait=config.collect.num_steps_wait,
                 warm_up_action=warm_start_action,
             )
             # Add timelimit wrapper
@@ -87,9 +82,9 @@ def make_env_libero(config, discount: float = 0.99):
             # Add query frequency wrapper to rollout action chunks
             base_env = QueryFrequencyWrapper(
                 env=base_env,
-                query_frequency=config.replan_steps,
+                query_frequency=config.collect.replan_steps,
                 discount=discount,
-                store_full_transitions=config.add_per_step_data,
+                store_full_transitions=config.collect.add_per_step_data,
                 post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
@@ -98,6 +93,7 @@ def make_env_libero(config, discount: float = 0.99):
     env = SubprocVectorEnv(env_factories)
     # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
     env.seed(config.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    # re-use training seed
     return env, task_description
 
 

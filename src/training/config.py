@@ -20,7 +20,6 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
-    seed: int = 42
 
 
 @dataclasses.dataclass(frozen=True)
