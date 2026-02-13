@@ -325,6 +325,7 @@ class LegacyFilteredSFTLearner(Agent):
         dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
         batch_size = int(train_config.batch_size)
         max_capacity = max(batch_size, 256, batch_size * 8)
+        # max_capacity = batch_size * 2
         token_cache = {}
         action_horizon = int(train_config.model.action_horizon)
         default_prompt = getattr(train_config, "default_prompt", None)
@@ -630,29 +631,29 @@ class LegacyFilteredSFTLearner(Agent):
             episode_batch = jax.tree_util.tree_map(
                 lambda *xs: np.stack(xs, axis=0), *transitions
             )
+            # TODO: this can cause double action chunking
+            # # Convert per-step actions into sliding horizon windows:
+            # # sample i -> (observation at i, actions[i : i + horizon]).
+            # action_horizon = int(self._config.model.action_horizon)
+            # actions = np.asarray(episode_batch["actions"])
+            # num_steps = int(actions.shape[0])
+            # num_windows = num_steps - action_horizon + 1
+            # if num_windows <= 0:
+            #     return
 
-            # Convert per-step actions into sliding horizon windows:
-            # sample i -> (observation at i, actions[i : i + horizon]).
-            action_horizon = int(self._config.model.action_horizon)
-            actions = np.asarray(episode_batch["actions"])
-            num_steps = int(actions.shape[0])
-            num_windows = num_steps - action_horizon + 1
-            if num_windows <= 0:
-                return
-
-            windowed_batch = {
-                key: np.asarray(value)[:num_windows]
-                for key, value in episode_batch.items()
-                if key != "actions"
-            }
-            windowed_batch["actions"] = np.stack(
-                [
-                    actions[start : start + action_horizon]
-                    for start in range(num_windows)
-                ],
-                axis=0,
-            )
-            episode_batch = windowed_batch
+            # windowed_batch = {
+            #     key: np.asarray(value)[:num_windows]
+            #     for key, value in episode_batch.items()
+            #     if key != "actions"
+            # }
+            # windowed_batch["actions"] = np.stack(
+            #     [
+            #         actions[start : start + action_horizon]
+            #         for start in range(num_windows)
+            #     ],
+            #     axis=0,
+            # )
+            # episode_batch = windowed_batch
         else:
             for ep in episode_data:
                 transitions.append(process_frame(ep["observation"]))
@@ -685,6 +686,11 @@ class LegacyFilteredSFTLearner(Agent):
         )
         if use_online:
             online_batch = self._online_data_buffer.sample()
+            logging.info(
+                "Sampled online batch shapes (step=%d):\n%s",
+                self.training_steps,
+                training_utils.array_tree_to_info(online_batch),
+            )
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
