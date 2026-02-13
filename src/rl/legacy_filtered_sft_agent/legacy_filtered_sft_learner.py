@@ -398,6 +398,11 @@ class LegacyFilteredSFTLearner(Agent):
                 data["actions"] = _pad_actions_to_horizon(
                     data["actions"], action_horizon
                 )
+                logging.info(
+                    "##### Data actions info after padding fn (step=%d):\n%s #####",
+                    self.training_steps,
+                    training_utils.array_tree_to_info(data["actions"]),
+                )
 
             # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
@@ -636,29 +641,28 @@ class LegacyFilteredSFTLearner(Agent):
             episode_batch = jax.tree_util.tree_map(
                 lambda *xs: np.stack(xs, axis=0), *transitions
             )
-            # TODO: this can cause double action chunking
             # # Convert per-step actions into sliding horizon windows:
             # # sample i -> (observation at i, actions[i : i + horizon]).
-            # action_horizon = int(self._config.model.action_horizon)
-            # actions = np.asarray(episode_batch["actions"])
-            # num_steps = int(actions.shape[0])
-            # num_windows = num_steps - action_horizon + 1
-            # if num_windows <= 0:
-            #     return
+            action_horizon = int(self._config.model.action_horizon)
+            actions = np.asarray(episode_batch["actions"])
+            num_steps = int(actions.shape[0])
+            num_windows = num_steps - action_horizon + 1
+            if num_windows <= 0:
+                return
 
-            # windowed_batch = {
-            #     key: np.asarray(value)[:num_windows]
-            #     for key, value in episode_batch.items()
-            #     if key != "actions"
-            # }
-            # windowed_batch["actions"] = np.stack(
-            #     [
-            #         actions[start : start + action_horizon]
-            #         for start in range(num_windows)
-            #     ],
-            #     axis=0,
-            # )
-            # episode_batch = windowed_batch
+            windowed_batch = {
+                key: np.asarray(value)[:num_windows]
+                for key, value in episode_batch.items()
+                if key != "actions"
+            }
+            windowed_batch["actions"] = np.stack(
+                [
+                    actions[start : start + action_horizon]
+                    for start in range(num_windows)
+                ],
+                axis=0,
+            )
+            episode_batch = windowed_batch
         else:
             for ep in episode_data:
                 transitions.append(process_frame(ep["observation"]))
