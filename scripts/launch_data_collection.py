@@ -45,7 +45,7 @@ def main(args):
 
     for applicable_config in applicable_config_list:
         for flags in dict_permutations(applicable_config):
-            flags['exp-name'] = generate_experiment_name(flags, applicable_config)
+            flags['exp-name'] = generate_experiment_name(flags, applicable_config) + "_" + strftime("%Y-%m-%d_%H:%M:%S", gmtime())
             config_name = flags.pop("config_name")
             cmd = generate_base_command(exp, no_flag_option=config_name, flags=flags)
             command_list.append(cmd)
