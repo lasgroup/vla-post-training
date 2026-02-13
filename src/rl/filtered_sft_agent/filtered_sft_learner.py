@@ -1,5 +1,5 @@
 from src.rl.agent import Agent
-from src.rl.legacy_filtered_sft_agent.update import train_step
+from src.rl.filtered_sft_agent.update import train_step
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
@@ -118,7 +118,7 @@ def init_train_state(
     return train_state, state_sharding
 
 
-class LegacyFilteredSFTLearner(Agent):
+class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
 
@@ -130,7 +130,7 @@ class LegacyFilteredSFTLearner(Agent):
             "jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser())
         )
         self._rng = jax.random.key(self._config.seed)
-        train_rng, init_rng, self._rng = jax.random.split(self._rng, 3)
+        init_rng, self._rng = jax.random.split(self._rng, 2)
 
         # set up sharding
         self._mesh = sharding.make_mesh(self._config.fsdp_devices)
@@ -349,21 +349,8 @@ class LegacyFilteredSFTLearner(Agent):
         return actions
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        task_description = kwargs.get("task_description")
-        batch_actions = kwargs.get("batch_actions")
-        if batch_actions is None:
-            batch_actions = False
-        rng, self._rng = jax.random.split(self._rng)
-        processed_obs = self._process_obs_for_pi0(
-            observations, task_description=task_description
-        )
-        actions = self._sample_action(
-            observations=processed_obs,
-            rng=rng,
-            train_state=self._train_state,
-            batch_actions=batch_actions,
-        )
-        return np.asarray(actions, dtype=np.float32)
+        # For OpenPI sample and eval actions behave the same way.
+        return self.sample_actions(observations, **kwargs)
 
     def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         task_description = kwargs.get("task_description")
