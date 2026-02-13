@@ -20,7 +20,7 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
-    obs_prefix_key: str = "pi0/"
+    obs_prefix_key: str = "pi0"
 
 
 @dataclasses.dataclass(frozen=True)

@@ -278,12 +278,15 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
                  env_class: str,
                  task_description: str,
                  add_states: bool = True,
-                 include_prompt_in_obs: bool = False):
+                 include_prompt_in_obs: bool = False,
+                 pi0_obs_prefix: str = 'pi0'
+                 ):
         super().__init__(env)
         self.task_description = task_description
         self._env_class = env_class
         self._add_states = add_states
         self._include_prompt_in_obs = include_prompt_in_obs
+        self._pi0_obs_prefix = pi0_obs_prefix
         logging.info(f"\nTask: {self.task_description}")
 
         # produced by the helper functions (obs_to_img, etc.)
@@ -323,7 +326,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
                                            env_class=self._env_class,
                                            task_description=self.task_description,
                                            include_prompt=self._include_prompt_in_obs)
-        obs_pi_zero = {f'pi0/{key}': val for key, val in obs_pi_zero.items()}
+        obs_pi_zero = {f'{self._pi0_obs_prefix}/{key}': val for key, val in obs_pi_zero.items()}
         obs_dict = obs_dict | obs_pi_zero
         return obs_dict
 

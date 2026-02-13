@@ -33,7 +33,7 @@ def get_libero_warm_start_action():
     return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
 
 
-def make_env_libero(config, discount: float = 0.99):
+def make_env_libero(config, num_devices: int = 4):
     assert len(config.collect.tasks) == 1, "Only single-task collection is supported."
     task_suite_name = "_".join(config.collect.tasks[0].split("_")[:-1])
     task_id = int(config.collect.tasks[0].split("_")[-1])
@@ -50,51 +50,28 @@ def make_env_libero(config, discount: float = 0.99):
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
-    env_factories = []
-    for i in range(config.collect.env_num):
-        def _make_env(rank=i):
-            args = env_args.copy()
-            args["render_gpu_device_id"] = rank % 4
-            # Create Libero environment
-            base_env = OffScreenRenderEnv(**args)
-            # Converts gym envs to gymnasium style envs
-            base_env = ensure_gymnasium_env(base_env)
-            # Sets initial states for the environment
-            base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
-            # Add Pi related obs to the environment
-            base_env = Pi0ObservationWrapper(
-                env=base_env,
-                env_class="libero",
-                task_description=task_description,
-                add_states=config.collect.add_states
-            )
-            # Warm ups upon reset
-            base_env = WarmUpOnResetWrapper(
-                env=base_env,
-                num_steps_wait=config.collect.num_steps_wait,
-                warm_up_action=warm_start_action,
-            )
-            # Add timelimit wrapper
-            base_env = TimeLimit(
-                base_env,
-                max_episode_steps=max_steps,
-            )
-            # Add query frequency wrapper to rollout action chunks
-            base_env = QueryFrequencyWrapper(
-                env=base_env,
-                query_frequency=config.collect.replan_steps,
-                discount=discount,
-                store_full_transitions=config.collect.add_per_step_data,
-                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
-            )
-            return base_env
 
-        env_factories.append(_make_env)
-    env = SubprocVectorEnv(env_factories)
-    # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
-    env.seed(config.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
-    # re-use training seed
-    return env, task_description
+    def env_fn(rank: int):
+        args = env_args.copy()
+        args["render_gpu_device_id"] = rank % num_devices
+        env = OffScreenRenderEnv(**args)
+        # Converts gym envs to gymnasium style envs
+        env = ensure_gymnasium_env(env)
+        # Sets initial states for the environment
+        env = SetInitialStateWrapper(env, initial_states=initial_states)
+        # Warm ups upon reset
+        env = WarmUpOnResetWrapper(
+            env=env,
+            num_steps_wait=config.collect.num_steps_wait,
+            warm_up_action=warm_start_action,
+        )
+        # Add timelimit wrapper
+        env = TimeLimit(
+            env,
+            max_episode_steps=max_steps,
+        )
+        return env
+    return env_fn, task_description
 
 
 def get_max_steps_libero(task_name):

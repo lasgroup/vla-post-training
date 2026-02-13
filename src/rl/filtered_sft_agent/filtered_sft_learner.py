@@ -1,8 +1,11 @@
-from src.rl.agent import Agent
+from src.rl.agent import Agent, EnvFn
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
+from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
+from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
+
 from typing import Dict
 import gc
 import numpy as np
@@ -31,6 +34,52 @@ import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
 from openpi.policies import policy_config
 from openpi_client import image_tools
+
+
+def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_class):
+    env = filtered_sft_wrap_env(env_fn=env_fn, config=config, task_description=task_description, env_class=env_class)
+    agent = FilteredSFTLearner(config)
+    return env, agent
+
+
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
+    env_num = config.collect.env_num
+    add_states = config.collect.add_states
+    obs_prefix_key = config.collect.obs_prefix_key
+    replan_steps = config.collect.replan_steps
+    seed = config.seed
+    discount = config.discount
+    add_per_step_data = config.collect.add_per_step_data
+    env_factories = []
+    for i in range(env_num):
+        def _make_env(rank=i):
+            # Create the base environment
+            base_env = env_fn(rank)
+            # Add Pi related obs to the environment
+            base_env = Pi0ObservationWrapper(
+                env=base_env,
+                env_class=env_class,
+                task_description=task_description,
+                add_states=add_states,
+                pi0_obs_prefix=obs_prefix_key,
+            )
+            # Add query frequency wrapper to rollout action chunks
+            base_env = QueryFrequencyWrapper(
+                env=base_env,
+                query_frequency=replan_steps,
+                discount=discount,
+                store_full_transitions=add_per_step_data,
+                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+            )
+            return base_env
+
+        env_factories.append(_make_env)
+
+    env = SubprocVectorEnv(env_factories) if env_num > 1 else DummyVectorEnv(env_factories)
+    # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
+    env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    # re-use training seed
+    return env
 
 
 def _load_weights_and_validate(
@@ -297,7 +346,7 @@ class FilteredSFTLearner(Agent):
         for key, val in current_obs.items():
             # Extract all observations relevant for the policy
             if self._config.collect.obs_prefix_key in key:
-                obs_key = key.split(self._config.collect.obs_prefix_key)[-1]
+                obs_key = key.split(f'{self._config.collect.obs_prefix_key}/')[-1]
                 if obs_key == "prompt":
                     prompt_in_obs = True
                     processed_obs[obs_key] = val
@@ -401,7 +450,7 @@ class FilteredSFTLearner(Agent):
             obs, action = ob["observation"], ob["action"]
             for key, val in obs.items():
                 if self._config.collect.obs_prefix_key in key:
-                    obs_key = key.split(self._config.collect.obs_prefix_key)[-1]
+                    obs_key = key.split(f'{self._config.collect.obs_prefix_key}/')[-1]
                     frame[obs_key] = val
             frame["actions"] = action
             return frame
@@ -439,8 +488,9 @@ class FilteredSFTLearner(Agent):
         self._setup_lerobot_dataset(step)
         # TODO: Move train state to CPU and policy state to GPU?
 
-    def end_data_collection(self, step: int | None = None):
+    def end_data_collection(self, step: int | None = None) -> int:
         # Reset episode storage
+        num_episodes = self._lerobot_dataset.num_episodes
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         if step is None:
             step = self.training_steps
@@ -459,7 +509,7 @@ class FilteredSFTLearner(Agent):
             collected_data_paths=self._collected_data_paths,
         )
         self._data_iter = iter(self._data_loader)
-        # TODO: Move policy state to CPU and train state to GPU?
+        return num_episodes
 
     def update(self):
         self.training_steps += 1
