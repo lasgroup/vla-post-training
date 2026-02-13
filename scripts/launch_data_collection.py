@@ -8,9 +8,8 @@ USER = os.environ['USER']
 
 # General Configurations
 base_applicable_configs = {
-    #'group_name': ["test"], #dreamer_val
     'config_name': ['pi05_libero_online'],
-    'collect.env_num': [4,8,16,32,64,128],
+    'collect.env_num': [32],
     'collect.num_rollouts': [250],
     'checkpoint_base_dir': [f'/capstor/scratch/cscs/{USER}/checkpoints'],
     'weight-loader.params-path': ['gs://openpi-assets/checkpoints/pi05_libero/params'],
