@@ -278,7 +278,9 @@ class LegacyFilteredSFTLearner(Agent):
         token_transform = None
         non_token_model_transforms = []
         for t in data_config.model_transforms.inputs:
-            if isinstance(t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)):
+            if isinstance(
+                t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
+            ):
                 token_transform = t
             else:
                 non_token_model_transforms.append(t)
@@ -596,14 +598,42 @@ class LegacyFilteredSFTLearner(Agent):
                 for step in range(total_chunks):
                     obs = jax.tree.map(lambda x: x[step], ep_obs)
                     transitions.append(process_frame(obs))
+            if not transitions:
+                return
+            episode_batch = jax.tree_util.tree_map(
+                lambda *xs: np.stack(xs, axis=0), *transitions
+            )
+
+            # Convert per-step actions into sliding horizon windows:
+            # sample i -> (observation at i, actions[i : i + horizon]).
+            action_horizon = int(self._config.model.action_horizon)
+            actions = np.asarray(episode_batch["actions"])
+            num_steps = int(actions.shape[0])
+            num_windows = num_steps - action_horizon + 1
+            if num_windows <= 0:
+                return
+
+            windowed_batch = {
+                key: np.asarray(value)[:num_windows]
+                for key, value in episode_batch.items()
+                if key != "actions"
+            }
+            windowed_batch["actions"] = np.stack(
+                [
+                    actions[start : start + action_horizon]
+                    for start in range(num_windows)
+                ],
+                axis=0,
+            )
+            episode_batch = windowed_batch
         else:
             for ep in episode_data:
                 transitions.append(process_frame(ep["observation"]))
-        if not transitions:
-            return
-        episode_batch = jax.tree_util.tree_map(
-            lambda *xs: np.stack(xs, axis=0), *transitions
-        )
+            if not transitions:
+                return
+            episode_batch = jax.tree_util.tree_map(
+                lambda *xs: np.stack(xs, axis=0), *transitions
+            )
         if task_description is not None:
             episode_batch["prompt"] = str(task_description)
         self._online_data_buffer.insert(episode_batch)
