@@ -348,18 +348,44 @@ class LegacyFilteredSFTLearner(Agent):
             prompt = str(prompt)
             raw["prompt"] = prompt
 
-            if "observation" not in raw:
+            # Normalize observation keys so both layouts are accepted:
+            # - top-level keys: image, wrist_image, state
+            # - nested/flattened keys: observation.image / observation/image
+            if "observation.image" in raw and "image" not in raw:
+                raw["image"] = raw["observation.image"]
+            if "observation.wrist_image" in raw and "wrist_image" not in raw:
+                raw["wrist_image"] = raw["observation.wrist_image"]
+            if "observation.state" in raw and "state" not in raw:
+                raw["state"] = raw["observation.state"]
+            if "observation/image" in raw and "image" not in raw:
+                raw["image"] = raw["observation/image"]
+            if "observation/wrist_image" in raw and "wrist_image" not in raw:
+                raw["wrist_image"] = raw["observation/wrist_image"]
+            if "observation/state" in raw and "state" not in raw:
+                raw["state"] = raw["observation/state"]
+
+            obs = raw.get("observation")
+            if isinstance(obs, dict):
+                if "image" not in raw and "image" in obs:
+                    raw["image"] = obs["image"]
+                if "wrist_image" not in raw and "wrist_image" in obs:
+                    raw["wrist_image"] = obs["wrist_image"]
+                if "state" not in raw and "state" in obs:
+                    raw["state"] = obs["state"]
+            else:
                 obs = {}
-                if "image" in raw:
-                    obs["image"] = raw.pop("image")
-                if "wrist_image" in raw:
-                    obs["wrist_image"] = raw.pop("wrist_image")
-                if "state" in raw:
-                    obs["state"] = raw.pop("state")
-                if obs:
-                    raw["observation"] = obs
+
+            if "image" in raw:
+                obs["image"] = raw["image"]
+            if "wrist_image" in raw:
+                obs["wrist_image"] = raw["wrist_image"]
+            if "state" in raw:
+                obs["state"] = raw["state"]
+            if obs:
+                raw["observation"] = obs
 
             raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+
             data = pre_token_transform(raw)
 
             if "actions" in data:
@@ -367,6 +393,7 @@ class LegacyFilteredSFTLearner(Agent):
                     data["actions"], action_horizon
                 )
 
+            # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
             if "image_mask" in data:
                 for k, v in data["image_mask"].items():
