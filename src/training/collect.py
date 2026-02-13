@@ -178,7 +178,7 @@ def collect_data(
 def collect_data_with_agent(agent, config, step: int):
     from src.envs.libero import make_env_libero
 
-    env, task_description = make_env_libero(config.collect, discount=config.discount)
+    env, task_description = make_env_libero(config, discount=config.discount)
     agent.start_data_collection(step=step)
 
     total_episodes = 0
