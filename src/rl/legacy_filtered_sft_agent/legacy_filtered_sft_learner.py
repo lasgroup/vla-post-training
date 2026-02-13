@@ -390,6 +390,11 @@ class LegacyFilteredSFTLearner(Agent):
             data = pre_token_transform(raw)
 
             if "actions" in data:
+                logging.info(
+                    "##### Data actions info before padding fn (step=%d):\n%s #####",
+                    self.training_steps,
+                    training_utils.array_tree_to_info(data["actions"]),
+                )
                 data["actions"] = _pad_actions_to_horizon(
                     data["actions"], action_horizon
                 )
