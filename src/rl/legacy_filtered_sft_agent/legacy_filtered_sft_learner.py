@@ -324,8 +324,8 @@ class LegacyFilteredSFTLearner(Agent):
 
         dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
         batch_size = int(train_config.batch_size)
-        max_capacity = max(batch_size, 256, batch_size * 8)
-        # max_capacity = batch_size * 2
+        # max_capacity = max(batch_size, 256, batch_size * 8)
+        max_capacity = batch_size * 2
         token_cache = {}
         action_horizon = int(train_config.model.action_horizon)
         default_prompt = getattr(train_config, "default_prompt", None)
