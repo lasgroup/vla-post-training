@@ -1,106 +1,90 @@
-import flax.linen as nn
+import flax.nnx as nn
 import jax.numpy as jnp
+from src.rl.networks.constants import xavier_init
 
 
 class ResnetStack(nn.Module):
-    num_ch: int
-    num_blocks: int
-    use_max_pooling: bool = True
-
-    @nn.compact
-    def __call__(self, observations: jnp.ndarray) -> jnp.ndarray:
-        initializer = nn.initializers.xavier_uniform()
-        conv_out = nn.Conv(
-            features=self.num_ch,
+    def __init__(self, in_ch: int, num_ch: int, num_blocks: int, use_max_pooling: bool = True, *, rngs: nn.Rngs):
+        self.in_ch = in_ch
+        self.num_ch = num_ch
+        self.num_blocks = num_blocks
+        self.use_max_pooling = use_max_pooling
+        
+        initializer = xavier_init()
+        self.conv_in = nn.Conv(
+            in_features=in_ch,
+            out_features=num_ch,
             kernel_size=(3, 3),
             strides=1,
             kernel_init=initializer,
-            padding='SAME'
-        )(observations)
-
-        if self.use_max_pooling:
-            conv_out = nn.max_pool(
-                conv_out,
-                window_shape=(3, 3),
-                padding='SAME',
-                strides=(2, 2)
-            )
-
-        for _ in range(self.num_blocks):
-            block_input = conv_out
-            conv_out = nn.relu(conv_out)
-            conv_out = nn.Conv(
-                features=self.num_ch, kernel_size=(3, 3), strides=1,
-                padding='SAME',
-                kernel_init=initializer)(conv_out)
-
-            conv_out = nn.relu(conv_out)
-            conv_out = nn.Conv(
-                features=self.num_ch, kernel_size=(3, 3), strides=1,
-                padding='SAME', kernel_init=initializer
-            )(conv_out)
-            conv_out += block_input
-
-        return conv_out
+            padding='SAME',
+            rngs=rngs,
+        )
 
 
 class ImpalaEncoder(nn.Module):
-    nn_scale: int = 1
+    def __init__(self, nn_scale: int = 1, *, rngs: nn.Rngs):
+        self.nn_scale = nn_scale
+        self.stack_blocks = []
+        self.rngs = rngs 
 
-    def setup(self):
-        stack_sizes = [16, 32, 32]
-        self.stack_blocks = [
-            ResnetStack(
-                num_ch=stack_sizes[0] * self.nn_scale,
-                num_blocks=2),
-            ResnetStack(
-                num_ch=stack_sizes[1] * self.nn_scale,
-                num_blocks=2),
-            ResnetStack(
-                num_ch=stack_sizes[2] * self.nn_scale,
-                num_blocks=2),
-        ]
-
-    @nn.compact
     def __call__(self, x, train=True):
         x = x.astype(jnp.float32) / 255.0
         x = jnp.reshape(x, (*x.shape[:-2], -1))
 
+        if not self.stack_blocks:
+             # Initialize stacks using inferred input shape
+             
+             stack_sizes = [16, 32, 32]
+             num_blocks_list = [2, 2, 2]
+             in_ch = x.shape[-1]
+             
+             self.stack_blocks = []
+             for i, sz in enumerate(stack_sizes):
+                 out_ch = sz * self.nn_scale
+                 self.stack_blocks.append(
+                     ResnetStack(in_ch=in_ch, num_ch=out_ch, num_blocks=num_blocks_list[i], rngs=self.rngs)
+                 )
+                 in_ch = out_ch
+
         conv_out = x
 
-        for idx in range(len(self.stack_blocks)):
-            conv_out = self.stack_blocks[idx](conv_out)
+        for block in self.stack_blocks:
+            conv_out = block(conv_out)
 
         conv_out = nn.relu(conv_out)
         return conv_out.reshape((*x.shape[:-3], -1))
 
 
 class SmallerImpalaEncoder(nn.Module):
-    nn_scale: int = 1
+    def __init__(self, nn_scale: int = 1, *, rngs: nn.Rngs):
+        self.nn_scale = nn_scale
+        self.stack_blocks = []
+        self.rngs = rngs
 
-    def setup(self):
-        stack_sizes = [16, 32, 32]
-        self.stack_blocks = [
-            ResnetStack(
-                num_ch=stack_sizes[0] * self.nn_scale,
-                num_blocks=2),
-            ResnetStack(
-                num_ch=stack_sizes[1] * self.nn_scale,
-                num_blocks=1),
-            ResnetStack(
-                num_ch=stack_sizes[2] * self.nn_scale,
-                num_blocks=1),
-        ]
-
-    @nn.compact
     def __call__(self, x, train=True):
         x = x.astype(jnp.float32) / 255.0
         x = jnp.reshape(x, (*x.shape[:-2], -1))
 
+        if not self.stack_blocks:
+             stack_sizes = [16, 32, 32]
+             num_blocks_list = [2, 1, 1]
+             in_ch = x.shape[-1]
+             
+             self.stack_blocks = []
+             for i, sz in enumerate(stack_sizes):
+                 out_ch = sz * self.nn_scale
+                 self.stack_blocks.append(
+                     ResnetStack(in_ch=in_ch, num_ch=out_ch, num_blocks=num_blocks_list[i], rngs=self.rngs)
+                 )
+                 in_ch = out_ch
+
         conv_out = x
 
-        for idx in range(len(self.stack_blocks)):
-            conv_out = self.stack_blocks[idx](conv_out)
+        for block in self.stack_blocks:
+            conv_out = block(conv_out)
 
         conv_out = nn.relu(conv_out)
         return conv_out.reshape((*x.shape[:-3], -1))
+
+

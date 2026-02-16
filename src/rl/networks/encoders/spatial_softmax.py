@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax.core.frozen_dict import FrozenDict
 
-from jaxrl2.networks.constants import default_init, xavier_init, kaiming_init
+from src.rl.networks.constants import default_init, xavier_init, kaiming_init
 
 from functools import partial
 from typing import Any, Callable, Sequence, Tuple
@@ -16,20 +16,23 @@ import wandb
 ModuleDef = Any
 
 class SpatialSoftmax(nn.Module):
-    height: int
-    width: int
-    channel: int
-    pos_x: jnp.ndarray
-    pos_y: jnp.ndarray
-    temperature: None
-    log_heatmap: bool = False
+    def __init__(self, height: int, width: int, channel: int, pos_x: jnp.ndarray, pos_y: jnp.ndarray, temperature: Optional[float], log_heatmap: bool = False, *, rngs: nn.Rngs):
+        self.height = height
+        self.width = width
+        self.channel = channel
+        self.pos_x = pos_x
+        self.pos_y = pos_y
+        self.temperature_val = temperature
+        self.log_heatmap = log_heatmap
 
-    @nn.compact
+        if self.temperature_val == -1:
+             self.temperature = nn.Param(jnp.ones((1,), dtype=jnp.float32))
+        else:
+             self.temperature = None
+
     def __call__(self, feature):
-        if self.temperature == -1:
-            from jax.nn import initializers
-            # print("Trainable temperature parameter")
-            temperature = self.param('softmax_temperature', initializers.ones, (1), jnp.float32)
+        if self.temperature_val == -1:
+            temperature = self.temperature.value
         else:
             temperature = 1.
 

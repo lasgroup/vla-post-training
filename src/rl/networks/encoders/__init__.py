@@ -1,3 +1,3 @@
-from jaxrl2.networks.mlp import MLP
-from jaxrl2.networks.normal_policy import NormalPolicy
-from jaxrl2.networks.normal_tanh_policy import NormalTanhPolicy
+from src.rl.networks.mlp import MLP
+from src.rl.networks.normal_policy import NormalPolicy
+from src.rl.networks.normal_tanh_policy import NormalTanhPolicy

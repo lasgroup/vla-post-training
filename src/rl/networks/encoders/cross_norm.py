@@ -6,7 +6,6 @@ from jax import lax
 from jax.nn import initializers
 import jax.numpy as jnp
 
-from flax.linen.module import Module, compact, merge_param
 
 
 PRNGKey = Any
@@ -16,8 +15,7 @@ Dtype = Any  # this could be a real type?
 
 Axes = Union[int, Iterable[int]]
 
-import flax.linen as nn
-from flax.linen.module import Module, compact, merge_param
+import flax.nnx as nn
 
 def _canonicalize_axes(rank: int, axes: Axes) -> Tuple[int, ...]:
   """Returns a tuple of deduplicated, sorted, and positive axes."""
@@ -84,17 +82,15 @@ def _compute_stats(x: Array, axes: Axes,
   return mean, var
 
 
-def _normalize(mdl: Module, x: Array, mean: Array, var: Array,
+def _normalize(x: Array, mean: Array, var: Array,
                reduction_axes: Axes, feature_axes: Axes,
                dtype: Dtype, param_dtype: Dtype,
                epsilon: float,
-               use_bias: bool, use_scale: bool,
-               bias_init: Callable[[PRNGKey, Shape, Dtype], Array],
-               scale_init: Callable[[PRNGKey, Shape, Dtype], Array]):
+               scale: Optional[Array],
+               bias: Optional[Array]):
   """"Normalizes the input of a normalization layer and optionally applies a learned scale and bias.
   Arguments:
-    mdl: Module to apply the normalization in (normalization params will reside
-      in this module).
+  Arguments:
     x: The input.
     mean: Mean to use for normalization.
     var: Variance to use for normalization.
@@ -104,10 +100,8 @@ def _normalize(mdl: Module, x: Array, mean: Array, var: Array,
     dtype: Dtype of the returned result.
     param_dtype: Dtype of the parameters.
     epsilon: Normalization epsilon.
-    use_bias: If true, add a bias term to the output.
-    use_scale: If true, scale the output.
-    bias_init: Initialization function for the bias term.
-    scale_init: Initialization function for the scaling function.
+    scale: Scale parameter (optional).
+    bias: Bias parameter (optional).
   Returns:
     The normalized input.
   """
@@ -125,125 +119,110 @@ def _normalize(mdl: Module, x: Array, mean: Array, var: Array,
     reduced_feature_shape.append(x.shape[ax])
   y = x - mean
   mul = lax.rsqrt(var + epsilon)
-  if use_scale:
-    scale = mdl.param('scale', scale_init, reduced_feature_shape,
-                      param_dtype).reshape(feature_shape)
-    mul *= scale
+  mul = lax.rsqrt(var + epsilon)
+  if scale is not None:
+    mul *= scale.reshape(feature_shape)
   y *= mul
-  if use_bias:
-    bias = mdl.param('bias', bias_init, reduced_feature_shape,
-                     param_dtype).reshape(feature_shape)
-    y += bias
+  if bias is not None:
+    y += bias.reshape(feature_shape)
   return jnp.asarray(y, dtype)
 
-class CrossNorm(Module):
+class CrossNorm(nn.Module):
   """CrossNorm Module.
-  Usage Note:
-  If we define a model with CrossNorm, for example::
-    BN = nn.CrossNorm(use_running_average=False, momentum=0.9, epsilon=1e-5,
-                      dtype=jnp.float32)
-  The initialized variables dict will contain in addition to a 'params'
-  collection a separate 'batch_stats' collection that will contain all the
-  running statistics for all the BatchNorm layers in a model::
-    vars_initialized = BN.init(key, x)  # {'params': ..., 'batch_stats': ...}
-  We then update the batch_stats during training by specifying that the
-  `batch_stats` collection is mutable in the `apply` method for our module.::
-    vars_in = {'params': params, 'batch_stats': old_batch_stats}
-    y, mutated_vars = BN.apply(vars_in, x, mutable=['batch_stats'])
-    new_batch_stats = mutated_vars['batch_stats']
-  During eval we would define BN with `use_running_average=True` and use the
-  batch_stats collection from training to set the statistics.  In this case
-  we are not mutating the batch statistics collection, and needn't mark it
-  mutable::
-    vars_in = {'params': params, 'batch_stats': training_batch_stats}
-    y = BN.apply(vars_in, x)
+
   Attributes:
     use_running_average: if True, the statistics stored in batch_stats
       will be used instead of computing the batch statistics on the input.
-    axis: the feature or non-batch axis of the input.
+    axis: the feature or non-spatial axis.
+      The mean and variance are calculated at the non-feature axes.
     momentum: decay rate for the exponential moving average of
       the batch statistics.
     epsilon: a small float added to variance to avoid dividing by zero.
     dtype: the dtype of the computation (default: float32).
     param_dtype: the dtype passed to parameter initializers (default: float32).
-    use_bias:  if True, bias (beta) is added.
-    use_scale: if True, multiply by scale (gamma).
-      When the next layer is linear (also e.g. nn.relu), this can be disabled
-      since the scaling will be done by the next layer.
+    use_bias:  if True, adding a bias term to the output.
+    use_scale: if True, scaling the output.
     bias_init: initializer for bias, by default, zero.
     scale_init: initializer for scale, by default, one.
     axis_name: the axis name used to combine batch statistics from multiple
       devices. See `jax.pmap` for a description of axis names (default: None).
     axis_index_groups: groups of axis indices within that named axis
-      representing subsets of devices to reduce over (default: None). For
-      example, `[[0, 1], [2, 3]]` would independently batch-normalize over
-      the examples on the first two and last two devices. See `jax.lax.psum`
-      for more details.
-
-      Note modified original BatchNorm module
+      representing subsets of devices to reduce over (default: None).
+    alpha: interpolation factor for CrossNorm statistics.
   """
-  use_running_average: Optional[bool] = None
-  axis: int = -1
-  momentum: float = 0.99
-  epsilon: float = 1e-5
-  dtype: Dtype = jnp.float32
-  param_dtype: Dtype = jnp.float32
-  use_bias: bool = True
-  use_scale: bool = True
-  bias_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.zeros
-  scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones
-  axis_name: Optional[str] = None
-  axis_index_groups: Any = None
-  alpha: float = 0.5
+  def __init__(self,
+               x_example: Array,
+               use_running_average: Optional[bool] = None,
+               axis: int = -1,
+               momentum: float = 0.99,
+               epsilon: float = 1e-5,
+               dtype: Dtype = jnp.float32,
+               param_dtype: Dtype = jnp.float32,
+               use_bias: bool = True,
+               use_scale: bool = True,
+               bias_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.zeros,
+               scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones,
+               axis_name: Optional[str] = None,
+               axis_index_groups: Any = None,
+               alpha: float = 0.5,
+               *, rngs: nn.Rngs):
+    self.use_running_average = use_running_average
+    self.axis = axis
+    self.momentum = momentum
+    self.epsilon = epsilon
+    self.dtype = dtype
+    self.param_dtype = param_dtype
+    self.use_bias = use_bias
+    self.use_scale = use_scale
+    self.axis_name = axis_name
+    self.axis_index_groups = axis_index_groups
+    self.alpha = alpha
 
-  @compact
-  def __call__(self, x, use_running_average: Optional[bool] = None):
-    """Normalizes the input using batch statistics.
-    NOTE:
-    During initialization (when parameters are mutable) the running average
-    of the batch statistics will not be updated. Therefore, the inputs
-    fed during initialization don't need to match that of the actual input
-    distribution and the reduction axis (set with `axis_name`) does not have
-    to exist.
-    Args:
-      x: the input to be normalized.
-      use_running_average: if true, the statistics stored in batch_stats
-        will be used instead of computing the batch statistics on the input.
-    Returns:
-      Normalized inputs (the same shape as inputs).
-    """
+    feature_axes = _canonicalize_axes(x_example.ndim, self.axis)
+    feature_shape = [x_example.shape[ax] for ax in feature_axes]
+    
+    self.mean = nn.BatchStat(jnp.zeros(feature_shape, jnp.float32))
+    self.var = nn.BatchStat(jnp.ones(feature_shape, jnp.float32))
 
-    use_running_average = merge_param(
-        'use_running_average', self.use_running_average, use_running_average)
+    if use_scale:
+        self.scale = nn.Param(scale_init(rngs.params(), feature_shape, param_dtype))
+    else:
+        self.scale = None
+
+    if use_bias:
+        self.bias = nn.Param(bias_init(rngs.params(), feature_shape, param_dtype))
+    else:
+        self.bias = None
+
+  def __call__(self, x: Array, use_running_average: Optional[bool] = None):
+    # Merge use_running_average behavior
+    if use_running_average is None:
+        use_running_average = self.use_running_average
+        if use_running_average is None:
+            use_running_average = False
+
+
     feature_axes = _canonicalize_axes(x.ndim, self.axis)
     reduction_axes = tuple(i for i in range(x.ndim) if i not in feature_axes)
-    feature_shape = [x.shape[ax] for ax in feature_axes]
-
-    # see NOTE above on initialization behavior
-    initializing = self.is_mutable_collection('params')
-
-    ra_mean = self.variable('batch_stats', 'mean',
-                            lambda s: jnp.zeros(s, jnp.float32),
-                            feature_shape)
-    ra_var = self.variable('batch_stats', 'var',
-                           lambda s: jnp.ones(s, jnp.float32),
-                           feature_shape)
+    # feature_shape = [x.shape[ax] for ax in feature_axes]
 
     if use_running_average:
-      mean, var = ra_mean.value, ra_var.value
+      mean, var = self.mean.value, self.var.value
     else:
       mean, var = _compute_stats(
           x, reduction_axes,
-          axis_name=self.axis_name if not initializing else None,
+          axis_name=self.axis_name,
           axis_index_groups=self.axis_index_groups, alpha=self.alpha)
 
-      if not initializing:
-        ra_mean.value = self.momentum * ra_mean.value + (1 -
-                                                         self.momentum) * mean
-        ra_var.value = self.momentum * ra_var.value + (1 - self.momentum) * var
+      # Update running stats
+      self.mean.value = self.momentum * self.mean.value + (1 - self.momentum) * mean
+      self.var.value = self.momentum * self.var.value + (1 - self.momentum) * var
 
-    return _normalize(
-        self, x, mean, var, reduction_axes, feature_axes,
-        self.dtype, self.param_dtype, self.epsilon,
-        self.use_bias, self.use_scale,
-        self.bias_init, self.scale_init)
+    # Apply normalization
+    # Prepare params
+    scale_val = self.scale.value if self.scale is not None else None
+    bias_val = self.bias.value if self.bias is not None else None
+    
+    return _normalize(x, mean, var, reduction_axes, feature_axes, 
+                      self.dtype, self.param_dtype, self.epsilon, 
+                      scale_val, bias_val)

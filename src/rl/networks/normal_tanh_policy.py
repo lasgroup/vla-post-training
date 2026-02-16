@@ -1,12 +1,12 @@
 from typing import Optional, Sequence
 
 import distrax
-import flax.linen as nn
+import flax.nnx as nn
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
 
-from jaxrl2.networks import MLP
-from jaxrl2.networks.constants import default_init, xavier_init
+from src.rl.networks import MLP
+from src.rl.networks.constants import default_init, xavier_init
 
 
 class TanhMultivariateNormalDiag(distrax.Transformed):
@@ -50,32 +50,43 @@ class TanhMultivariateNormalDiag(distrax.Transformed):
 
 
 class NormalTanhPolicy(nn.Module):
-    hidden_dims: Sequence[int]
-    action_dim: int
-    dropout_rate: Optional[float] = None
-    log_std_min: Optional[float] = -20
-    log_std_max: Optional[float] = 2
-    low: Optional[jnp.ndarray] = None
-    high: Optional[jnp.ndarray] = None
-    mlp_init_scale: float = 1.0
-    init_method: str = 'default'
+    def __init__(self, hidden_dims: Sequence[int],
+                 action_dim: int,
+                 dropout_rate: Optional[float] = None,
+                 log_std_min: Optional[float] = -20,
+                 log_std_max: Optional[float] = 2,
+                 low: Optional[jnp.ndarray] = None,
+                 high: Optional[jnp.ndarray] = None,
+                 mlp_init_scale: float = 1.0,
+                 init_method: str = 'default',
+                 *, rngs: nn.Rngs):
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        self.low = low
+        self.high = high
+        self.mlp_init_scale = mlp_init_scale
+        
+        self.mlp = MLP(hidden_dims,
+                       activate_final=True,
+                       dropout_rate=dropout_rate,
+                       init_scale=mlp_init_scale,
+                       rngs=rngs)
 
-    @nn.compact
+        if init_method == 'xavier':
+            kernel_init = xavier_init()
+        else:
+            kernel_init = default_init(mlp_init_scale)
+            
+        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
+        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init() if init_method != 'xavier' else xavier_init(), rngs=rngs)
+
     def __call__(self,
                  observations: jnp.ndarray,
                  training: bool = False) -> distrax.Distribution:
-        outputs = MLP(self.hidden_dims,
-                      activate_final=True,
-                      dropout_rate=self.dropout_rate,
-                      init_scale=self.mlp_init_scale)(observations,
-                                                      training=training)
+        outputs = self.mlp(observations, training=training)
 
-        if self.init_method == 'xavier':
-            means = nn.Dense(self.action_dim, kernel_init=xavier_init())(outputs)
-            log_stds = nn.Dense(self.action_dim, kernel_init=xavier_init())(outputs)
-        else:
-            means = nn.Dense(self.action_dim, kernel_init=default_init(self.mlp_init_scale))(outputs)
-            log_stds = nn.Dense(self.action_dim, kernel_init=default_init())(outputs)
+        means = self.mean_head(outputs)
+        log_stds = self.log_std_head(outputs)
 
         log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
 

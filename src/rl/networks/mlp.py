@@ -2,12 +2,11 @@ from typing import Callable, Optional, Sequence, Union
 from flax.core import frozen_dict
 
 import numpy as np
-import flax.linen as nn
+import flax.nnx as nn
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
-from jaxrl2.networks.constants import default_init
-
+from src.rl.networks.constants import default_init
 
 def _flatten_dict(x: Union[FrozenDict, jnp.ndarray]):
     if hasattr(x, 'values'):
@@ -48,53 +47,88 @@ def _flatten_dict_special(x):
         
 
 class MLP(nn.Module):
-    hidden_dims: Sequence[int]
-    activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
-    activate_final: int = False
-    dropout_rate: Optional[float] = None
-    init_scale: Optional[float] = 1.
-    use_layer_norm: bool = False
+    def __init__(self, hidden_dims: Sequence[int],
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activate_final: int = False,
+                 dropout_rate: Optional[float] = None,
+                 init_scale: Optional[float] = 1.,
+                 use_layer_norm: bool = False,
+                 *, rngs: nn.Rngs):
+        self.hidden_dims = hidden_dims
+        self.activations = activations
+        self.activate_final = activate_final
+        self.dropout_rate = dropout_rate
+        self.init_scale = init_scale
+        self.use_layer_norm = use_layer_norm
 
-    @nn.compact
+        self.layers = []
+        for i, size in enumerate(hidden_dims):
+            self.layers.append(nn.Linear(size, kernel_init=default_init(init_scale), rngs=rngs))
+            if i + 1 < len(hidden_dims) or activate_final:
+                if dropout_rate is not None:
+                    self.layers.append(nn.Dropout(rate=dropout_rate, rngs=rngs))
+                if use_layer_norm:
+                    self.layers.append(nn.LayerNorm(size, rngs=rngs))
+
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         x = _flatten_dict(x)
         # print('mlp post flatten', x.shape)
 
+        layer_idx = 0
         for i, size in enumerate(self.hidden_dims):
-            x = nn.Dense(size, kernel_init=default_init(self.init_scale))(x)
-            # print('post fc size', x.shape)
+            x = self.layers[layer_idx](x)
+            layer_idx += 1
             if i + 1 < len(self.hidden_dims) or self.activate_final:
                 if self.dropout_rate is not None:
-                    x = nn.Dropout(rate=self.dropout_rate)(
-                        x, deterministic=not training)
+                     x = self.layers[layer_idx](x, deterministic=not training)
+                     layer_idx += 1
                 if self.use_layer_norm:
-                    x = nn.LayerNorm()(x)
+                    x = self.layers[layer_idx](x)
+                    layer_idx += 1
                 x = self.activations(x)
         return x
 
 
 class MLPActionSep(nn.Module):
-    hidden_dims: Sequence[int]
-    activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
-    activate_final: int = False
-    dropout_rate: Optional[float] = None
-    init_scale: Optional[float] = 1.
-    use_layer_norm: bool = False
-    @nn.compact
+    def __init__(self, hidden_dims: Sequence[int],
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activate_final: int = False,
+                 dropout_rate: Optional[float] = None,
+                 init_scale: Optional[float] = 1.,
+                 use_layer_norm: bool = False,
+                 *, rngs: nn.Rngs):
+        self.hidden_dims = hidden_dims
+        self.activations = activations
+        self.activate_final = activate_final
+        self.dropout_rate = dropout_rate
+        self.init_scale = init_scale
+        self.use_layer_norm = use_layer_norm
+
+        self.layers = []
+        for i, size in enumerate(hidden_dims):
+            self.layers.append(nn.Linear(size, kernel_init=default_init(), rngs=rngs))
+            if i + 1 < len(hidden_dims) or activate_final:
+                if dropout_rate is not None:
+                    self.layers.append(nn.Dropout(rate=dropout_rate, rngs=rngs))
+                if use_layer_norm:
+                    self.layers.append(nn.LayerNorm(size, rngs=rngs))
+
     def __call__(self, x: jnp.ndarray, training: bool = False):
         x, action = _flatten_dict_special(x)
         print ('mlp action sep state post flatten', x.shape)
         print ('mlp action sep action post flatten', action.shape)
-
+        
+        layer_idx = 0
         for i, size in enumerate(self.hidden_dims):
             x_used = jnp.concatenate([x, action], axis=-1)
-            x = nn.Dense(size, kernel_init=default_init())(x_used)
-            print ('FF layers: ', x_used.shape, x.shape)
+            x = self.layers[layer_idx](x_used)
+            layer_idx += 1
             if i + 1 < len(self.hidden_dims) or self.activate_final:
                 if self.dropout_rate is not None:
-                    x = nn.Dropout(rate=self.dropout_rate)(
-                        x, deterministic=not training)
+                    x = self.layers[layer_idx](x, deterministic=not training)
+                    layer_idx += 1
                 if self.use_layer_norm:
-                    x = nn.LayerNorm()(x)
+                    x = self.layers[layer_idx](x)
+                    layer_idx += 1
                 x = self.activations(x)
         return x

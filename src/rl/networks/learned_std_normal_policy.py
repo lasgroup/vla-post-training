@@ -1,31 +1,39 @@
 from typing import Optional, Sequence
 
 import distrax
-import flax.linen as nn
+import flax.nnx as nn
 import jax.numpy as jnp
 
-from jaxrl2.networks import MLP
-from jaxrl2.networks.constants import default_init
+from src.rl.networks import MLP
+from src.rl.networks.constants import default_init, xavier_init
 
 class LearnedStdNormalPolicy(nn.Module):
-    hidden_dims: Sequence[int]
-    action_dim: int
-    dropout_rate: Optional[float] = None
-    log_std_min: Optional[float] = -20
-    log_std_max: Optional[float] = 2
+    def __init__(self, hidden_dims: Sequence[int],
+                 action_dim: int,
+                 dropout_rate: Optional[float] = None,
+                 log_std_min: Optional[float] = -20,
+                 log_std_max: Optional[float] = 2,
+                 *, rngs: nn.Rngs):
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        self.action_dim = action_dim
+        
+        self.mlp = MLP(hidden_dims,
+                       activate_final=True,
+                       dropout_rate=dropout_rate,
+                       rngs=rngs)
+                       
+        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
 
-    @nn.compact
     def __call__(self,
                  observations: jnp.ndarray,
                  training: bool = False) -> distrax.Distribution:
-        outputs = MLP(self.hidden_dims,
-                      activate_final=True,
-                      dropout_rate=self.dropout_rate)(observations,
-                                                      training=training)
+        outputs = self.mlp(observations, training=training)
 
-        means = nn.Dense(self.action_dim, kernel_init=default_init(1e-2))(outputs)
+        means = self.mean_head(outputs)
 
-        log_stds = nn.Dense(self.action_dim, kernel_init=default_init(1e-2))(outputs)
+        log_stds = self.log_std_head(outputs)
         log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
 
         distribution = distrax.MultivariateNormalDiag(loc=means, scale_diag=jnp.exp(log_stds))
@@ -71,26 +79,36 @@ class TanhMultivariateNormalDiag(distrax.Transformed):
         return self.bijector.forward(self.distribution.mode())
 
 class LearnedStdTanhNormalPolicy(nn.Module):
-    hidden_dims: Sequence[int]
-    action_dim: int
-    dropout_rate: Optional[float] = None
-    log_std_min: Optional[float] = -20
-    log_std_max: Optional[float] = 2
-    low: Optional[float] = None
-    high: Optional[float] = None
+    def __init__(self, hidden_dims: Sequence[int],
+                 action_dim: int,
+                 dropout_rate: Optional[float] = None,
+                 log_std_min: Optional[float] = -20,
+                 log_std_max: Optional[float] = 2,
+                 low: Optional[float] = None,
+                 high: Optional[float] = None,
+                 *, rngs: nn.Rngs):
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+        self.low = low
+        self.high = high
+        self.action_dim = action_dim
+        
+        self.mlp = MLP(hidden_dims,
+                       activate_final=True,
+                       dropout_rate=dropout_rate,
+                       rngs=rngs)
 
-    @nn.compact
+        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+
     def __call__(self,
                  observations: jnp.ndarray,
                  training: bool = False) -> distrax.Distribution:
-        outputs = MLP(self.hidden_dims,
-                      activate_final=True,
-                      dropout_rate=self.dropout_rate)(observations,
-                                                      training=training)
+        outputs = self.mlp(observations, training=training)
 
-        means = nn.Dense(self.action_dim, kernel_init=default_init(1e-2))(outputs)
+        means = self.mean_head(outputs)
 
-        log_stds = nn.Dense(self.action_dim, kernel_init=default_init(1e-2))(outputs)
+        log_stds = self.log_std_head(outputs)
         log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
 
         distribution = TanhMultivariateNormalDiag(loc=means, scale_diag=jnp.exp(log_stds), low=self.low, high=self.high)

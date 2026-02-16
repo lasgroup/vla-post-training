@@ -1,13 +1,12 @@
 from typing import Callable, Sequence
 
-import flax.linen as nn
+import flax.nnx as nn
 import jax.numpy as jnp
 
 import jax
 
-from jaxrl2.networks.mlp import MLP
-from jaxrl2.networks.mlp import MLPActionSep
-from jaxrl2.networks.constants import default_init
+from src.rl.networks.mlp import MLP, MLPActionSep
+from src.rl.networks.constants import default_init
 
 from typing import (Any, Callable, Iterable, List, Optional, Sequence, Tuple,
                     Union)
@@ -19,26 +18,30 @@ Array = Any
 PrecisionLike = Union[None, str, jax.lax.Precision, Tuple[str, str],
                       Tuple[jax.lax.Precision, jax.lax.Precision]]
 
-default_kernel_init = nn.initializers.lecun_normal()
 
 class StateActionValue(nn.Module):
-    hidden_dims: Sequence[int]
-    activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
-    use_action_sep: bool = False
+    def __init__(self, hidden_dims: Sequence[int],
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 use_action_sep: bool = False,
+                 *, rngs: nn.Rngs):
+        self.use_action_sep = use_action_sep
 
-    @nn.compact
+        if use_action_sep:
+            self.critic = MLPActionSep(
+                (*hidden_dims, 1),
+                activations=activations,
+                use_layer_norm=True,
+                rngs=rngs)
+        else:
+            self.critic = MLP((*hidden_dims, 1),
+                        activations=activations,
+                        use_layer_norm=True,
+                        rngs=rngs)
+
     def __call__(self,
                  observations: jnp.ndarray,
                  actions: jnp.ndarray,
                  training: bool = False):
         inputs = {'states': observations, 'actions': actions}
-        if self.use_action_sep:
-            critic = MLPActionSep(
-                (*self.hidden_dims, 1),
-                activations=self.activations,
-                use_layer_norm=True)(inputs, training=training)
-        else:
-            critic = MLP((*self.hidden_dims, 1),
-                        activations=self.activations,
-                        use_layer_norm=True)(inputs, training=training)
+        critic = self.critic(inputs, training=training)
         return jnp.squeeze(critic, -1)
