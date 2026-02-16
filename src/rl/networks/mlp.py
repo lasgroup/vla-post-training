@@ -62,17 +62,22 @@ class MLP(nn.Module):
         self.use_layer_norm = use_layer_norm
 
         self.layers = []
-        for i, size in enumerate(hidden_dims):
-            self.layers.append(nn.Linear(size, kernel_init=default_init(init_scale), rngs=rngs))
-            if i + 1 < len(hidden_dims) or activate_final:
-                if dropout_rate is not None:
-                    self.layers.append(nn.Dropout(rate=dropout_rate, rngs=rngs))
-                if use_layer_norm:
-                    self.layers.append(nn.LayerNorm(size, rngs=rngs))
+        self.rngs = rngs
 
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         x = _flatten_dict(x)
         # print('mlp post flatten', x.shape)
+        
+        if not self.layers:
+            input_dim = x.shape[-1]
+            for i, size in enumerate(self.hidden_dims):
+                self.layers.append(nn.Linear(input_dim, size, kernel_init=default_init(self.init_scale), rngs=self.rngs))
+                input_dim = size
+                if i + 1 < len(self.hidden_dims) or self.activate_final:
+                    if self.dropout_rate is not None:
+                        self.layers.append(nn.Dropout(rate=self.dropout_rate, rngs=self.rngs))
+                    if self.use_layer_norm:
+                        self.layers.append(nn.LayerNorm(size, rngs=self.rngs))
 
         layer_idx = 0
         for i, size in enumerate(self.hidden_dims):
@@ -105,18 +110,23 @@ class MLPActionSep(nn.Module):
         self.use_layer_norm = use_layer_norm
 
         self.layers = []
-        for i, size in enumerate(hidden_dims):
-            self.layers.append(nn.Linear(size, kernel_init=default_init(), rngs=rngs))
-            if i + 1 < len(hidden_dims) or activate_final:
-                if dropout_rate is not None:
-                    self.layers.append(nn.Dropout(rate=dropout_rate, rngs=rngs))
-                if use_layer_norm:
-                    self.layers.append(nn.LayerNorm(size, rngs=rngs))
+        self.rngs = rngs
 
     def __call__(self, x: jnp.ndarray, training: bool = False):
         x, action = _flatten_dict_special(x)
         print ('mlp action sep state post flatten', x.shape)
         print ('mlp action sep action post flatten', action.shape)
+        
+        if not self.layers:
+            input_dim = x.shape[-1] + action.shape[-1]
+            for i, size in enumerate(self.hidden_dims):
+                self.layers.append(nn.Linear(input_dim, size, kernel_init=default_init(), rngs=self.rngs))
+                input_dim = size
+                if i + 1 < len(self.hidden_dims) or self.activate_final:
+                    if self.dropout_rate is not None:
+                        self.layers.append(nn.Dropout(rate=self.dropout_rate, rngs=self.rngs))
+                    if self.use_layer_norm:
+                        self.layers.append(nn.LayerNorm(size, rngs=self.rngs))
         
         layer_idx = 0
         for i, size in enumerate(self.hidden_dims):

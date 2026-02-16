@@ -151,7 +151,7 @@ class CrossNorm(nn.Module):
     alpha: interpolation factor for CrossNorm statistics.
   """
   def __init__(self,
-               x_example: Array,
+               x_example: Union[Array, int],
                use_running_average: Optional[bool] = None,
                axis: int = -1,
                momentum: float = 0.99,
@@ -178,8 +178,11 @@ class CrossNorm(nn.Module):
     self.axis_index_groups = axis_index_groups
     self.alpha = alpha
 
-    feature_axes = _canonicalize_axes(x_example.ndim, self.axis)
-    feature_shape = [x_example.shape[ax] for ax in feature_axes]
+    if isinstance(x_example, int):
+        feature_shape = [x_example]
+    else:
+        feature_axes = _canonicalize_axes(x_example.ndim, self.axis)
+        feature_shape = [x_example.shape[ax] for ax in feature_axes]
     
     self.mean = nn.BatchStat(jnp.zeros(feature_shape, jnp.float32))
     self.var = nn.BatchStat(jnp.ones(feature_shape, jnp.float32))

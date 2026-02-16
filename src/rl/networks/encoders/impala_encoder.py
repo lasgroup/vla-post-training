@@ -3,6 +3,20 @@ import jax.numpy as jnp
 from src.rl.networks.constants import xavier_init
 
 
+class ResnetBlock(nn.Module):
+    def __init__(self, num_ch, *, rngs: nn.Rngs):
+        self.conv1 = nn.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
+        self.conv2 = nn.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
+
+    def __call__(self, x):
+        inputs = x
+        x = nn.relu(x)
+        x = self.conv1(x)
+        x = nn.relu(x)
+        x = self.conv2(x)
+        return x + inputs
+
+
 class ResnetStack(nn.Module):
     def __init__(self, in_ch: int, num_ch: int, num_blocks: int, use_max_pooling: bool = True, *, rngs: nn.Rngs):
         self.in_ch = in_ch
@@ -20,6 +34,19 @@ class ResnetStack(nn.Module):
             padding='SAME',
             rngs=rngs,
         )
+
+        self.blocks = []
+        for _ in range(num_blocks):
+            self.blocks.append(ResnetBlock(num_ch, rngs=rngs))
+
+    def __call__(self, x):
+        x = self.conv_in(x)
+        if self.use_max_pooling:
+            x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding='SAME')
+            
+        for block in self.blocks:
+            x = block(x)
+        return x
 
 
 class ImpalaEncoder(nn.Module):
@@ -86,5 +113,3 @@ class SmallerImpalaEncoder(nn.Module):
 
         conv_out = nn.relu(conv_out)
         return conv_out.reshape((*x.shape[:-3], -1))
-
-

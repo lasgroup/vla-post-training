@@ -26,17 +26,22 @@ class Encoder(nn.Module):
         assert len(features) == len(strides)
         
         self.layers = []
-        for features, stride in zip(self.features, self.strides):
-            self.layers.append(nn.Conv(features,
-                        kernel_size=(3, 3),
-                        strides=(stride, stride),
-                        kernel_init=default_init(),
-                        padding=self.padding,
-                        rngs=rngs))
+        self.rngs = rngs
 
     def __call__(self, observations: jnp.ndarray, training=False) -> jnp.ndarray:
         x = observations.astype(jnp.float32) / 255.0
         x = jnp.reshape(x, (*x.shape[:-2], -1))
+
+        if not self.layers:
+            in_ch = x.shape[-1]
+            for features, stride in zip(self.features, self.strides):
+                self.layers.append(nn.Conv(in_ch, features,
+                            kernel_size=(3, 3),
+                            strides=(stride, stride),
+                            kernel_init=default_init(),
+                            padding=self.padding,
+                            rngs=self.rngs))
+                in_ch = features
 
         for layer in self.layers:
             x = layer(x)
@@ -57,9 +62,10 @@ class PixelMultiplexer(nn.Module):
         self.latent_dim = latent_dim
         self.use_bottleneck = use_bottleneck
         
-        if self.use_bottleneck:
-            self.bottleneck_dense = nn.Linear(latent_dim, kernel_init=xavier_init(), rngs=rngs)
-            self.bottleneck_norm = nn.LayerNorm(latent_dim, rngs=rngs)
+        self.rngs = rngs
+        
+        self.bottleneck_dense = None
+        self.bottleneck_norm = None
 
     def __call__(self,
                  observations: Union[FrozenDict, Dict],
@@ -69,6 +75,10 @@ class PixelMultiplexer(nn.Module):
 
         x = self.encoder(observations['pixels'], training=training)
         if self.use_bottleneck:
+            if self.bottleneck_dense is None:
+                self.bottleneck_dense = nn.Linear(x.shape[-1], self.latent_dim, kernel_init=xavier_init(), rngs=self.rngs)
+                self.bottleneck_norm = nn.LayerNorm(self.latent_dim, rngs=self.rngs)
+                
             x = self.bottleneck_dense(x)
             x = self.bottleneck_norm(x)
             x = nn.tanh(x)

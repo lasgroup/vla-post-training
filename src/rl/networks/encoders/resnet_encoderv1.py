@@ -11,7 +11,7 @@ ModuleDef = Any
 
 
 class MyGroupNorm(nn.Module):
-    def __init__(self, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
+    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
         self.gn = nn.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
 
     def __call__(self, x, use_running_average: bool = False):
@@ -30,13 +30,13 @@ class ResNetBlock(nn.Module):
         self.strides = strides
         
         self.conv1 = conv(in_filters, filters, (3, 3), strides, rngs=rngs)
-        self.norm1 = norm(rngs=rngs)
+        self.norm1 = norm(filters, rngs=rngs)
         self.conv2 = conv(filters, filters, (3, 3), rngs=rngs)
-        self.norm2 = norm(rngs=rngs)
+        self.norm2 = norm(filters, rngs=rngs)
 
         if strides != (1, 1) or in_filters != filters:
              self.proj_conv = conv(in_filters, filters, (1, 1), strides, rngs=rngs)
-             self.proj_norm = norm(rngs=rngs)
+             self.proj_norm = norm(filters, rngs=rngs)
         else:
              self.proj_conv = None
              self.proj_norm = None
@@ -64,15 +64,15 @@ class BottleneckResNetBlock(nn.Module):
         self.strides = strides
         
         self.conv1 = conv(in_filters, filters, (1, 1), rngs=rngs)
-        self.norm1 = norm(rngs=rngs)
+        self.norm1 = norm(filters, rngs=rngs)
         self.conv2 = conv(filters, filters, (3, 3), strides, rngs=rngs)
-        self.norm2 = norm(rngs=rngs)
+        self.norm2 = norm(filters, rngs=rngs)
         self.conv3 = conv(filters, filters * 4, (1, 1), rngs=rngs)
-        self.norm3 = norm(scale_init=nn.initializers.zeros, rngs=rngs)
+        self.norm3 = norm(filters * 4, scale_init=nn.initializers.zeros, rngs=rngs)
 
         if strides != (1, 1) or in_filters != filters * 4:
              self.proj_conv = conv(in_filters, filters * 4, (1, 1), strides, rngs=rngs)
-             self.proj_norm = norm(rngs=rngs)
+             self.proj_norm = norm(filters * 4, rngs=rngs)
         else:
              self.proj_conv = None
              self.proj_norm = None
@@ -124,29 +124,30 @@ class ResNetEncoder(nn.Module):
              return self.conv(*args, **kwargs)
 
         if self.norm == 'batch':
-            def norm_factory(*args, **kwargs):
+            def norm_factory(num_features, *args, **kwargs):
                  kwargs.setdefault('epsilon', 1e-5)
                  kwargs.setdefault('dtype', self.dtype)
                  kwargs.setdefault('momentum', 0.9)
-                 return nn.BatchNorm(*args, **kwargs)
+                 return nn.BatchNorm(num_features, *args, **kwargs)
         elif self.norm == 'group':
-            def norm_factory(*args, **kwargs):
-                 return MyGroupNorm(num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
+            def norm_factory(num_features, *args, **kwargs):
+                 # num_features is ignored by MyGroupNorm (or rather, handled by signature update)
+                 return MyGroupNorm(num_features, num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
         elif self.norm == 'cross':
-              def norm_factory(*args, **kwargs):
-                   return CrossNorm(*args, **kwargs)
+              def norm_factory(num_features, *args, **kwargs):
+                   return CrossNorm(num_features, *args, **kwargs)
         elif self.norm == 'layer':
-             def norm_factory(*args, **kwargs):
+             def norm_factory(num_features, *args, **kwargs):
                   kwargs.setdefault('epsilon', 1e-5)
                   kwargs.setdefault('dtype', self.dtype)
-                  return nn.LayerNorm(*args, **kwargs)
+                  return nn.LayerNorm(num_features, *args, **kwargs)
         else:
             raise ValueError('norm not found')
             
         
         self.conv_item = None
         self.rngs = rngs
-        self.norm_item = norm_factory(rngs=rngs)
+        self.norm_item = norm_factory(self.num_filters, rngs=rngs)
         
         self.blocks = []
         strides = (2, 2, 2, 1, 1)
