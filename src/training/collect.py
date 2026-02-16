@@ -205,7 +205,7 @@ def collect_data_with_agent(agent, config, step: int):
                     task_description=task_description,
                     batch_actions=True,
                 )
-                next_obs, _, terminate, truncate, _ = env.step(action_chunk)
+                next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 
                 if config.collect.add_per_step_data:
                     aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
@@ -214,6 +214,8 @@ def collect_data_with_agent(agent, config, step: int):
 
                 step_data = {
                     "observation": aligned_obs,
+                    "next_observation": next_obs,
+                    "reward": reward,
                     "terminate": terminate,
                     "truncate": truncate,
                 }

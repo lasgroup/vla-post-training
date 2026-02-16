@@ -1,25 +1,17 @@
-from src.rl.agent import Agent
-from src.rl.legacy_filtered_sft_agent.update import train_step
-from src.rl.replay_buffer import ShardedReplayBuffer
-from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig
-from src.training.data_loader import create_data_loader
-from typing import Dict
+import functools
 import gc
-import numpy as np
+import logging
 import os
 import weakref
+from typing import Any, Dict
 
-import functools
-import logging
-
-import jax
 import etils.epath as epath
 import flax.nnx as nnx
 import flax.traverse_util as traverse_util
+import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.experimental import mesh_utils
-from typing import Any
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -32,9 +24,16 @@ import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
+from src.rl.agent import Agent
+from src.rl.legacy_filtered_sft_agent.update import train_step
+from src.rl.replay_buffer import ShardedReplayBuffer
+from src.rl.types import StepData
+from src.training.config import OnlineTrainConfig
+from src.training.data_loader import create_data_loader
 
 
 def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
+    """Pad or truncate actions to match the policy action horizon."""
     actions = np.asarray(actions)
     if actions.ndim == 2:
         actions = actions[None, ...]
@@ -144,7 +143,7 @@ class LegacyFilteredSFTLearner(Agent):
             "jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser())
         )
         self._rng = jax.random.key(self._config.seed)
-        train_rng, init_rng, self._rng = jax.random.split(self._rng, 3)
+        _, init_rng, self._rng = jax.random.split(self._rng, 3)
 
         # set up sharding
         self._mesh = sharding.make_mesh(self._config.fsdp_devices)
@@ -164,7 +163,7 @@ class LegacyFilteredSFTLearner(Agent):
             ),
         )
 
-        # initialize checkopointing, wandb
+        # Initialize checkpoint manager.
         self._checkpoint_manager, self._resuming = (
             _checkpoints.initialize_checkpoint_dir(
                 self._config.checkpoint_dir,
@@ -185,7 +184,7 @@ class LegacyFilteredSFTLearner(Agent):
         # logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
         # log_images(batch)
 
-        # initialize training_state
+        # Initialize train state.
         self._train_state, self._train_state_sharding = init_train_state(
             self._config, init_rng, self._mesh, resume=self._resuming
         )
@@ -275,7 +274,9 @@ class LegacyFilteredSFTLearner(Agent):
         train_config = self._config
         data_config = self._data_loader.data_config()
 
-        token_transform = None
+        token_transform: (
+            _transforms.TokenizePrompt | _transforms.TokenizeFASTInputs | None
+        ) = None
         non_token_model_transforms = []
         for t in data_config.model_transforms.inputs:
             if isinstance(
@@ -284,6 +285,10 @@ class LegacyFilteredSFTLearner(Agent):
                 token_transform = t
             else:
                 non_token_model_transforms.append(t)
+        if token_transform is None:
+            raise ValueError(
+                "Model transforms must include a prompt tokenization transform."
+            )
 
         pre_token_transform = _transforms.compose(
             [
@@ -323,21 +328,94 @@ class LegacyFilteredSFTLearner(Agent):
                 dummy_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
 
         dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
+        transition_state_dim = int(obs_spec_dict["state"].shape[-1])
+        dummy_next_obs_dict = {
+            "state": np.zeros((1, transition_state_dim), dtype=np.float32)
+        }
+        dummy_rewards = np.zeros((1,), dtype=np.float32)
+        dummy_discounts = np.zeros((1,), dtype=np.float32)
         batch_size = int(train_config.batch_size)
-        print(f"########## Batch size is {batch_size} ##########")
+        # Keep enough online data for stable sampling when mixing with offline batches.
         max_capacity = max(batch_size, 256, batch_size * 8)
-        token_cache = {}
+        logging.info(
+            "Initializing online replay buffer (batch_size=%d, capacity=%d)",
+            batch_size,
+            max_capacity,
+        )
+        token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         action_horizon = int(train_config.model.action_horizon)
         default_prompt = getattr(train_config, "default_prompt", None)
+        transition_gamma = float(getattr(train_config, "discount", 1.0))
+
+        def _pad_feature_dim(values: Any, target_dim: int, *, name: str) -> np.ndarray:
+            arr = np.asarray(values, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            if arr.ndim < 2:
+                raise ValueError(
+                    f"{name} must be at least 2-D with shape [batch, features], got {arr.shape}."
+                )
+            feature_dim = int(arr.shape[-1])
+            if feature_dim < target_dim:
+                pad_shape = [(0, 0)] * arr.ndim
+                pad_shape[-1] = (0, target_dim - feature_dim)
+                arr = np.pad(arr, pad_shape, mode="constant", constant_values=0.0)
+            elif feature_dim > target_dim:
+                arr = arr[..., :target_dim]
+            return arr
+
+        def _ensure_batch_scalar(
+            values: Any | None, *, batch_size: int, default: float
+        ) -> np.ndarray:
+            if values is None:
+                return np.full((batch_size,), default, dtype=np.float32)
+
+            arr = np.asarray(values, dtype=np.float32)
+            if arr.ndim == 0:
+                return np.full((batch_size,), float(arr), dtype=np.float32)
+            if arr.shape[0] != batch_size:
+                raise ValueError(
+                    f"Scalar batch has mismatched size: expected {batch_size}, got {arr.shape[0]}."
+                )
+            if arr.ndim > 1:
+                arr = arr.reshape(batch_size, -1)[:, 0]
+            return arr.astype(np.float32, copy=False)
+
+        def _normalize_observation_layout(raw_episode: Dict[str, Any]) -> Dict[str, Any]:
+            """Normalize accepted observation layouts into a single structure."""
+            raw = dict(raw_episode)
+            aliases = (
+                ("observation.image", "image"),
+                ("observation.wrist_image", "wrist_image"),
+                ("observation.state", "state"),
+                ("observation/image", "image"),
+                ("observation/wrist_image", "wrist_image"),
+                ("observation/state", "state"),
+            )
+            for source, target in aliases:
+                if target not in raw and source in raw:
+                    raw[target] = raw[source]
+
+            obs = raw.get("observation")
+            if not isinstance(obs, dict):
+                obs = {}
+
+            for key in ("image", "wrist_image", "state"):
+                if key not in raw and key in obs:
+                    raw[key] = obs[key]
+                if key in raw:
+                    obs[key] = raw[key]
+
+            if obs:
+                raw["observation"] = obs
+            return raw
 
         def _preprocess_insert(episode_data: Dict[str, Any]):
-            raw = dict(episode_data)
+            raw = _normalize_observation_layout(episode_data)
             if "actions" not in raw and "action" in raw:
                 raw["actions"] = raw.pop("action")
 
-            prompt = raw.get("prompt", None)
-            if prompt is None:
-                prompt = default_prompt
+            prompt = raw.get("prompt", default_prompt)
             if prompt is None:
                 raise ValueError(
                     "Prompt is required for online insertion. Provide task_description during "
@@ -349,60 +427,26 @@ class LegacyFilteredSFTLearner(Agent):
             prompt = str(prompt)
             raw["prompt"] = prompt
 
-            # Normalize observation keys so both layouts are accepted:
-            # - top-level keys: image, wrist_image, state
-            # - nested/flattened keys: observation.image / observation/image
-            if "observation.image" in raw and "image" not in raw:
-                raw["image"] = raw["observation.image"]
-            if "observation.wrist_image" in raw and "wrist_image" not in raw:
-                raw["wrist_image"] = raw["observation.wrist_image"]
-            if "observation.state" in raw and "state" not in raw:
-                raw["state"] = raw["observation.state"]
-            if "observation/image" in raw and "image" not in raw:
-                raw["image"] = raw["observation/image"]
-            if "observation/wrist_image" in raw and "wrist_image" not in raw:
-                raw["wrist_image"] = raw["observation/wrist_image"]
-            if "observation/state" in raw and "state" not in raw:
-                raw["state"] = raw["observation/state"]
-
-            obs = raw.get("observation")
-            if isinstance(obs, dict):
-                if "image" not in raw and "image" in obs:
-                    raw["image"] = obs["image"]
-                if "wrist_image" not in raw and "wrist_image" in obs:
-                    raw["wrist_image"] = obs["wrist_image"]
-                if "state" not in raw and "state" in obs:
-                    raw["state"] = obs["state"]
-            else:
-                obs = {}
-
-            if "image" in raw:
-                obs["image"] = raw["image"]
-            if "wrist_image" in raw:
-                obs["wrist_image"] = raw["wrist_image"]
-            if "state" in raw:
-                obs["state"] = raw["state"]
-            if obs:
-                raw["observation"] = obs
-
             raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+            transition_state = _pad_feature_dim(
+                raw.get("state"), transition_state_dim, name="state"
+            )
+            next_observation = raw.get("next_observation")
+            next_state_source = raw.get("next_state", raw.get("state"))
+            if isinstance(next_observation, dict):
+                next_state_source = next_observation.get("state", next_state_source)
+            transition_next_state = _pad_feature_dim(
+                next_state_source,
+                transition_state_dim,
+                name="next_state",
+            )
 
             data = pre_token_transform(raw)
 
             if "actions" in data:
-                # logging.info(
-                #     "##### Data actions info before padding fn (step=%d):\n%s #####",
-                #     self.training_steps,
-                #     training_utils.array_tree_to_info(data["actions"]),
-                # )
                 data["actions"] = _pad_actions_to_horizon(
                     data["actions"], action_horizon
                 )
-                # logging.info(
-                #     "##### Data actions info after padding fn (step=%d):\n%s #####",
-                #     self.training_steps,
-                #     training_utils.array_tree_to_info(data["actions"]),
-                # )
 
             # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
@@ -413,11 +457,6 @@ class LegacyFilteredSFTLearner(Agent):
                         data["image_mask"][k] = np.full(
                             batch_shape, bool(v), dtype=np.bool_
                         )
-
-            if token_transform is None:
-                raise ValueError(
-                    "Model transforms must include a prompt tokenization transform."
-                )
 
             if isinstance(token_transform, _transforms.TokenizePrompt):
                 cached = token_cache.get(prompt)
@@ -436,9 +475,10 @@ class LegacyFilteredSFTLearner(Agent):
             elif isinstance(token_transform, _transforms.TokenizeFASTInputs):
                 data.pop("prompt", None)
                 state = np.asarray(data["state"])
-                actions = np.asarray(data.get("actions"))
+                actions = data.get("actions")
                 if actions is None:
                     raise ValueError("FAST tokenization requires actions.")
+                actions = np.asarray(actions)
                 t = int(state.shape[0])
                 toks, masks, ar_masks, loss_masks = [], [], [], []
                 for i in range(t):
@@ -458,20 +498,49 @@ class LegacyFilteredSFTLearner(Agent):
 
             actions = np.asarray(data.pop("actions"), dtype=np.float32)
             data["state"] = np.asarray(data["state"], dtype=np.float32)
-            return data, actions
+            insert_batch_size = int(actions.shape[0])
+            if transition_state.shape[0] != insert_batch_size:
+                raise ValueError(
+                    f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
+                )
+            if transition_next_state.shape[0] != insert_batch_size:
+                raise ValueError(
+                    "Transition next_state batch mismatch: "
+                    f"{transition_next_state.shape[0]} vs {insert_batch_size}."
+                )
+            transition_reward = _ensure_batch_scalar(
+                raw.get("reward"), batch_size=insert_batch_size, default=0.0
+            )
+            transition_discount = _ensure_batch_scalar(
+                raw.get("discount"),
+                batch_size=insert_batch_size,
+                default=transition_gamma,
+            )
 
-        def _postprocess_sample(batch):
-            obs_dict, actions = batch
-            return _model.Observation.from_dict(obs_dict), actions
+            return {
+                "observation": data,
+                "actions": actions,
+                "next_observation": {
+                    "state": transition_next_state.astype(np.float32, copy=False)
+                },
+                "reward": transition_reward,
+                "discount": transition_discount,
+            }
 
         return ShardedReplayBuffer(
-            dummy_data=(dummy_obs_dict, dummy_actions),
+            dummy_data={
+                "observation": dummy_obs_dict,
+                "actions": dummy_actions,
+                "next_observation": dummy_next_obs_dict,
+                "reward": dummy_rewards,
+                "discount": dummy_discounts,
+            },
             max_capacity=max_capacity,
             batch_size=batch_size,
             data_sharding=data_sharding,
             seed=train_config.seed,
             preprocess_fn=_preprocess_insert,
-            postprocess_fn=_postprocess_sample,
+            postprocess_fn=None,
             freeze_dict=False,
         )
 
@@ -479,40 +548,65 @@ class LegacyFilteredSFTLearner(Agent):
         self,
         observations: Dict,
         task_description: str | None = None,
-    ):
-        # If we are stacking all the observations in the
+    ) -> Dict[str, Any]:
+        # With per-step collection enabled, each env step contains a short chunk of
+        # observations. Use the most recent one for policy inference.
         if self._config.collect.add_per_step_data:
             current_obs = jax.tree_util.tree_map(
                 lambda x: x[:, -1], observations["observation"]
             )
         else:
             current_obs = observations["observation"]
-        processed_obs = {}
+
+        processed_obs: Dict[str, Any] = {}
         prompt_in_obs = False
+        prefix = self._config.collect.obs_prefix_key
         for key, val in current_obs.items():
-            # Extract all observations relevant for the policy
-            if self._config.collect.obs_prefix_key in key:
-                obs_key = key.split(self._config.collect.obs_prefix_key)[-1]
-                if obs_key == "prompt":
-                    prompt_in_obs = True
-                    processed_obs[obs_key] = val
-                else:
-                    if "image" in obs_key and self._config.collect.resize_image > 0:
-                        # Rescale images
-                        val = image_tools.convert_to_uint8(
-                            image_tools.resize_with_pad(
-                                val,
-                                self._config.collect.resize_image,
-                                self._config.collect.resize_image,
-                            )
-                        )
-                    obs_key = f"observation/{obs_key}"
-                    processed_obs[obs_key] = val
+            if prefix not in key:
+                continue
+
+            # Extract all observations relevant for the policy.
+            obs_key = key.split(prefix)[-1]
+            if obs_key == "prompt":
+                prompt_in_obs = True
+                processed_obs[obs_key] = val
+                continue
+
+            if "image" in obs_key and self._config.collect.resize_image > 0:
+                val = image_tools.convert_to_uint8(
+                    image_tools.resize_with_pad(
+                        val,
+                        self._config.collect.resize_image,
+                        self._config.collect.resize_image,
+                    )
+                )
+            processed_obs[f"observation/{obs_key}"] = val
+
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
             assert task_description is not None, "No task description is provided"
             processed_obs["prompt"] = task_description
         return processed_obs
+
+    def _infer_policy_batch_size(self, observations: Dict[str, Any]) -> int:
+        """Infer policy batch size from processed observation tensors."""
+        state = observations.get("observation/state")
+        if state is not None:
+            state_arr = np.asarray(state)
+            return int(state_arr.shape[0]) if state_arr.ndim > 1 else 1
+
+        for image_key in ("observation/image", "observation/wrist_image"):
+            image = observations.get(image_key)
+            if image is None:
+                continue
+            image_arr = np.asarray(image)
+            return int(image_arr.shape[0]) if image_arr.ndim >= 4 else 1
+
+        obs_leaves = jax.tree_util.tree_leaves(observations)
+        if not obs_leaves:
+            raise ValueError("No observation leaves found for policy inference.")
+        first_leaf = np.asarray(obs_leaves[0])
+        return int(first_leaf.shape[0]) if first_leaf.ndim > 1 else 1
 
     def _sample_action(
         self,
@@ -520,23 +614,19 @@ class LegacyFilteredSFTLearner(Agent):
         rng: jax.random.PRNGKey,
         train_state: training_utils.TrainState,
         batch_actions: bool = True,
-    ):
-        # Define model
-        _params = train_state.params
-        if train_state.ema_params is not None:
-            _params = train_state.ema_params
-        model = nnx.merge(train_state.model_def, _params)
-        # Convert observation for the policy
-        obs_leaves = jax.tree_util.tree_leaves(observations)
-        if not obs_leaves:
-            raise ValueError("No observation leaves found for policy inference.")
-        first_leaf = np.asarray(obs_leaves[0])
-        batch_size = int(first_leaf.shape[0]) if first_leaf.ndim > 1 else 1
+    ) -> np.ndarray:
+        params = (
+            train_state.ema_params
+            if train_state.ema_params is not None
+            else train_state.params
+        )
+        model = nnx.merge(train_state.model_def, params)
+        batch_size = self._infer_policy_batch_size(observations)
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
         # Vector envs expect a batch dimension for actions. Policy inference
-        # un batches when batch_size == 1, so add it back for single-env runs.
+        # unbatches when batch_size == 1, so add it back for single-env runs.
         actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
@@ -547,7 +637,7 @@ class LegacyFilteredSFTLearner(Agent):
             actions = actions[np.newaxis, ...]
         return actions
 
-    def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
+    def _generate_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         task_description = kwargs.get("task_description")
         batch_actions = kwargs.get("batch_actions")
         if batch_actions is None:
@@ -564,22 +654,31 @@ class LegacyFilteredSFTLearner(Agent):
         )
         return np.asarray(actions, dtype=np.float32)
 
+    def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
+        return self._generate_actions(observations, **kwargs)
+
     def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        task_description = kwargs.get("task_description")
-        batch_actions = kwargs.get("batch_actions")
-        if batch_actions is None:
-            batch_actions = False
-        rng, self._rng = jax.random.split(self._rng)
-        processed_obs = self._process_obs_for_pi0(
-            observations, task_description=task_description
-        )
-        actions = self._sample_action(
-            observations=processed_obs,
-            rng=rng,
-            train_state=self._train_state,
-            batch_actions=batch_actions,
-        )
-        return np.asarray(actions, dtype=np.float32)
+        return self._generate_actions(observations, **kwargs)
+
+    def _online_batch_to_sft_batch(
+        self, online_batch: Dict[str, Any]
+    ) -> tuple[_model.Observation, _model.Actions]:
+        return _model.Observation.from_dict(online_batch["observation"]), online_batch[
+            "actions"
+        ]
+
+    def sample_online_transitions(self) -> Dict[str, Any]:
+        """Sample transitions stored in the online replay buffer."""
+        if self._online_data_buffer.size == 0:
+            raise ValueError("Cannot sample transitions from an empty online replay buffer.")
+        batch = self._online_data_buffer.sample()
+        return {
+            "observation": batch["observation"],
+            "actions": batch["actions"],
+            "next_observation": batch["next_observation"],
+            "reward": batch["reward"],
+            "discount": batch["discount"],
+        }
 
     def save_checkpoint(self, step: int | None = None):
         if step is None:
@@ -597,57 +696,116 @@ class LegacyFilteredSFTLearner(Agent):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
+        if env_index < 0 or env_index >= len(self._episode_storage):
+            raise IndexError(
+                f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
+            )
+
         # Extract episode data from storage
         episode_data = self._episode_storage[env_index]
         # Empty the storage now for the next episode
         self._episode_storage[env_index] = []
         if not is_success:
-            # We are running filtered SFT to so we only add successful episode.
+            # Filtered SFT keeps only successful episodes.
             return
         task_description = kwargs.get("task_description")
+        obs_prefix = self._config.collect.obs_prefix_key
+        discount_gamma = float(self._config.discount)
 
-        def process_frame(ob):
-            frame = {}
-            # Extract actions and observations from total_obs
-            obs, action = ob["observation"], ob["action"]
+        def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
+            extracted = {}
             for key, val in obs.items():
-                if self._config.collect.obs_prefix_key in key:
-                    obs_key = key.split(self._config.collect.obs_prefix_key)[-1]
-                    if obs_key == "prompt":
-                        continue
-                    frame[obs_key] = val
-            frame["actions"] = action
+                if obs_prefix not in key:
+                    continue
+                obs_key = key.split(obs_prefix)[-1]
+                if obs_key == "prompt":
+                    continue
+                extracted[obs_key] = val
+            return extracted
+
+        def process_frame(
+            ob: Dict[str, Any],
+            *,
+            actions: Any,
+            next_ob: Dict[str, Any] | None,
+            reward: float,
+            done: bool,
+            discount: float,
+        ) -> Dict[str, Any]:
+            # Extract actions and observations from total_obs.
+            obs = ob["observation"]
+            frame = _extract_policy_obs(obs)
+            if "state" not in frame:
+                raise KeyError(
+                    "Cannot construct transitions: current observation is missing state."
+                )
+
+            frame["actions"] = np.asarray(actions, dtype=np.float32)
+            next_state = frame["state"]
+            if next_ob is not None:
+                next_obs = _extract_policy_obs(next_ob["observation"])
+                if "state" in next_obs:
+                    next_state = next_obs["state"]
+            frame["next_observation"] = {"state": next_state}
+            frame["reward"] = np.float32(reward)
+            frame["done"] = np.bool_(done)
+            frame["discount"] = np.float32(discount)
             return frame
+
+        def _stack_transitions(frames):
+            return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *frames)
 
         transitions = []
         if self._config.collect.add_per_step_data:
-            # Add all the per time-step transitions one by one.
-            total_frames = len(episode_data)
-            for n_frame, ep in enumerate(episode_data):
-                ep_obs, terminate, truncate = (
+            # Build one-step transitions first, then convert to H-step sliding windows.
+            for ep in episode_data:
+                ep_obs, ep_next_obs, ep_rewards, terminate, truncate = (
                     ep["observation"],
+                    ep.get("next_observation"),
+                    ep.get("reward"),
                     ep["terminate"],
                     ep["truncate"],
                 )
-                total_chunks = self._config.collect.replan_steps
-                # For the last frame where termination occurred check at which step this was observed.
-                if n_frame == total_frames - 1:
-                    done = np.logical_or(terminate, truncate)
-                    done_indices = np.where(done)[0]
-                    if len(done_indices) > 0:
-                        total_chunks = done_indices[0]
-                for step in range(total_chunks):
-                    obs = jax.tree.map(lambda x: x[step], ep_obs)
-                    transitions.append(process_frame(obs))
+                done_mask = np.asarray(np.logical_or(terminate, truncate), dtype=np.bool_)
+                valid_steps = int(done_mask.shape[0])
+                done_indices = np.where(done_mask)[0]
+                if done_indices.size > 0:
+                    # Keep the terminal step, drop only wrapper-introduced padding after termination.
+                    valid_steps = int(done_indices[0]) + 1
+
+                for step in range(valid_steps):
+                    step_obs = jax.tree.map(lambda x: x[step], ep_obs)
+                    step_next_obs = (
+                        jax.tree.map(lambda x: x[step], ep_next_obs)
+                        if ep_next_obs is not None
+                        else None
+                    )
+                    step_reward = (
+                        float(np.asarray(ep_rewards, dtype=np.float32)[step])
+                        if ep_rewards is not None
+                        else 0.0
+                    )
+                    step_done = bool(done_mask[step])
+                    transitions.append(
+                        process_frame(
+                            step_obs,
+                            actions=np.asarray(ep_obs["action"][step], dtype=np.float32),
+                            next_ob=step_next_obs,
+                            reward=step_reward,
+                            done=step_done,
+                            discount=0.0 if step_done else discount_gamma,
+                        )
+                    )
             if not transitions:
                 return
-            episode_batch = jax.tree_util.tree_map(
-                lambda *xs: np.stack(xs, axis=0), *transitions
-            )
-            # # Convert per-step actions into sliding horizon windows:
-            # # sample i -> (observation at i, actions[i : i + horizon]).
+            episode_batch = _stack_transitions(transitions)
             action_horizon = int(self._config.model.action_horizon)
-            actions = np.asarray(episode_batch["actions"])
+            actions = np.asarray(episode_batch["actions"], dtype=np.float32)
+            rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
+            dones = np.asarray(episode_batch["done"], dtype=np.bool_)
+            next_states = np.asarray(
+                episode_batch["next_observation"]["state"], dtype=np.float32
+            )
             num_steps = int(actions.shape[0])
             num_windows = num_steps - action_horizon + 1
             if num_windows <= 0:
@@ -656,7 +814,14 @@ class LegacyFilteredSFTLearner(Agent):
             windowed_batch = {
                 key: np.asarray(value)[:num_windows]
                 for key, value in episode_batch.items()
-                if key != "actions"
+                if key
+                not in {
+                    "actions",
+                    "next_observation",
+                    "reward",
+                    "done",
+                    "discount",
+                }
             }
             windowed_batch["actions"] = np.stack(
                 [
@@ -665,15 +830,56 @@ class LegacyFilteredSFTLearner(Agent):
                 ],
                 axis=0,
             )
+            windowed_batch["reward"] = np.asarray(
+                [
+                    rewards[start : start + action_horizon].sum()
+                    for start in range(num_windows)
+                ],
+                dtype=np.float32,
+            )
+            windowed_batch["discount"] = np.asarray(
+                [
+                    0.0
+                    if np.any(dones[start : start + action_horizon])
+                    else float(discount_gamma**action_horizon)
+                    for start in range(num_windows)
+                ],
+                dtype=np.float32,
+            )
+            windowed_batch["next_observation"] = {
+                "state": next_states[
+                    action_horizon - 1 : action_horizon - 1 + num_windows
+                ]
+            }
             episode_batch = windowed_batch
         else:
             for ep in episode_data:
-                transitions.append(process_frame(ep["observation"]))
+                reward = ep.get("reward")
+                terminate = ep.get("terminate", False)
+                truncate = ep.get("truncate", False)
+                done = bool(
+                    np.asarray(terminate).reshape(-1)[-1]
+                    or np.asarray(truncate).reshape(-1)[-1]
+                )
+                reward_value = (
+                    float(np.asarray(reward).reshape(-1)[0]) if reward is not None else 0.0
+                )
+                chunk_horizon = int(self._config.collect.replan_steps)
+                discount_value = 0.0 if done else float(discount_gamma**chunk_horizon)
+                transitions.append(
+                    process_frame(
+                        ep["observation"],
+                        actions=np.asarray(ep["observation"]["action"], dtype=np.float32),
+                        next_ob=ep.get("next_observation"),
+                        reward=reward_value,
+                        done=done,
+                        discount=discount_value,
+                    )
+                )
             if not transitions:
                 return
-            episode_batch = jax.tree_util.tree_map(
-                lambda *xs: np.stack(xs, axis=0), *transitions
-            )
+            episode_batch = _stack_transitions(transitions)
+            episode_batch.pop("done", None)
         if task_description is not None:
             episode_batch["prompt"] = str(task_description)
         self._online_data_buffer.insert(episode_batch)
@@ -697,12 +903,10 @@ class LegacyFilteredSFTLearner(Agent):
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
         if use_online:
-            online_batch = self._online_data_buffer.sample()
-            # logging.info(
-            #     "Sampled online batch shapes (step=%d):\n%s",
-            #     self.training_steps,
-            #     training_utils.array_tree_to_info(online_batch),
-            # )
+            online_batch_raw = self._online_data_buffer.sample()
+            online_batch = self._online_batch_to_sft_batch(online_batch_raw)
+            # online_ratio controls whether we fully switch to online data or mix by
+            # simple concatenation along the batch dimension.
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
