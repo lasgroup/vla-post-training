@@ -390,19 +390,19 @@ class LegacyFilteredSFTLearner(Agent):
             data = pre_token_transform(raw)
 
             if "actions" in data:
-                logging.info(
-                    "##### Data actions info before padding fn (step=%d):\n%s #####",
-                    self.training_steps,
-                    training_utils.array_tree_to_info(data["actions"]),
-                )
+                # logging.info(
+                #     "##### Data actions info before padding fn (step=%d):\n%s #####",
+                #     self.training_steps,
+                #     training_utils.array_tree_to_info(data["actions"]),
+                # )
                 data["actions"] = _pad_actions_to_horizon(
                     data["actions"], action_horizon
                 )
-                logging.info(
-                    "##### Data actions info after padding fn (step=%d):\n%s #####",
-                    self.training_steps,
-                    training_utils.array_tree_to_info(data["actions"]),
-                )
+                # logging.info(
+                #     "##### Data actions info after padding fn (step=%d):\n%s #####",
+                #     self.training_steps,
+                #     training_utils.array_tree_to_info(data["actions"]),
+                # )
 
             # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
@@ -695,11 +695,11 @@ class LegacyFilteredSFTLearner(Agent):
         )
         if use_online:
             online_batch = self._online_data_buffer.sample()
-            logging.info(
-                "Sampled online batch shapes (step=%d):\n%s",
-                self.training_steps,
-                training_utils.array_tree_to_info(online_batch),
-            )
+            # logging.info(
+            #     "Sampled online batch shapes (step=%d):\n%s",
+            #     self.training_steps,
+            #     training_utils.array_tree_to_info(online_batch),
+            # )
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
