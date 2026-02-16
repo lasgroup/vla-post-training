@@ -1,4 +1,5 @@
 from src.training.config import OnlineTrainConfig
+from src.rl.advantage_weighted_regression.update_critic import create_critic
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -11,11 +12,10 @@ import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
 
 
-def create_critic(critic_state: training_utils.TrainState, config: OnlineTrainConfig):
-    critic_params = critic_state.params
-    if critic_state.ema_params is not None and config.rl.use_ema_critic:
-        critic_params = critic_state.ema_params
-    return nnx.merge(critic_state.model_def, critic_params)
+def _awr_beta(config: OnlineTrainConfig) -> float:
+    rl_config = getattr(config, "rl", None)
+    beta = float(getattr(rl_config, "beta", 1.0))
+    return max(beta, 1e-6)
 
 
 @at.typecheck
@@ -46,7 +46,7 @@ def train_step(
         value = value_model(observation)
         q_value = critic_model(observation, actions)
         advantage = q_value - value
-        score = 1 / config.rl.beta * advantage
+        score = advantage / _awr_beta(config)
         # Normalize the weights across the batch axis for training stability and expand dim by one for the chunk loss.
         score = jax.nn.softmax(score, axis=0)[..., jnp.newaxis]
         chunked_loss = model.compute_loss(rng, observation, actions, train=True)
