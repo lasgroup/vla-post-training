@@ -522,7 +522,10 @@ class LegacyFilteredSFTLearner(Agent):
         batch_actions: bool = True,
     ):
         # Define model
-        model = nnx.merge(train_state.model_def, train_state.params)
+        _params = train_state.params
+        if train_state.ema_params is not None:
+            _params = train_state.ema_params
+        model = nnx.merge(train_state.model_def, _params)
         # Convert observation for the policy
         obs_leaves = jax.tree_util.tree_leaves(observations)
         if not obs_leaves:
