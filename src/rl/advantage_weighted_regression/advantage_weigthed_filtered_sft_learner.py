@@ -1,3 +1,4 @@
+# ruff: noqa: F722
 import functools
 from typing import Any
 
@@ -6,6 +7,7 @@ import jax
 import jax.numpy as jnp
 
 import openpi.models.model as _model
+import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 from src.rl.advantage_weighted_regression.update_critic import (
     StateActionValueCritic,
@@ -91,12 +93,13 @@ class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
         updates = int(getattr(rl_config, "critic_updates_per_step", 1))
         return max(1, updates)
 
+    @at.typecheck
     def _online_batch_to_critic_batch(self, online_batch: dict[str, Any]) -> tuple[
         _model.Observation,
         _model.Actions,
-        jax.Array,
-        jax.Array,
-        jax.Array,
+        at.Float[at.Array, "b s"],
+        at.Float[at.Array, " b"],
+        at.Float[at.Array, " b"],
     ]:
         online_observation = online_batch["observation"]
         observation_dict: dict[str, Any] = {
@@ -121,8 +124,9 @@ class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
             online_batch["discount"],
         )
 
-    def _update_critics(self) -> dict[str, jax.Array]:
-        critic_info: dict[str, jax.Array] = {}
+    @at.typecheck
+    def _update_critics(self) -> dict[str, at.Array]:
+        critic_info: dict[str, at.Array] = {}
         for _ in range(self._critic_updates_per_step):
             transition_batch = self.sample_online_transitions()
             critic_batch = self._online_batch_to_critic_batch(transition_batch)
@@ -165,7 +169,8 @@ class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
         )
         return critic_info
 
-    def update(self):
+    @at.typecheck
+    def update(self) -> dict[str, at.Array]:
         info = super().update()
         if self._online_data_buffer.size < self._online_data_buffer.batch_size:
             return info | {

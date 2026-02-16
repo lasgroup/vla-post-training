@@ -1,3 +1,4 @@
+# ruff: noqa: F722
 from src.training.config import OnlineTrainConfig
 from src.rl.advantage_weighted_regression.update_critic import create_critic
 import flax.nnx as nnx
@@ -12,6 +13,7 @@ import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
 
 
+@at.typecheck
 def _awr_beta(config: OnlineTrainConfig) -> float:
     rl_config = getattr(config, "rl", None)
     beta = float(getattr(rl_config, "beta", 1.0))
@@ -41,7 +43,7 @@ def train_step(
         actions: _model.Actions,
         critic_model: nnx.Module,
         value_model: nnx.Module,
-    ):
+    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         value = value_model(observation)
         q_value = critic_model(observation, actions)

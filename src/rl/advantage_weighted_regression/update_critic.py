@@ -1,3 +1,4 @@
+# ruff: noqa: F722
 import dataclasses
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -18,9 +19,9 @@ from src.training.config import OnlineTrainConfig
 CriticBatch = tuple[
     _model.Observation,
     _model.Actions,
-    jax.Array,
-    jax.Array,
-    jax.Array,
+    at.Float[at.Array, "b s"],
+    at.Float[at.Array, " b"],
+    at.Float[at.Array, " b"],
 ]
 
 
@@ -58,7 +59,8 @@ def create_critic(
     return nnx.merge(critic_state.model_def, critic_params)
 
 
-def _as_scalar_batch(values: at.ArrayLike) -> jax.Array:
+@at.typecheck
+def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
     values = jnp.asarray(values, dtype=jnp.float32)
     if values.ndim == 0:
         return values[jnp.newaxis]
@@ -84,9 +86,10 @@ class _MLPRegressor(nnx.Module):
         self.layers = layers
         self.output = nnx.Linear(prev_dim, 1, rngs=rngs)
 
+    @at.typecheck
     def __call__(
-        self, inputs: jax.Array
-    ) -> jax.Array:
+        self, inputs: at.Float[at.ArrayLike, "b d"]
+    ) -> at.Float[at.Array, " b"]:
         x = jnp.asarray(inputs, dtype=jnp.float32)
         for layer in self.layers:
             x = jax.nn.silu(layer(x))
@@ -104,9 +107,10 @@ class StateValueCritic(nnx.Module):
     ):
         self.mlp = _MLPRegressor(state_dim, hidden_dims, rngs=rngs)
 
+    @at.typecheck
     def __call__(
         self, observation: _model.Observation
-    ) -> jax.Array:
+    ) -> at.Float[at.Array, " b"]:
         return self.mlp(jnp.asarray(observation.state, dtype=jnp.float32))
 
 
@@ -126,9 +130,10 @@ class StateActionValueCritic(nnx.Module):
             rngs=rngs,
         )
 
+    @at.typecheck
     def __call__(
         self, observation: _model.Observation, actions: _model.Actions
-    ) -> jax.Array:
+    ) -> at.Float[at.Array, " b"]:
         state = jnp.asarray(observation.state, dtype=jnp.float32)
         actions = jnp.asarray(actions, dtype=jnp.float32)
         flattened_actions = actions.reshape((actions.shape[0], -1))
@@ -203,7 +208,7 @@ def _update_train_state(
     return new_state
 
 
-def _kernel_param_norm(model: nnx.Module) -> jax.Array:
+def _kernel_param_norm(model: nnx.Module) -> at.Float[at.Array, ""]:
     kernel_params = nnx.state(
         model,
         nnx.All(
@@ -219,9 +224,10 @@ def _kernel_param_norm(model: nnx.Module) -> jax.Array:
     return optax.global_norm(kernel_params)
 
 
+@at.typecheck
 def _next_observation(
     observation: _model.Observation,
-    next_state: jax.Array,
+    next_state: at.Float[at.ArrayLike, "b s"],
 ) -> _model.Observation:
     return dataclasses.replace(
         observation,
@@ -252,11 +258,11 @@ def train_q_step(
         critic_model: nnx.Module,
         observation: _model.Observation,
         actions: _model.Actions,
-        next_state: jax.Array,
-        reward: jax.Array,
-        discount: jax.Array,
+        next_state: at.Float[at.ArrayLike, "b s"],
+        reward: at.Float[at.ArrayLike, " b"],
+        discount: at.Float[at.ArrayLike, " b"],
         target_value_model: nnx.Module,
-    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         q_values = _as_scalar_batch(critic_model(observation, actions))
         bootstrapped_values = _as_scalar_batch(
             target_value_model(_next_observation(observation, next_state))
@@ -313,7 +319,7 @@ def train_value_step(
         observation: _model.Observation,
         actions: _model.Actions,
         target_q_model: nnx.Module,
-    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         values = _as_scalar_batch(critic_model(observation))
         q_values = _as_scalar_batch(target_q_model(observation, actions))
         q_targets = jax.lax.stop_gradient(q_values)
