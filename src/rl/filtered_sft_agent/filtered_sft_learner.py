@@ -25,7 +25,7 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.agent import Agent
-from rl.filtered_sft_agent.update import train_step
+from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -853,7 +853,7 @@ class FilteredSFTLearner(Agent):
                         process_frame(
                             step_obs,
                             actions=np.asarray(ep["action"][step], dtype=np.float32),
-                            next_ob=step_next_obs,
+                            next_obs=step_next_obs,
                             reward=step_reward,
                             done=step_done,
                             discount=0.0 if step_done else discount_gamma,
@@ -937,7 +937,7 @@ class FilteredSFTLearner(Agent):
                     process_frame(
                         ep["observation"],
                         actions=np.asarray(ep["action"], dtype=np.float32),
-                        next_ob=ep.get("next_observation"),
+                        next_obs=ep.get("next_observation"),
                         reward=reward_value,
                         done=done,
                         discount=discount_value,
