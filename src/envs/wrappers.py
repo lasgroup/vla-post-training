@@ -133,14 +133,12 @@ class QueryFrequencyWrapper(gym.Wrapper):
         discount: float = 0.99,
         store_full_transitions: bool = False,
         pre_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
-        post_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
         self._discount = discount
         self._store_full_transitions = store_full_transitions
         self._pre_step_filter = pre_step_filter
-        self._post_step_filter = post_step_filter
 
     @property
     def return_full_transitions(self) -> bool:
@@ -175,34 +173,25 @@ class QueryFrequencyWrapper(gym.Wrapper):
             obs_space = jax.tree_util.tree_map(
                 self.expand_space, self.env.observation_space
             )
-            act_space = self.action_space
         else:
             obs_space = self.env.observation_space
-            act_space = self.env.action_space
-        return gym.spaces.Dict({"observation": obs_space, "action": act_space})
+        return obs_space
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # 1. Reset the underlying environment
         obs, info = self.env.reset(seed=seed, options=options)
-        # 2. Get a single-step dummy action template from the INNER env
-        initial_action = jax.tree_util.tree_map(
-            lambda space: np.zeros(space.shape, dtype=space.dtype),
-            self.env.action_space,
-        )
-        # 3. Construct the joint observation dict
-        wrapped_obs = {"observation": obs, "action": initial_action}
 
-        # 3. Handle the 'observation' part based on store_full_transitions
+        # 3. Handle the observation based on store_full_transitions
         if self._store_full_transitions:
             # If we store full transitions, the observation space expects
             # a sequence of shape (query_frequency, ...).
             # We tile the initial observation to fill the buffer.
-            wrapped_obs = jax.tree_util.tree_map(
+            obs = jax.tree_util.tree_map(
                 lambda x: np.repeat(x[None, ...], self._query_frequency, axis=0),
-                wrapped_obs,
+                obs,
             )
 
-        return wrapped_obs, info
+        return obs, info
 
     def step(self, action):
         """
@@ -219,11 +208,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
             sub_action = self._pre_step_filter(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
-            sub_action = self._post_step_filter(sub_action)
-            obs_act = {"observation": obs, "action": sub_action}
             data.append(
                 {
-                    "obs": obs_act,
+                    "observation": obs,
                     "reward": reward,
                     "terminated": terminated,
                     "truncated": truncated,
@@ -238,7 +225,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
                 for _ in range(i + 1, self._query_frequency):
                     data.append(
                         {
-                            "obs": obs_act,
+                            "observation": obs,
                             "reward": 0.0,
                             "terminated": terminated,
                             "truncated": truncated,
@@ -252,9 +239,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
     def step_response(self, data: List[Dict]):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)
         if self._store_full_transitions:
-            # Returns the dictionary where every leaf has shape (query_freq, ...)
+            # Returns the observation tree where every leaf has shape (query_freq, ...)
             return (
-                stacked["obs"],
+                stacked["observation"],
                 stacked["reward"],
                 stacked["terminated"],
                 stacked["truncated"],
@@ -268,7 +255,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
             # 2. Extract only the final state values
             # We use [-1] to get the state at the end of the query sequence
-            last_obs = jax.tree.map(lambda x: x[-1], stacked["obs"])
+            last_obs = jax.tree.map(lambda x: x[-1], stacked["observation"])
             last_term = bool(stacked["terminated"][-1])
             last_trunc = bool(stacked["truncated"][-1])
             last_info = jax.tree.map(lambda x: x[-1], stacked["info"])

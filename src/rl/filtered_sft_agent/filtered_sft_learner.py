@@ -74,7 +74,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
                 query_frequency=replan_steps,
                 discount=discount,
                 store_full_transitions=add_per_step_data,
-                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
 
@@ -615,11 +614,9 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         if self._config.collect.add_per_step_data:
-            current_obs = jax.tree_util.tree_map(
-                lambda x: x[:, -1], observations["observation"]
-            )
+            current_obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
         else:
-            current_obs = observations["observation"]
+            current_obs = observations
 
         processed_obs = {}
         prompt_in_obs = False
@@ -789,16 +786,15 @@ class FilteredSFTLearner(Agent):
             return extracted
 
         def process_frame(
-            ob: Dict[str, Any],
+            obs: Dict[str, Any],
             *,
             actions: Any,
-            next_ob: Dict[str, Any] | None,
+            next_obs: Dict[str, Any] | None,
             reward: float,
             done: bool,
             discount: float,
         ) -> Dict[str, Any]:
             # Extract actions and observations from total_obs.
-            obs = ob["observation"]
             frame = _extract_policy_obs(obs)
             if "state" not in frame:
                 raise KeyError(
@@ -807,8 +803,8 @@ class FilteredSFTLearner(Agent):
 
             frame["actions"] = np.asarray(actions, dtype=np.float32)
             next_state = frame["state"]
-            if next_ob is not None:
-                next_obs = _extract_policy_obs(next_ob["observation"])
+            if next_obs is not None:
+                next_obs = _extract_policy_obs(next_obs)
                 if "state" in next_obs:
                     next_state = next_obs["state"]
             frame["next_observation"] = {"state": next_state}
@@ -856,9 +852,7 @@ class FilteredSFTLearner(Agent):
                     transitions.append(
                         process_frame(
                             step_obs,
-                            actions=np.asarray(
-                                ep_obs["action"][step], dtype=np.float32
-                            ),
+                            actions=np.asarray(ep["action"][step], dtype=np.float32),
                             next_ob=step_next_obs,
                             reward=step_reward,
                             done=step_done,
@@ -942,9 +936,7 @@ class FilteredSFTLearner(Agent):
                 transitions.append(
                     process_frame(
                         ep["observation"],
-                        actions=np.asarray(
-                            ep["observation"]["action"], dtype=np.float32
-                        ),
+                        actions=np.asarray(ep["action"], dtype=np.float32),
                         next_ob=ep.get("next_observation"),
                         reward=reward_value,
                         done=done,

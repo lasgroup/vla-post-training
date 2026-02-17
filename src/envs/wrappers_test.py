@@ -43,11 +43,11 @@ def test_full_transitions_mode():
     query_freq = 3
     env = MockEnv()
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq, store_full_transitions=True)
+    assert wrapped.observation_space.shape == (query_freq, 1)
 
     # Mock action: (3, 1) array
     action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
+    obs, reward, term, trunc, info = wrapped.step(action)
 
     # Check shapes: they should all have the first dimension as query_freq
     assert obs.shape == (query_freq, 1)
@@ -64,10 +64,10 @@ def test_discounted_summary_mode():
     env = MockEnv()
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq,
                                     discount=gamma, store_full_transitions=False)
+    assert wrapped.observation_space.shape == (1,)
 
     action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
+    obs, reward, term, trunc, info = wrapped.step(action)
 
     # 1. Check reward: 1.0 + (1.0 * 0.9) + (1.0 * 0.9^2) = 1 + 0.9 + 0.81 = 2.71
     expected_reward = 1.0 + 0.9 + 0.81
@@ -89,10 +89,9 @@ def test_early_termination():
                                     discount=1.0, store_full_transitions=True)
 
     action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
+    obs, reward, term, trunc, info = wrapped.step(action)
 
-    # It should have broken early at step 5
-    assert len(obs) == 5
+    # The wrapper pads to query_freq after early termination.
+    assert len(obs) == query_freq
     assert term[-1] == True
     assert reward.sum() == 5.0
