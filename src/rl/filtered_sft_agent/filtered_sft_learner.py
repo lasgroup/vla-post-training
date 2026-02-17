@@ -131,7 +131,7 @@ def init_train_state(
     return train_state, state_sharding
 
 
-class LegacyFilteredSFTLearner(Agent):
+class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
 
@@ -381,7 +381,9 @@ class LegacyFilteredSFTLearner(Agent):
                 arr = arr.reshape(batch_size, -1)[:, 0]
             return arr.astype(np.float32, copy=False)
 
-        def _normalize_observation_layout(raw_episode: Dict[str, Any]) -> Dict[str, Any]:
+        def _normalize_observation_layout(
+            raw_episode: Dict[str, Any],
+        ) -> Dict[str, Any]:
             """Normalize accepted observation layouts into a single structure."""
             raw = dict(raw_episode)
             aliases = (
@@ -637,7 +639,9 @@ class LegacyFilteredSFTLearner(Agent):
             actions = actions[np.newaxis, ...]
         return actions
 
-    def _generate_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
+    def _generate_actions(
+        self, observations: np.ndarray | Dict, **kwargs
+    ) -> np.ndarray:
         task_description = kwargs.get("task_description")
         batch_actions = kwargs.get("batch_actions")
         if batch_actions is None:
@@ -663,14 +667,17 @@ class LegacyFilteredSFTLearner(Agent):
     def _online_batch_to_sft_batch(
         self, online_batch: Dict[str, Any]
     ) -> tuple[_model.Observation, _model.Actions]:
-        return _model.Observation.from_dict(online_batch["observation"]), online_batch[
-            "actions"
-        ]
+        return (
+            _model.Observation.from_dict(online_batch["observation"]),
+            online_batch["actions"],
+        )
 
     def sample_online_transitions(self) -> Dict[str, Any]:
         """Sample transitions stored in the online replay buffer."""
         if self._online_data_buffer.size == 0:
-            raise ValueError("Cannot sample transitions from an empty online replay buffer.")
+            raise ValueError(
+                "Cannot sample transitions from an empty online replay buffer."
+            )
         batch = self._online_data_buffer.sample()
         return {
             "observation": batch["observation"],
@@ -766,7 +773,9 @@ class LegacyFilteredSFTLearner(Agent):
                     ep["terminate"],
                     ep["truncate"],
                 )
-                done_mask = np.asarray(np.logical_or(terminate, truncate), dtype=np.bool_)
+                done_mask = np.asarray(
+                    np.logical_or(terminate, truncate), dtype=np.bool_
+                )
                 valid_steps = int(done_mask.shape[0])
                 done_indices = np.where(done_mask)[0]
                 if done_indices.size > 0:
@@ -789,7 +798,9 @@ class LegacyFilteredSFTLearner(Agent):
                     transitions.append(
                         process_frame(
                             step_obs,
-                            actions=np.asarray(ep_obs["action"][step], dtype=np.float32),
+                            actions=np.asarray(
+                                ep_obs["action"][step], dtype=np.float32
+                            ),
                             next_ob=step_next_obs,
                             reward=step_reward,
                             done=step_done,
@@ -839,9 +850,11 @@ class LegacyFilteredSFTLearner(Agent):
             )
             windowed_batch["discount"] = np.asarray(
                 [
-                    0.0
-                    if np.any(dones[start : start + action_horizon])
-                    else float(discount_gamma**action_horizon)
+                    (
+                        0.0
+                        if np.any(dones[start : start + action_horizon])
+                        else float(discount_gamma**action_horizon)
+                    )
                     for start in range(num_windows)
                 ],
                 dtype=np.float32,
@@ -862,14 +875,18 @@ class LegacyFilteredSFTLearner(Agent):
                     or np.asarray(truncate).reshape(-1)[-1]
                 )
                 reward_value = (
-                    float(np.asarray(reward).reshape(-1)[0]) if reward is not None else 0.0
+                    float(np.asarray(reward).reshape(-1)[0])
+                    if reward is not None
+                    else 0.0
                 )
                 chunk_horizon = int(self._config.collect.replan_steps)
                 discount_value = 0.0 if done else float(discount_gamma**chunk_horizon)
                 transitions.append(
                     process_frame(
                         ep["observation"],
-                        actions=np.asarray(ep["observation"]["action"], dtype=np.float32),
+                        actions=np.asarray(
+                            ep["observation"]["action"], dtype=np.float32
+                        ),
                         next_ob=ep.get("next_observation"),
                         reward=reward_value,
                         done=done,

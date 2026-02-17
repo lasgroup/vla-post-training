@@ -35,8 +35,8 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.training.utils as training_utils
-from src.rl.legacy_filtered_sft_agent.legacy_filtered_sft_learner import (
-    LegacyFilteredSFTLearner,
+from rl.filtered_sft_agent.filtered_sft_learner import (
+    FilteredSFTLearner,
 )
 import src.training.config as _config
 from src.training.collect import collect_data_with_agent
@@ -47,7 +47,7 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    agent = LegacyFilteredSFTLearner(config)
+    agent = FilteredSFTLearner(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     batch = next(iter(agent._data_loader))
