@@ -12,7 +12,7 @@ ModuleDef = Any
 
 
 class MyGroupNorm(nn.Module):
-    def __init__(self, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
+    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
         self.gn = nn.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
 
     def __call__(self, x, use_running_average: bool = False): # Ignoring use_running_average
@@ -30,9 +30,9 @@ class ResNetV2Block(nn.Module):
         self.act = act
         self.strides = strides
         
-        self.norm1 = norm(rngs=rngs)
+        self.norm1 = norm(in_filters, rngs=rngs)
         self.conv1 = conv(in_filters, filters, (3, 3), strides, rngs=rngs)
-        self.norm2 = norm(rngs=rngs)
+        self.norm2 = norm(filters, rngs=rngs)
         self.conv2 = conv(filters, filters, (3, 3), rngs=rngs)
         
         if strides != (1, 1) or in_filters != filters:
@@ -75,14 +75,14 @@ class ResNetV2Encoder(nn.Module):
              return nn.Conv(*args, **kwargs)
 
         if self.norm == 'batch':
-            def norm_factory(*args, **kwargs):
+            def norm_factory(num_features, *args, **kwargs):
                  kwargs.setdefault('epsilon', 1e-5)
                  kwargs.setdefault('dtype', self.dtype)
                  kwargs.setdefault('momentum', 0.9)
-                 return nn.BatchNorm(*args, **kwargs)
+                 return nn.BatchNorm(num_features, *args, **kwargs)
         elif self.norm == 'groupnorm':
-            def norm_factory(*args, **kwargs):
-                 return MyGroupNorm(num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
+            def norm_factory(num_features, *args, **kwargs):
+                 return MyGroupNorm(num_features, num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
         else:
             raise ValueError('norm not found')
 
@@ -110,7 +110,7 @@ class ResNetV2Encoder(nn.Module):
                 )
                 filters_in = filters_out
         
-        self.norm_out = norm_factory(rngs=rngs)
+        self.norm_out = norm_factory(filters_out, rngs=rngs)
 
     def __call__(self, x, train: bool = True):
         x = x.astype(jnp.float32) / 255.0
