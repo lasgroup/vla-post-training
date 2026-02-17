@@ -9,12 +9,15 @@ import numpy as np
 def train_mlp():
     print("Initializing MLP Training Test...")
     
-    # 1. Data Generation (Linear Regression: y = 2x + 1)
+    # 1. Data Generation (Non-Linear Regression: y = sin(X @ W) + 0.5 * cos(X @ W))
     rng = jax.random.PRNGKey(0)
     key_x, key_noise = jax.random.split(rng)
-    X = jax.random.normal(key_x, (100, 10))  # 100 samples, 10 features
+    X = jax.random.normal(key_x, (200, 10))  # 200 samples, 10 features
     W_true = jax.random.normal(key_noise, (10, 1))
-    Y = X @ W_true + 0.1 * jax.random.normal(key_noise, (100, 1))
+    
+    # Non-linear target
+    h = X @ W_true
+    Y = jnp.sin(h) + 0.5 * jnp.cos(h) + 0.05 * jax.random.normal(key_noise, (200, 1))
     
     # Check data shape
     print(f"Data shapes - X: {X.shape}, Y: {Y.shape}")
@@ -22,7 +25,8 @@ def train_mlp():
     # 2. Model Initialization
     rngs = nnx.Rngs(0)
     # Lazy init: input dim determined at first call
-    model = MLP(hidden_dims=(32, 1), activations=nnx.relu, rngs=rngs)
+    # Increased capacity for non-linear task
+    model = MLP(hidden_dims=(64, 64, 1), activations=nnx.relu, rngs=rngs)
     
     # 3. Optimizer
     # We need to initialize the model parameters first by running a dummy input
@@ -30,7 +34,7 @@ def train_mlp():
     dummy_input = jnp.ones((1, 10))
     _ = model(dummy_input) # Trigger lazy init
     
-    optimizer = nnx.Optimizer(model, optax.sgd(learning_rate=0.01))
+    optimizer = nnx.Optimizer(model, optax.adam(learning_rate=0.005))
 
     # 4. Training Loop
     @nnx.jit
@@ -45,7 +49,7 @@ def train_mlp():
         return loss_fn(model)
 
     print("Starting training loop...")
-    for step in range(100):
+    for step in range(500):
         loss = train_step(model, optimizer, X, Y)
         if step % 10 == 0:
             print(f"Step {step}, Loss: {loss:.4f}")
