@@ -965,9 +965,12 @@ class FilteredSFTLearner(Agent):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
-    def end_data_collection(self, step: int | None = None):
-        # Reset episode storage
+    def end_data_collection(self, step: int | None = None) -> int:
+        collected_episodes = int(self._collection_success_episodes)
+        # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
+        self._collection_success_episodes = 0
+        return collected_episodes
 
     def update(self):
         self.training_steps += 1
