@@ -782,7 +782,7 @@ class FilteredSFTLearner(Agent):
             for key, val in obs.items():
                 if obs_prefix not in key:
                     continue
-                obs_key = key.split(obs_prefix)[-1]
+                obs_key = key.split(f"{obs_prefix}/")[-1]
                 if obs_key == "prompt":
                     continue
                 extracted[obs_key] = val
