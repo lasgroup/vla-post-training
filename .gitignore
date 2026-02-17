@@ -11,3 +11,4 @@ __pycache__/
 checkpoints/
 wandb/
 assets/
+bash_scripts/

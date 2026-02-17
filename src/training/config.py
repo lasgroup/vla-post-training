@@ -11,12 +11,14 @@ import openpi.training.weight_loaders as weight_loaders
 @dataclasses.dataclass(frozen=True)
 class CollectionConfig:
     collect_interval: int = 200
-    env_num: int = 4
+    env_num: int = 4 # Currently not used as we create one env per task
     env_resolution: int = 256
     resize_image: int = 224
     add_states: bool = True
     num_rollouts: int = 50
-    tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
+    tasks: list[str] = dataclasses.field(
+        default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"]
+    )
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
