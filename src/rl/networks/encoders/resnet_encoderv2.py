@@ -5,15 +5,15 @@
 from functools import partial
 from typing import Any, Callable, Sequence, Tuple
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 ModuleDef = Any
 
 
-class MyGroupNorm(nn.Module):
-    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
-        self.gn = nn.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
+class MyGroupNorm(nnx.Module):
+    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nnx.Rngs):
+        self.gn = nnx.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
 
     def __call__(self, x, use_running_average: bool = False): # Ignoring use_running_average
         if x.ndim == 3:
@@ -23,9 +23,9 @@ class MyGroupNorm(nn.Module):
         else:
             return self.gn(x)
 
-class ResNetV2Block(nn.Module):
+class ResNetV2Block(nnx.Module):
     """ResNet block."""
-    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nn.Rngs):
+    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nnx.Rngs):
         self.filters = filters
         self.act = act
         self.strides = strides
@@ -55,14 +55,14 @@ class ResNetV2Block(nn.Module):
         return residual + y
 
 
-class ResNetV2Encoder(nn.Module):
+class ResNetV2Encoder(nnx.Module):
     """ResNetV2."""
     def __init__(self, stage_sizes: Sequence[int],
                  num_filters: int = 16,
                  dtype: Any = jnp.float32,
-                 act: Callable = nn.relu,
+                 act: Callable = nnx.relu,
                  norm: str = 'batch',
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.stage_sizes = stage_sizes
         self.num_filters = num_filters
         self.dtype = dtype
@@ -72,14 +72,14 @@ class ResNetV2Encoder(nn.Module):
         def conv_factory(*args, **kwargs):
              kwargs.setdefault('use_bias', False)
              kwargs.setdefault('dtype', self.dtype)
-             return nn.Conv(*args, **kwargs)
+             return nnx.Conv(*args, **kwargs)
 
         if self.norm == 'batch':
             def norm_factory(num_features, *args, **kwargs):
                  kwargs.setdefault('epsilon', 1e-5)
                  kwargs.setdefault('dtype', self.dtype)
                  kwargs.setdefault('momentum', 0.9)
-                 return nn.BatchNorm(num_features, *args, **kwargs)
+                 return nnx.BatchNorm(num_features, *args, **kwargs)
         elif self.norm == 'groupnorm':
             def norm_factory(num_features, *args, **kwargs):
                  return MyGroupNorm(num_features, num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
@@ -117,7 +117,7 @@ class ResNetV2Encoder(nn.Module):
         x = jnp.reshape(x, (*x.shape[:-2], -1))
 
         if self.conv_in is None:
-             self.conv_in = nn.Conv(x.shape[-1], self.num_filters, (3, 3), use_bias=False, dtype=self.dtype, rngs=self.rngs)
+             self.conv_in = nnx.Conv(x.shape[-1], self.num_filters, (3, 3), use_bias=False, dtype=self.dtype, rngs=self.rngs)
 
         x = self.conv_in(x)
         

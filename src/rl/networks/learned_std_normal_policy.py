@@ -1,19 +1,19 @@
 from typing import Optional, Sequence
 
 import distrax
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks import MLP
 from src.rl.networks.constants import default_init, xavier_init
 
-class LearnedStdNormalPolicy(nn.Module):
+class LearnedStdNormalPolicy(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
                  action_dim: int,
                  dropout_rate: Optional[float] = None,
                  log_std_min: Optional[float] = -20,
                  log_std_max: Optional[float] = 2,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         self.action_dim = action_dim
@@ -23,8 +23,8 @@ class LearnedStdNormalPolicy(nn.Module):
                        dropout_rate=dropout_rate,
                        rngs=rngs)
                        
-        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
-        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,
@@ -78,7 +78,7 @@ class TanhMultivariateNormalDiag(distrax.Transformed):
     def mode(self) -> jnp.ndarray:
         return self.bijector.forward(self.distribution.mode())
 
-class LearnedStdTanhNormalPolicy(nn.Module):
+class LearnedStdTanhNormalPolicy(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
                  action_dim: int,
                  dropout_rate: Optional[float] = None,
@@ -86,7 +86,7 @@ class LearnedStdTanhNormalPolicy(nn.Module):
                  log_std_max: Optional[float] = 2,
                  low: Optional[float] = None,
                  high: Optional[float] = None,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         self.low = low
@@ -98,8 +98,8 @@ class LearnedStdTanhNormalPolicy(nn.Module):
                        dropout_rate=dropout_rate,
                        rngs=rngs)
 
-        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
-        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,

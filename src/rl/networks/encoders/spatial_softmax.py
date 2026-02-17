@@ -1,6 +1,6 @@
 from typing import Dict, Optional, Sequence, Union
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,8 +15,8 @@ import wandb
 
 ModuleDef = Any
 
-class SpatialSoftmax(nn.Module):
-    def __init__(self, height: int, width: int, channel: int, pos_x: jnp.ndarray, pos_y: jnp.ndarray, temperature: Optional[float], log_heatmap: bool = False, *, rngs: nn.Rngs):
+class SpatialSoftmax(nnx.Module):
+    def __init__(self, height: int, width: int, channel: int, pos_x: jnp.ndarray, pos_y: jnp.ndarray, temperature: Optional[float], log_heatmap: bool = False, *, rngs: nnx.Rngs):
         self.height = height
         self.width = width
         self.channel = channel
@@ -26,7 +26,7 @@ class SpatialSoftmax(nn.Module):
         self.log_heatmap = log_heatmap
 
         if self.temperature_val == -1:
-             self.temperature = nn.Param(jnp.ones((1,), dtype=jnp.float32))
+             self.temperature = nnx.Param(jnp.ones((1,), dtype=jnp.float32))
         else:
              self.temperature = None
 
@@ -41,7 +41,7 @@ class SpatialSoftmax(nn.Module):
         batch_size, num_featuremaps = feature.shape[0], feature.shape[3]
         feature = feature.transpose(0, 3, 1, 2).reshape(batch_size, num_featuremaps, self.height * self.width)
 
-        softmax_attention = nn.softmax(feature / temperature)
+        softmax_attention = nnx.softmax(feature / temperature)
         expected_x = jnp.sum(self.pos_x * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
         expected_y = jnp.sum(self.pos_y * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
         expected_xy = jnp.concatenate([expected_x, expected_y], axis=1)

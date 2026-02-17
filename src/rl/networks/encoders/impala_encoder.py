@@ -1,31 +1,31 @@
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 from src.rl.networks.constants import xavier_init
 
 
-class ResnetBlock(nn.Module):
-    def __init__(self, num_ch, *, rngs: nn.Rngs):
-        self.conv1 = nn.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
-        self.conv2 = nn.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
+class ResnetBlock(nnx.Module):
+    def __init__(self, num_ch, *, rngs: nnx.Rngs):
+        self.conv1 = nnx.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
+        self.conv2 = nnx.Conv(num_ch, num_ch, kernel_size=(3, 3), strides=1, padding='SAME', kernel_init=xavier_init(), rngs=rngs)
 
     def __call__(self, x):
         inputs = x
-        x = nn.relu(x)
+        x = nnx.relu(x)
         x = self.conv1(x)
-        x = nn.relu(x)
+        x = nnx.relu(x)
         x = self.conv2(x)
         return x + inputs
 
 
-class ResnetStack(nn.Module):
-    def __init__(self, in_ch: int, num_ch: int, num_blocks: int, use_max_pooling: bool = True, *, rngs: nn.Rngs):
+class ResnetStack(nnx.Module):
+    def __init__(self, in_ch: int, num_ch: int, num_blocks: int, use_max_pooling: bool = True, *, rngs: nnx.Rngs):
         self.in_ch = in_ch
         self.num_ch = num_ch
         self.num_blocks = num_blocks
         self.use_max_pooling = use_max_pooling
         
         initializer = xavier_init()
-        self.conv_in = nn.Conv(
+        self.conv_in = nnx.Conv(
             in_features=in_ch,
             out_features=num_ch,
             kernel_size=(3, 3),
@@ -42,15 +42,15 @@ class ResnetStack(nn.Module):
     def __call__(self, x):
         x = self.conv_in(x)
         if self.use_max_pooling:
-            x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding='SAME')
+            x = nnx.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding='SAME')
             
         for block in self.blocks:
             x = block(x)
         return x
 
 
-class ImpalaEncoder(nn.Module):
-    def __init__(self, nn_scale: int = 1, *, rngs: nn.Rngs):
+class ImpalaEncoder(nnx.Module):
+    def __init__(self, nn_scale: int = 1, *, rngs: nnx.Rngs):
         self.nn_scale = nn_scale
         self.stack_blocks = []
         self.rngs = rngs 
@@ -79,12 +79,12 @@ class ImpalaEncoder(nn.Module):
         for block in self.stack_blocks:
             conv_out = block(conv_out)
 
-        conv_out = nn.relu(conv_out)
+        conv_out = nnx.relu(conv_out)
         return conv_out.reshape((*x.shape[:-3], -1))
 
 
-class SmallerImpalaEncoder(nn.Module):
-    def __init__(self, nn_scale: int = 1, *, rngs: nn.Rngs):
+class SmallerImpalaEncoder(nnx.Module):
+    def __init__(self, nn_scale: int = 1, *, rngs: nnx.Rngs):
         self.nn_scale = nn_scale
         self.stack_blocks = []
         self.rngs = rngs
@@ -111,5 +111,5 @@ class SmallerImpalaEncoder(nn.Module):
         for block in self.stack_blocks:
             conv_out = block(conv_out)
 
-        conv_out = nn.relu(conv_out)
+        conv_out = nnx.relu(conv_out)
         return conv_out.reshape((*x.shape[:-3], -1))

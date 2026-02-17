@@ -1,7 +1,7 @@
 
 import jax
 import jax.numpy as jnp
-import flax.nnx as nn
+import flax.nnx as nnx
 from src.rl.networks.mlp import MLP
 from src.rl.networks.normal_tanh_policy import NormalTanhPolicy
 from src.rl.networks.values.state_action_value import StateActionValue
@@ -12,8 +12,8 @@ import numpy as np
 
 def test_mlp():
     print("Testing MLP...")
-    rngs = nn.Rngs(0)
-    mlp = MLP(hidden_dims=(64, 64), activations=nn.relu, rngs=rngs)
+    rngs = nnx.Rngs(0)
+    mlp = MLP(hidden_dims=(64, 64), activations=nnx.relu, rngs=rngs)
     x = jnp.ones((1, 32))
     print(f"MLP Input shape: {x.shape}")
     y = mlp(x)
@@ -22,7 +22,7 @@ def test_mlp():
 
 def test_policy():
     print("Testing NormalTanhPolicy...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     policy = NormalTanhPolicy(hidden_dims=(64, 64), action_dim=5, rngs=rngs)
     x = jnp.ones((1, 32))
     print(f"Policy Input shape: {x.shape}")
@@ -33,7 +33,7 @@ def test_policy():
 
 def test_value():
     print("Testing StateActionValue...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     # StateActionValue(hidden_dims, activations, final_fc_dim, rngs)
     value_net = StateActionValue(hidden_dims=(64, 64), rngs=rngs) 
     obs = jnp.ones((1, 32))
@@ -45,7 +45,7 @@ def test_value():
 
 def test_impala():
     print("Testing ImpalaEncoder...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     # ImpalaEncoder(nn_scale, rngs)
     encoder = ImpalaEncoder(nn_scale=1, rngs=rngs)
     # Input image (Batch, H, W, Stack, C) -> (1, 64, 64, 5, 3) to mimic 4D content but in 5D shape
@@ -60,7 +60,7 @@ def test_impala():
 
 def test_smaller_impala():
     print("Testing SmallerImpalaEncoder...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     encoder = SmallerImpalaEncoder(nn_scale=1, rngs=rngs)
     # Input image (Batch, H, W, Stack, C)
     img = jnp.zeros((1, 64, 64, 5, 3), dtype=jnp.uint8)
@@ -73,7 +73,7 @@ def test_smaller_impala():
     
 def test_resnet():
     print("Testing ResNetEncoder...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     # ResNetEncoder(stage_sizes, block_cls, ...)
     encoder = ResNetEncoder(stage_sizes=(2, 2, 2, 2), block_cls=ResNetBlock, rngs=rngs)
     # (Batch, H, W, Stack, C)
@@ -84,7 +84,7 @@ def test_resnet():
 
 def test_resnet_bottleneck():
     print("Testing ResNetEncoder with Bottleneck...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     encoder = ResNetEncoder(stage_sizes=(3, 4, 6, 3), block_cls=BottleneckResNetBlock, rngs=rngs)
     img = jnp.zeros((1, 224, 224, 5, 3), dtype=jnp.uint8)
     print(f"ResNet Bottleneck Input shape: {img.shape}")
@@ -93,7 +93,7 @@ def test_resnet_bottleneck():
 
 def test_resnet_v2():
     print("Testing ResNetV2Encoder...")
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
     # ResNetV2Encoder(stage_sizes, ...)
     encoder = ResNetV2Encoder(stage_sizes=(2, 2, 2, 2), rngs=rngs)
     img = jnp.zeros((1, 224, 224, 5, 3), dtype=jnp.uint8)

@@ -2,7 +2,7 @@ from typing import Callable, Optional, Sequence, Union
 from flax.core import frozen_dict
 
 import numpy as np
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 
@@ -46,14 +46,14 @@ def _flatten_dict_special(x):
         return x
         
 
-class MLP(nn.Module):
+class MLP(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  activate_final: int = False,
                  dropout_rate: Optional[float] = None,
                  init_scale: Optional[float] = 1.,
                  use_layer_norm: bool = False,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.hidden_dims = hidden_dims
         self.activations = activations
         self.activate_final = activate_final
@@ -71,13 +71,13 @@ class MLP(nn.Module):
         if not self.layers:
             input_dim = x.shape[-1]
             for i, size in enumerate(self.hidden_dims):
-                self.layers.append(nn.Linear(input_dim, size, kernel_init=default_init(self.init_scale), rngs=self.rngs))
+                self.layers.append(nnx.Linear(input_dim, size, kernel_init=default_init(self.init_scale), rngs=self.rngs))
                 input_dim = size
                 if i + 1 < len(self.hidden_dims) or self.activate_final:
                     if self.dropout_rate is not None:
-                        self.layers.append(nn.Dropout(rate=self.dropout_rate, rngs=self.rngs))
+                        self.layers.append(nnx.Dropout(rate=self.dropout_rate, rngs=self.rngs))
                     if self.use_layer_norm:
-                        self.layers.append(nn.LayerNorm(size, rngs=self.rngs))
+                        self.layers.append(nnx.LayerNorm(size, rngs=self.rngs))
 
         layer_idx = 0
         for i, size in enumerate(self.hidden_dims):
@@ -94,14 +94,14 @@ class MLP(nn.Module):
         return x
 
 
-class MLPActionSep(nn.Module):
+class MLPActionSep(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  activate_final: int = False,
                  dropout_rate: Optional[float] = None,
                  init_scale: Optional[float] = 1.,
                  use_layer_norm: bool = False,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.hidden_dims = hidden_dims
         self.activations = activations
         self.activate_final = activate_final
@@ -120,13 +120,13 @@ class MLPActionSep(nn.Module):
         if not self.layers:
             input_dim = x.shape[-1] + action.shape[-1]
             for i, size in enumerate(self.hidden_dims):
-                self.layers.append(nn.Linear(input_dim, size, kernel_init=default_init(), rngs=self.rngs))
+                self.layers.append(nnx.Linear(input_dim, size, kernel_init=default_init(), rngs=self.rngs))
                 input_dim = size
                 if i + 1 < len(self.hidden_dims) or self.activate_final:
                     if self.dropout_rate is not None:
-                        self.layers.append(nn.Dropout(rate=self.dropout_rate, rngs=self.rngs))
+                        self.layers.append(nnx.Dropout(rate=self.dropout_rate, rngs=self.rngs))
                     if self.use_layer_norm:
-                        self.layers.append(nn.LayerNorm(size, rngs=self.rngs))
+                        self.layers.append(nnx.LayerNorm(size, rngs=self.rngs))
         
         layer_idx = 0
         for i, size in enumerate(self.hidden_dims):

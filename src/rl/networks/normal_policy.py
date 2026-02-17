@@ -1,14 +1,14 @@
 from typing import Optional, Sequence
 
 import distrax
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks import MLP
 from src.rl.networks.constants import default_init, xavier_init
 
 
-class NormalPolicy(nn.Module):
+class NormalPolicy(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
                  action_dim: int,
                  dropout_rate: Optional[float] = None,
@@ -16,7 +16,7 @@ class NormalPolicy(nn.Module):
                  init_scale: Optional[float] = 1.,
                  output_scale: Optional[float] = 1.,
                  init_method: str = 'xavier',
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.std = std
         self.output_scale = output_scale
         
@@ -31,7 +31,7 @@ class NormalPolicy(nn.Module):
         else:
             kernel_init = default_init(init_scale)
             
-        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,

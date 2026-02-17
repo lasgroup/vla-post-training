@@ -1,4 +1,4 @@
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from functools import partial
@@ -10,9 +10,9 @@ from src.rl.networks.encoders.cross_norm import CrossNorm
 ModuleDef = Any
 
 
-class MyGroupNorm(nn.Module):
-    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
-        self.gn = nn.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
+class MyGroupNorm(nnx.Module):
+    def __init__(self, num_features, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nnx.Rngs):
+        self.gn = nnx.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
 
     def __call__(self, x, use_running_average: bool = False):
         if x.ndim == 3:
@@ -22,9 +22,9 @@ class MyGroupNorm(nn.Module):
         else:
             return self.gn(x)
 
-class ResNetBlock(nn.Module):
+class ResNetBlock(nnx.Module):
     """ResNet block."""
-    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nn.Rngs):
+    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nnx.Rngs):
         self.filters = filters
         self.act = act
         self.strides = strides
@@ -56,9 +56,9 @@ class ResNetBlock(nn.Module):
         return self.act(residual + y)
 
 
-class BottleneckResNetBlock(nn.Module):
+class BottleneckResNetBlock(nnx.Module):
     """Bottleneck ResNet block."""
-    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nn.Rngs):
+    def __init__(self, in_filters: int, filters: int, conv: ModuleDef, norm: ModuleDef, act: Callable, strides: Tuple[int, int] = (1, 1), *, rngs: nnx.Rngs):
         self.filters = filters
         self.act = act
         self.strides = strides
@@ -68,7 +68,7 @@ class BottleneckResNetBlock(nn.Module):
         self.conv2 = conv(filters, filters, (3, 3), strides, rngs=rngs)
         self.norm2 = norm(filters, rngs=rngs)
         self.conv3 = conv(filters, filters * 4, (1, 1), rngs=rngs)
-        self.norm3 = norm(filters * 4, scale_init=nn.initializers.zeros, rngs=rngs)
+        self.norm3 = norm(filters * 4, scale_init=nnx.initializers.zeros, rngs=rngs)
 
         if strides != (1, 1) or in_filters != filters * 4:
              self.proj_conv = conv(in_filters, filters * 4, (1, 1), strides, rngs=rngs)
@@ -95,18 +95,18 @@ class BottleneckResNetBlock(nn.Module):
         return self.act(residual + y)
 
 
-class ResNetEncoder(nn.Module):
+class ResNetEncoder(nnx.Module):
     """ResNetV1."""
     def __init__(self, stage_sizes: Sequence[int],
                  block_cls: ModuleDef,
                  num_filters: int = 64,
                  dtype: Any = jnp.float32,
-                 act: Callable = nn.relu,
-                 conv: ModuleDef = nn.Conv,
+                 act: Callable = nnx.relu,
+                 conv: ModuleDef = nnx.Conv,
                  norm: str = 'batch',
                  use_spatial_softmax: bool = True,
                  softmax_temperature: float = 1.0,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.stage_sizes = stage_sizes
         self.block_cls = block_cls
         self.num_filters = num_filters
@@ -128,7 +128,7 @@ class ResNetEncoder(nn.Module):
                  kwargs.setdefault('epsilon', 1e-5)
                  kwargs.setdefault('dtype', self.dtype)
                  kwargs.setdefault('momentum', 0.9)
-                 return nn.BatchNorm(num_features, *args, **kwargs)
+                 return nnx.BatchNorm(num_features, *args, **kwargs)
         elif self.norm == 'group':
             def norm_factory(num_features, *args, **kwargs):
                  # num_features is ignored by MyGroupNorm (or rather, handled by signature update)
@@ -140,7 +140,7 @@ class ResNetEncoder(nn.Module):
              def norm_factory(num_features, *args, **kwargs):
                   kwargs.setdefault('epsilon', 1e-5)
                   kwargs.setdefault('dtype', self.dtype)
-                  return nn.LayerNorm(num_features, *args, **kwargs)
+                  return nnx.LayerNorm(num_features, *args, **kwargs)
         else:
             raise ValueError('norm not found')
             
@@ -205,13 +205,13 @@ class ResNetEncoder(nn.Module):
 
         x = self.conv_item(x)
         
-        if isinstance(self.norm_item, (nn.BatchNorm, CrossNorm)):
+        if isinstance(self.norm_item, (nnx.BatchNorm, CrossNorm)):
              x = self.norm_item(x, use_running_average=not train)
         else:
              x = self.norm_item(x)
              
-        x = nn.relu(x)
-        x = nn.max_pool(x, (3, 3), strides=(2, 2), padding='SAME')
+        x = nnx.relu(x)
+        x = nnx.max_pool(x, (3, 3), strides=(2, 2), padding='SAME')
 
         for block in self.blocks:
              x = block(x, train=train)
