@@ -30,6 +30,67 @@ from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
+from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
+from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
+from src.rl.agent import Agent, EnvFn
+
+
+def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_class):
+    env = filtered_sft_wrap_env(
+        env_fn=env_fn,
+        config=config,
+        task_description=task_description,
+        env_class=env_class,
+    )
+    agent = FilteredSFTLearner(config)
+    return env, agent
+
+
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
+    env_num = config.collect.env_num
+    add_states = config.collect.add_states
+    obs_prefix_key = config.collect.obs_prefix_key
+    replan_steps = config.collect.replan_steps
+    seed = config.seed
+    discount = config.discount
+    add_per_step_data = config.collect.add_per_step_data
+    env_factories = []
+    for i in range(env_num):
+
+        def _make_env(rank=i):
+            # Create the base environment
+            base_env = env_fn(rank)
+            # Add Pi related obs to the environment
+            base_env = Pi0ObservationWrapper(
+                env=base_env,
+                env_class=env_class,
+                task_description=task_description,
+                add_states=add_states,
+                pi0_obs_prefix=obs_prefix_key,
+            )
+            # Add query frequency wrapper to rollout action chunks
+            base_env = QueryFrequencyWrapper(
+                env=base_env,
+                query_frequency=replan_steps,
+                discount=discount,
+                store_full_transitions=add_per_step_data,
+                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+            )
+            return base_env
+
+        env_factories.append(_make_env)
+
+    env = (
+        SubprocVectorEnv(env_factories)
+        if env_num > 1
+        else DummyVectorEnv(env_factories)
+    )
+    # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
+    env.seed(
+        seed
+    )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    # re-use training seed
+    return env
 
 
 def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
@@ -143,7 +204,7 @@ class FilteredSFTLearner(Agent):
             "jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser())
         )
         self._rng = jax.random.key(self._config.seed)
-        _, init_rng, self._rng = jax.random.split(self._rng, 3)
+        init_rng, self._rng = jax.random.split(self._rng, 2)
 
         # set up sharding
         self._mesh = sharding.make_mesh(self._config.fsdp_devices)
@@ -560,30 +621,27 @@ class FilteredSFTLearner(Agent):
         else:
             current_obs = observations["observation"]
 
-        processed_obs: Dict[str, Any] = {}
+        processed_obs = {}
         prompt_in_obs = False
-        prefix = self._config.collect.obs_prefix_key
         for key, val in current_obs.items():
-            if prefix not in key:
-                continue
-
-            # Extract all observations relevant for the policy.
-            obs_key = key.split(prefix)[-1]
-            if obs_key == "prompt":
-                prompt_in_obs = True
-                processed_obs[obs_key] = val
-                continue
-
-            if "image" in obs_key and self._config.collect.resize_image > 0:
-                val = image_tools.convert_to_uint8(
-                    image_tools.resize_with_pad(
-                        val,
-                        self._config.collect.resize_image,
-                        self._config.collect.resize_image,
-                    )
-                )
-            processed_obs[f"observation/{obs_key}"] = val
-
+            # Extract all observations relevant for the policy
+            if self._config.collect.obs_prefix_key in key:
+                obs_key = key.split(f"{self._config.collect.obs_prefix_key}/")[-1]
+                if obs_key == "prompt":
+                    prompt_in_obs = True
+                    processed_obs[obs_key] = val
+                else:
+                    if "image" in obs_key and self._config.collect.resize_image > 0:
+                        # Rescale images
+                        val = image_tools.convert_to_uint8(
+                            image_tools.resize_with_pad(
+                                val,
+                                self._config.collect.resize_image,
+                                self._config.collect.resize_image,
+                            )
+                        )
+                    obs_key = f"observation/{obs_key}"
+                    processed_obs[obs_key] = val
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
             assert task_description is not None, "No task description is provided"
@@ -903,13 +961,11 @@ class FilteredSFTLearner(Agent):
         self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
-        del step
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None):
-        del step
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 

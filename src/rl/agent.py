@@ -1,7 +1,6 @@
-from typing import Dict
+from typing import Dict, Callable
 
 import numpy as np
-from flax.training import checkpoints
 from flax.training.train_state import TrainState
 import jax
 from abc import abstractmethod
@@ -9,6 +8,9 @@ from abc import abstractmethod
 
 from src.rl.types import StepData
 import openpi.training.utils as training_utils
+from gymnasium import Env
+
+EnvFn = Callable[[int], Env]
 
 
 def get_batch_stats(actor):
@@ -27,16 +29,12 @@ class Agent(object):
     base_dir: str = "/agent"
 
     @abstractmethod
-    def eval_actions(self,
-                     observations: np.ndarray | Dict,
-                     **kwargs) -> np.ndarray:
+    def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         """Deterministic action decoding."""
         raise NotImplementedError
 
     @abstractmethod
-    def sample_actions(
-        self, observations: np.ndarray | Dict, **kwargs
-    ) -> np.ndarray:
+    def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         """Stochastic action decoding."""
         raise NotImplementedError
 
@@ -57,7 +55,7 @@ class Agent(object):
         raise NotImplementedError
 
     @abstractmethod
-    def end_data_collection(self, step: int | None = None):
+    def end_data_collection(self, step: int | None = None) -> int:
         raise NotImplementedError
 
     @abstractmethod
