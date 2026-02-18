@@ -43,7 +43,7 @@ def collect_data(
             if config.collect.add_per_step_data:
                 aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
             else:
-                aligned_obs = next_obs
+                aligned_obs = obs
 
             step_data = {
                 "observation": aligned_obs,
