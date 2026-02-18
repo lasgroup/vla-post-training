@@ -1,15 +1,15 @@
 from typing import Callable, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks.mlp import MLP
 
 
-class StateValue(nn.Module):
+class StateValue(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
-                 *, rngs: nn.Rngs):
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
+                 *, rngs: nnx.Rngs):
         self.critic = MLP((*hidden_dims, 1),
                           activations=activations,
                           rngs=rngs)
@@ -22,14 +22,14 @@ class StateValue(nn.Module):
         return jnp.squeeze(critic, -1)
 
 
-class StateValueEnsemble(nn.Module):
+class StateValueEnsemble(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  num_vs: int = 2,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         
         self.num_vs = num_vs
-        self.vmap_critic = nn.vmap(StateValue,
+        self.vmap_critic = nnx.vmap(StateValue,
                                    variable_axes={'params': 0},
                                    split_rngs={'params': True},
                                    in_axes=None,

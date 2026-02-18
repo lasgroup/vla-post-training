@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import flax.nnx as nn
+import flax.nnx as nnx
 from normal_policy import NormalPolicyDecoder
 from learned_std_normal_policy import LearnedStdTanhNormalPolicyDecoder, LearnedStdNormalPolicyDecoder
 
@@ -21,7 +21,7 @@ def test_policies():
     dummy_action = jnp.zeros(action_dim)
 
     # RNGs for NNX
-    rngs = nn.Rngs(0)
+    rngs = nnx.Rngs(0)
 
     # ---------------------------------------------------------
     # Test 1: NormalPolicy (Fixed Std)

@@ -1,6 +1,6 @@
 from typing import Callable, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 import jax
@@ -18,14 +18,14 @@ PrecisionLike = Union[None, str, jax.lax.Precision, Tuple[str, str],
 Tuple[jax.lax.Precision, jax.lax.Precision]]
 
 
-class StateActionValueDecoder(nn.Module):
+class StateActionValueDecoder(nnx.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  *,
-                 rngs: nn.Rngs):
+                 rngs: nnx.Rngs):
         self.critic = MLP(input=self._prepare_inputs(observations=observation, actions=action),
                           hidden_dims=(*hidden_dims, 1),
                           activations=activations,
@@ -46,17 +46,17 @@ class StateActionValueDecoder(nn.Module):
         return jnp.squeeze(critic, -1)
 
 
-class StateActionEnsembleDecoder(nn.Module):
+class StateActionEnsembleDecoder(nnx.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  num_qs: int = 2,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
 
-        @nn.split_rngs(splits=num_qs)
-        @nn.vmap(out_axes=0, in_axes=0)
+        @nnx.split_rngs(splits=num_qs)
+        @nnx.vmap(out_axes=0, in_axes=0)
         def create_critic(rgs):
             return StateActionValueDecoder(
                 observation=observation,
@@ -69,7 +69,7 @@ class StateActionEnsembleDecoder(nn.Module):
 
     def __call__(self, observations, actions, training: bool = False):
         # Attempt to use the model
-        @nn.vmap(in_axes=(0, None, None), out_axes=0)  # head dim
+        @nnx.vmap(in_axes=(0, None, None), out_axes=0)  # head dim
         def call_model(model, o, a):
             return model(o, a, training=training)
         return call_model(self.vmap_critic, observations, actions)

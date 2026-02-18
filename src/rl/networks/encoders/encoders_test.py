@@ -1,7 +1,7 @@
 import pytest
 import jax
 import jax.numpy as jnp
-import flax.nnx as nn
+import flax.nnx as nnx
 from functools import partial
 
 # Import your encoders
@@ -14,7 +14,7 @@ from spatial_softmax import SpatialSoftmax
 from encoders import ImageEncoder, MLPEncoder, BaseEncoder
 from src.rl.networks.mlp import MLP
 
-rngs = nn.Rngs(42)
+rngs = nnx.Rngs(42)
 
 # =========================================
 # HELPERS
@@ -30,7 +30,7 @@ def create_dummy_obs(batch_size=4, height=64, width=64, channels=3):
     }
 
 
-rngs = nn.Rngs(42)
+rngs = nnx.Rngs(42)
 
 
 # =========================================
@@ -273,7 +273,7 @@ def test_base_encoder_merge():
     def mlp_factory(flat_input, rng):
         return MLP(input=flat_input,
                    hidden_dims=[32, mlp_latent_dim],  # Output 20
-                   activations=nn.relu,
+                   activations=nnx.relu,
                    rngs=rng)
 
     # Outer MLPEncoder factory

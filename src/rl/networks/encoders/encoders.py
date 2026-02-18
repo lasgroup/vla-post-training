@@ -1,6 +1,6 @@
 from typing import Dict, List, Union, Callable
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 import jax
 from flax.core.frozen_dict import FrozenDict
@@ -9,18 +9,18 @@ from src.rl.networks.constants import xavier_init
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.utils import extract_from_dict, EncoderType
 
-EncoderDef = Callable[[Union[FrozenDict, Dict], nn.Rngs], EncoderType]
-MLPEncoderDef = Callable[[Union[FrozenDict, Dict], nn.Rngs], EncoderType]
-MLPDef = Callable[[jnp.ndarray, nn.Rngs], MLP]
+EncoderDef = Callable[[Union[FrozenDict, Dict], nnx.Rngs], EncoderType]
+MLPEncoderDef = Callable[[Union[FrozenDict, Dict], nnx.Rngs], EncoderType]
+MLPDef = Callable[[jnp.ndarray, nnx.Rngs], MLP]
 
 
-class ImageEncoder(nn.Module):
+class ImageEncoder(nnx.Module):
     def __init__(self,
                  dummy_obs: Union[FrozenDict, Dict],
                  encoder_def: EncoderDef,
                  latent_dim: int,
                  use_bottleneck: bool = True,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         # Initialize encoder
         self.encoder = encoder_def(dummy_obs, rngs)
         # Get a dummy embedding
@@ -29,11 +29,11 @@ class ImageEncoder(nn.Module):
         self.bottleneck_dense = None
         self.bottleneck_norm = None
         if self.use_bottleneck:
-            self.bottleneck_dense = nn.Linear(dummy_x.shape[-1],
+            self.bottleneck_dense = nnx.Linear(dummy_x.shape[-1],
                                               latent_dim,
                                               kernel_init=xavier_init(),
                                               rngs=rngs)
-            self.bottleneck_norm = nn.LayerNorm(latent_dim, rngs=rngs)
+            self.bottleneck_norm = nnx.LayerNorm(latent_dim, rngs=rngs)
 
     def __call__(self,
                  observations: Union[FrozenDict, Dict],
@@ -43,17 +43,17 @@ class ImageEncoder(nn.Module):
         if self.use_bottleneck:
             x = self.bottleneck_dense(x)
             x = self.bottleneck_norm(x)
-            x = nn.tanh(x)
+            x = nnx.tanh(x)
         return x
 
 
-class MLPEncoder(nn.Module):
+class MLPEncoder(nnx.Module):
     def __init__(self,
                  dummy_obs: Union[FrozenDict, Dict],
                  encoder_def: MLPDef,
                  state_vector_keys: List[str] | None = None,
                  *,
-                 rngs: nn.Rngs):
+                 rngs: nnx.Rngs):
         if state_vector_keys is None:
             state_vector_keys = ['state']
         self._state_vector_keys = state_vector_keys
@@ -78,13 +78,13 @@ class MLPEncoder(nn.Module):
         return self.encoder(state, training=training)
 
 
-class BaseEncoder(nn.Module):
+class BaseEncoder(nnx.Module):
     def __init__(self,
                  dummy_obs: Union[FrozenDict, Dict, jnp.ndarray],
                  mlp_encoder_def: EncoderDef | None = None,
                  image_encoder_def: MLPEncoderDef | None = None,
                  *,
-                 rngs: nn.Rngs
+                 rngs: nnx.Rngs
                  ):
         if mlp_encoder_def is not None:
             self.mlp_encoder = mlp_encoder_def(dummy_obs, rngs)

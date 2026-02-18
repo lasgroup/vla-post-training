@@ -1,6 +1,6 @@
 from typing import Sequence, List, Union, Dict
 
-import flax.nnx as nn
+import flax.nnx as nnx
 from flax.core.frozen_dict import FrozenDict
 import jax.numpy as jnp
 
@@ -8,7 +8,7 @@ from src.rl.networks.constants import default_init
 from src.rl.networks.encoders.utils import extract_from_dict
 
 
-class CNNEncoder(nn.Module):
+class CNNEncoder(nnx.Module):
     def __init__(self,
                  input_example: Union[FrozenDict, Dict],
                  features: Sequence[int] = (32, 32, 32, 32),
@@ -16,7 +16,7 @@ class CNNEncoder(nn.Module):
                  padding: str = 'VALID',
                  image_keys: List[str] | None = None,
                  *,
-                 rngs: nn.Rngs):
+                 rngs: nnx.Rngs):
         if image_keys is None:
             image_keys = ['pixels']
         self._image_keys = image_keys
@@ -25,7 +25,7 @@ class CNNEncoder(nn.Module):
         in_ch = inputs.shape[-1]
         assert len(features) == len(strides)
         for features, stride in zip(features, strides):
-            self.layers.append(nn.Conv(in_ch, features,
+            self.layers.append(nnx.Conv(in_ch, features,
                                        kernel_size=(3, 3),
                                        strides=(stride, stride),
                                        kernel_init=default_init(),
@@ -45,6 +45,6 @@ class CNNEncoder(nn.Module):
 
         for layer in self.layers:
             x = layer(x)
-            x = nn.relu(x)
+            x = nnx.relu(x)
 
         return x.reshape((*x.shape[:-3], -1))

@@ -1,6 +1,6 @@
 from typing import Dict, Optional, Sequence, Union
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
@@ -13,12 +13,12 @@ import distrax
 
 ModuleDef = Any
 
-class Encoder(nn.Module):
+class Encoder(nnx.Module):
     def __init__(self,
                  features: Sequence[int] = (32, 32, 32, 32),
                  strides: Sequence[int] = (2, 1, 1, 1),
                  padding: str = 'VALID',
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.features = features
         self.strides = strides
         self.padding = padding
@@ -35,7 +35,7 @@ class Encoder(nn.Module):
         if not self.layers:
             in_ch = x.shape[-1]
             for features, stride in zip(self.features, self.strides):
-                self.layers.append(nn.Conv(in_ch, features,
+                self.layers.append(nnx.Conv(in_ch, features,
                             kernel_size=(3, 3),
                             strides=(stride, stride),
                             kernel_init=default_init(),
@@ -45,18 +45,18 @@ class Encoder(nn.Module):
 
         for layer in self.layers:
             x = layer(x)
-            x = nn.relu(x)
+            x = nnx.relu(x)
 
         return x.reshape((*x.shape[:-3], -1))
     
 
-class PixelMultiplexer(nn.Module):
+class PixelMultiplexer(nnx.Module):
     def __init__(self,
-                 encoder: Union[nn.Module, list],
-                 network: nn.Module,
+                 encoder: Union[nnx.Module, list],
+                 network: nnx.Module,
                  latent_dim: int,
                  use_bottleneck: bool=True,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.encoder = encoder
         self.network = network
         self.latent_dim = latent_dim
@@ -76,12 +76,12 @@ class PixelMultiplexer(nn.Module):
         x = self.encoder(observations['pixels'], training=training)
         if self.use_bottleneck:
             if self.bottleneck_dense is None:
-                self.bottleneck_dense = nn.Linear(x.shape[-1], self.latent_dim, kernel_init=xavier_init(), rngs=self.rngs)
-                self.bottleneck_norm = nn.LayerNorm(self.latent_dim, rngs=self.rngs)
+                self.bottleneck_dense = nnx.Linear(x.shape[-1], self.latent_dim, kernel_init=xavier_init(), rngs=self.rngs)
+                self.bottleneck_norm = nnx.LayerNorm(self.latent_dim, rngs=self.rngs)
                 
             x = self.bottleneck_dense(x)
             x = self.bottleneck_norm(x)
-            x = nn.tanh(x)
+            x = nnx.tanh(x)
 
         x = observations.copy(add_or_replace={'pixels': x})
 

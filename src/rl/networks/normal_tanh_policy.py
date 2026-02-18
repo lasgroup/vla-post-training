@@ -1,7 +1,7 @@
 from typing import Optional, Sequence
 
 import distrax
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
 
@@ -49,7 +49,7 @@ class TanhMultivariateNormalDiag(distrax.Transformed):
         return self.bijector.forward(self.distribution.mode())
 
 
-class NormalTanhPolicy(nn.Module):
+class NormalTanhPolicy(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
                  action_dim: int,
                  dropout_rate: Optional[float] = None,
@@ -59,7 +59,7 @@ class NormalTanhPolicy(nn.Module):
                  high: Optional[jnp.ndarray] = None,
                  mlp_init_scale: float = 1.0,
                  init_method: str = 'default',
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         self.low = low
@@ -77,8 +77,8 @@ class NormalTanhPolicy(nn.Module):
         else:
             kernel_init = default_init(mlp_init_scale)
             
-        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
-        self.log_std_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=default_init() if init_method != 'xavier' else xavier_init(), rngs=rngs)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
+        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init() if init_method != 'xavier' else xavier_init(), rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,

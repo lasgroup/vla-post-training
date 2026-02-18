@@ -1,7 +1,7 @@
 from typing import Callable, Dict, Union
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
-import flax.nnx as nn
+import flax.nnx as nnx
 
 from src.rl.networks.encoders.encoders import BaseEncoder
 from src.rl.networks.decoders.values.state_action_value import (
@@ -34,22 +34,22 @@ PolicyDecoderDef = Union[
     LearnedStdTanhNormalPolicyDecoder,
 ]
 
-EncoderDef = Callable[[ObsType, nn.Rngs], BaseEncoder]
+EncoderDef = Callable[[ObsType, nnx.Rngs], BaseEncoder]
 StateActionDecoderDef = Callable[
-    [EmbeddingType, ActionType, nn.Rngs], StateActionValueDecoderType
+    [EmbeddingType, ActionType, nnx.Rngs], StateActionValueDecoderType
 ]
-StateValueDecoderDef = Callable[[EmbeddingType, nn.Rngs], StateValueDecoderType]
-PolicyDecoderDef = Callable[[EmbeddingType, ActionType, nn.Rngs], PolicyDecoderDef]
+StateValueDecoderDef = Callable[[EmbeddingType, nnx.Rngs], StateValueDecoderType]
+PolicyDecoderDef = Callable[[EmbeddingType, ActionType, nnx.Rngs], PolicyDecoderDef]
 
 
-class StateActionCritic(nn.Module):
+class StateActionCritic(nnx.Module):
     def __init__(
         self,
         observation: ObsType,
         action: ActionType,
         encoder_def: EncoderDef,
         decoder_def: StateActionDecoderDef,
-        rngs: nn.Rngs,
+        rngs: nnx.Rngs,
     ):
         self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
@@ -69,13 +69,13 @@ class StateActionCritic(nn.Module):
         return q
 
 
-class StateValue(nn.Module):
+class StateValue(nnx.Module):
     def __init__(
         self,
         observation: ObsType,
         encoder_def: EncoderDef,
         decoder_def: StateValueDecoderDef,
-        rngs: nn.Rngs,
+        rngs: nnx.Rngs,
     ):
         self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
@@ -90,14 +90,14 @@ class StateValue(nn.Module):
         return v
 
 
-class Policy(nn.Module):
+class Policy(nnx.Module):
     def __init__(
         self,
         observation: ObsType,
         action: ActionType,
         encoder_def: EncoderDef,
         decoder_def: PolicyDecoderDef,
-        rngs: nn.Rngs,
+        rngs: nnx.Rngs,
     ):
         self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
