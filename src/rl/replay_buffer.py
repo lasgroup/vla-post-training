@@ -1,0 +1,465 @@
+from typing import Union
+from typing import Iterable, Optional, Any, Callable
+import jax
+import gymnasium as gym
+import numpy as np
+import pickle
+
+import copy
+
+from src.rl.dataset import Dataset, DatasetDict
+import collections
+from flax.core import frozen_dict
+
+# Type alias for clarity
+NestedData = Any  # Can be Dict, List, Tuple, etc. containing Arrays
+
+
+def _init_replay_dict(
+    obs_space: gym.Space, capacity: int
+) -> Union[np.ndarray, DatasetDict]:
+    if isinstance(obs_space, gym.spaces.Box):
+        return np.empty((capacity, *obs_space.shape), dtype=obs_space.dtype)
+    elif isinstance(obs_space, gym.spaces.Dict):
+        data_dict = {}
+        for k, v in obs_space.spaces.items():
+            data_dict[k] = _init_replay_dict(v, capacity)
+        return data_dict
+    else:
+        raise TypeError()
+
+
+class ReplayBuffer(Dataset):
+
+    def __init__(
+        self,
+        observation_space: gym.Space,
+        action_space: gym.Space,
+        capacity: int,
+    ):
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.capacity = capacity
+
+        print("making replay buffer of capacity ", self.capacity)
+
+        observations = _init_replay_dict(self.observation_space, self.capacity)
+        next_observations = _init_replay_dict(self.observation_space, self.capacity)
+        actions = np.empty(
+            (self.capacity, *self.action_space.shape), dtype=self.action_space.dtype
+        )
+        next_actions = np.empty(
+            (self.capacity, *self.action_space.shape), dtype=self.action_space.dtype
+        )
+        rewards = np.empty((self.capacity,), dtype=np.float32)
+        masks = np.empty((self.capacity,), dtype=np.float32)
+        discount = np.empty((self.capacity,), dtype=np.float32)
+
+        self.data = {
+            "observations": observations,
+            "next_observations": next_observations,
+            "actions": actions,
+            "next_actions": next_actions,
+            "rewards": rewards,
+            "masks": masks,
+            "discount": discount,
+        }
+
+        self.size = 0
+        self._traj_counter = 0
+        self._start = 0
+        self.traj_bounds = dict()
+        self.streaming_buffer_size = None  # this is for streaming the online data
+
+    def __len__(self) -> int:
+        return self.size
+
+    def length(self) -> int:
+        return self.size
+
+    def increment_traj_counter(self):
+        self.traj_bounds[self._traj_counter] = (self._start, self.size)  # [start, end)
+        self._start = self.size
+        self._traj_counter += 1
+
+    def get_random_trajs(self, num_trajs: int):
+        self.which_trajs = np.random.randint(0, self._traj_counter, num_trajs)
+        observations_list = []
+        next_observations_list = []
+        actions_list = []
+        rewards_list = []
+        terminals_list = []
+        masks_list = []
+
+        for i in self.which_trajs:
+            start, end = self.traj_bounds[i]
+
+            # handle this as a dictionary
+            obs_dict_curr_traj = dict()
+            for k in self.data["observations"]:
+                obs_dict_curr_traj[k] = self.data["observations"][k][start:end]
+            observations_list.append(obs_dict_curr_traj)
+
+            next_obs_dict_curr_traj = dict()
+            for k in self.data["next_observations"]:
+                next_obs_dict_curr_traj[k] = self.data["next_observations"][k][
+                    start:end
+                ]
+            next_observations_list.append(next_obs_dict_curr_traj)
+
+            actions_list.append(self.data["actions"][start:end])
+            rewards_list.append(self.data["rewards"][start:end])
+            terminals_list.append(1 - self.data["masks"][start:end])
+            masks_list.append(self.data["masks"][start:end])
+
+        batch = {
+            "observations": observations_list,
+            "next_observations": next_observations_list,
+            "actions": actions_list,
+            "rewards": rewards_list,
+            "terminals": terminals_list,
+            "masks": masks_list,
+        }
+        return batch
+
+    def insert(self, data_dict: DatasetDict):
+        if self.size == self.capacity:
+            # Double the capacity
+            observations = _init_replay_dict(self.observation_space, self.capacity)
+            next_observations = _init_replay_dict(self.observation_space, self.capacity)
+            actions = np.empty(
+                (self.capacity, *self.action_space.shape), dtype=self.action_space.dtype
+            )
+            next_actions = np.empty(
+                (self.capacity, *self.action_space.shape), dtype=self.action_space.dtype
+            )
+            rewards = np.empty((self.capacity,), dtype=np.float32)
+            masks = np.empty((self.capacity,), dtype=np.float32)
+            discount = np.empty((self.capacity,), dtype=np.float32)
+
+            data_new = {
+                "observations": observations,
+                "next_observations": next_observations,
+                "actions": actions,
+                "next_actions": next_actions,
+                "rewards": rewards,
+                "masks": masks,
+                "discount": discount,
+            }
+
+            for x in data_new:
+                if isinstance(self.data[x], np.ndarray):
+                    self.data[x] = np.concatenate((self.data[x], data_new[x]), axis=0)
+                elif isinstance(self.data[x], dict):
+                    for y in self.data[x]:
+                        self.data[x][y] = np.concatenate(
+                            (self.data[x][y], data_new[x][y]), axis=0
+                        )
+                else:
+                    raise TypeError()
+            self.capacity *= 2
+
+        for x in data_dict:
+            if x in self.data:
+                if isinstance(data_dict[x], dict):
+                    for y in data_dict[x]:
+                        self.data[x][y][self.size] = data_dict[x][y]
+                else:
+                    self.data[x][self.size] = data_dict[x]
+        self.size += 1
+
+    def compute_action_stats(self):
+        # Only compute stats over populated transitions.
+        actions = self.data["actions"][: self.size]
+        return {"mean": actions.mean(axis=0), "std": actions.std(axis=0)}
+
+    def normalize_actions(self, action_stats):
+        # do not normalize gripper dimension (last dimension)
+        # Avoid mutating the caller's dict.
+        action_stats = copy.deepcopy(action_stats)
+        action_stats["mean"][-1] = 0
+        action_stats["std"][-1] = 1
+        self.data["actions"] = (
+            self.data["actions"] - action_stats["mean"]
+        ) / action_stats["std"]
+        self.data["next_actions"] = (
+            self.data["next_actions"] - action_stats["mean"]
+        ) / action_stats["std"]
+
+    def sample(
+        self,
+        batch_size: int,
+        keys: Optional[Iterable[str]] = None,
+        indx: Optional[np.ndarray] = None,
+    ) -> frozen_dict.FrozenDict:
+        if self.streaming_buffer_size:
+            indices = np.random.randint(0, self.streaming_buffer_size, batch_size)
+        else:
+            indices = np.random.randint(0, self.size, batch_size)
+        data_dict = {}
+        for x in self.data:
+            if isinstance(self.data[x], np.ndarray):
+                data_dict[x] = self.data[x][indices]
+            elif isinstance(self.data[x], dict):
+                data_dict[x] = {}
+                for y in self.data[x]:
+                    data_dict[x][y] = self.data[x][y][indices]
+            else:
+                raise TypeError()
+
+        return frozen_dict.freeze(data_dict)
+
+    def sample_with_indices(
+        self,
+        batch_size: int,
+        keys: Optional[Iterable[str]] = None,
+        indx: Optional[np.ndarray] = None,
+    ) -> tuple[frozen_dict.FrozenDict, np.ndarray]:
+        if self.streaming_buffer_size:
+            indices = np.random.randint(0, self.streaming_buffer_size, batch_size)
+        else:
+            indices = np.random.randint(0, self.size, batch_size)
+        data_dict = {}
+        for x in self.data:
+            if isinstance(self.data[x], np.ndarray):
+                data_dict[x] = self.data[x][indices]
+            elif isinstance(self.data[x], dict):
+                data_dict[x] = {}
+                for y in self.data[x]:
+                    data_dict[x][y] = self.data[x][y][indices]
+            else:
+                raise TypeError()
+        return frozen_dict.freeze(data_dict), indices
+
+    def get_iterator(
+        self,
+        batch_size: int,
+        keys: Optional[Iterable[str]] = None,
+        indx: Optional[np.ndarray] = None,
+        queue_size: int = 2,
+    ):
+        # See https://flax.readthedocs.io/en/latest/_modules/flax/jax_utils.html#prefetch_to_device
+        # queue_size = 2 should be ok for one GPU.
+
+        queue = collections.deque()
+
+        def enqueue(n):
+            for _ in range(n):
+                data = self.sample(batch_size, keys, indx)
+                queue.append(jax.device_put(data))
+
+        enqueue(queue_size)
+        while queue:
+            yield queue.popleft()
+            enqueue(1)
+
+    def get_iterator_with_indices(
+        self,
+        batch_size: int,
+        keys: Optional[Iterable[str]] = None,
+        indx: Optional[np.ndarray] = None,
+        queue_size: int = 2,
+    ):
+        queue = collections.deque()
+
+        def enqueue(n):
+            for _ in range(n):
+                data, indices = self.sample_with_indices(batch_size, keys, indx)
+                queue.append((jax.device_put(data), indices))
+
+        enqueue(queue_size)
+        while queue:
+            yield queue.popleft()
+            enqueue(1)
+
+    def save(self, filename):
+        save_dict = dict(
+            data=self.data,
+            size=self.size,
+            _traj_counter=self._traj_counter,
+            _start=self._start,
+            traj_bounds=self.traj_bounds,
+        )
+        with open(filename, "wb") as f:
+            pickle.dump(save_dict, f, protocol=4)
+
+    def restore(self, filename):
+        # `save()` uses pickle, so restore must read via pickle too.
+        with open(filename, "rb") as f:
+            save_dict = pickle.load(f)
+
+        self.data = save_dict["data"]
+        self.size = int(save_dict["size"])
+        self._traj_counter = int(save_dict["_traj_counter"])
+        self._start = int(save_dict["_start"])
+        self.traj_bounds = save_dict["traj_bounds"]
+
+        # Keep capacity in sync with the underlying storage.
+        def _capacity_from_storage(storage: NestedData) -> int:
+            if isinstance(storage, np.ndarray):
+                return int(storage.shape[0])
+            if isinstance(storage, dict):
+                # Grab first leaf deterministically.
+                for v in storage.values():
+                    return _capacity_from_storage(v)
+            raise TypeError(f"Unsupported storage type: {type(storage)}")
+
+        self.capacity = _capacity_from_storage(self.data["actions"])
+
+
+class ShardedReplayBuffer:
+    def __init__(
+        self,
+        dummy_data: NestedData,
+        max_capacity: int,
+        batch_size: int,
+        data_sharding: jax.sharding.NamedSharding | None = None,
+        seed: Optional[int] = None,
+        preprocess_fn: Callable[[NestedData], NestedData] | None = None,
+        postprocess_fn: Callable[[NestedData], Any] | None = None,
+        freeze_dict: bool = True,
+    ):
+        """
+        Args:
+            dummy_data: A sample dictionary to define shapes/dtypes.
+            max_capacity: Total number of transitions to store in RAM.
+            batch_size: The global batch size for sampling.
+            data_sharding: JAX sharding spec for the output batches.
+        """
+        self.max_capacity = max_capacity
+        self.batch_size = batch_size
+        self.data_sharding = data_sharding
+        self.ptr = 0
+        self.size = 0
+        self._preprocess_fn = preprocess_fn
+        self._postprocess_fn = postprocess_fn
+        self._freeze_dict = freeze_dict
+
+        # 1. Pre-allocate the entire buffer in Host RAM (NumPy)
+        # This prevents memory fragmentation during long training runs.
+        # 1. Pre-allocate storage preserving the nested structure
+        # We define a helper to create a zero-buffer for a single leaf array
+        def create_buffer(leaf_array):
+            # leaf_array shape: (batch, features...) -> storage shape: (capacity, features...)
+            buffer_shape = (max_capacity,) + leaf_array.shape[1:]
+            return np.zeros(buffer_shape, dtype=leaf_array.dtype)
+
+        # jax.tree_util.tree_map automatically traverses the dict/list structure
+        # and applies `create_buffer` to every array found at the bottom.
+        self.storage = jax.tree_util.tree_map(create_buffer, dummy_data)
+        self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
+            self.storage
+        )
+
+        # Seeding
+        self._rng = np.random.default_rng(seed)
+
+    def insert(self, data: NestedData):
+        """
+        Inserts nested data into the buffer.
+        Assumes data structure matches the initialized dummy_data.
+        """
+        if self._preprocess_fn is not None:
+            data = self._preprocess_fn(data)
+        data_leaves, data_treedef = jax.tree_util.tree_flatten(data)
+
+        # Sanity check: ensure structures match
+        if self._storage_treedef != data_treedef:
+            raise ValueError("Insert data structure does not match buffer structure")
+
+        # Get the number of new items from the first leaf
+        num_new = int(data_leaves[0].shape[0])
+        if num_new <= 0:
+            return
+
+        # Calculate circular buffer indices
+        indices = (np.arange(self.ptr, self.ptr + num_new) % self.max_capacity).astype(
+            np.int32
+        )
+
+        # Update every leaf array in the storage
+        for storage_leaf, new_data_leaf in zip(self._storage_leaves, data_leaves):
+            storage_leaf[indices] = new_data_leaf
+
+        # Update pointers
+        self.ptr = int((self.ptr + num_new) % self.max_capacity)
+        self.size = int(min(self.size + num_new, self.max_capacity))
+
+    def sample(self) -> NestedData:
+        """
+        Samples a nested batch and shards every leaf.
+        """
+        if self.size == 0:
+            raise ValueError("Cannot sample from an empty buffer")
+        # if self.size < self.batch_size:
+        #    # Fallback or error if not enough data yet
+        #    # For simplicity, we sample with replacement if buffer is tiny,
+        #    # or you can just return partial batches (requires care in training loop)
+        #    indices = self._rng.integers(0, self.size, size=self.batch_size)
+        # else:
+        indices = self._rng.integers(0, self.size, size=self.batch_size)
+
+        def fetch_and_shard(buffer_leaf):
+            batch_slice = buffer_leaf[indices]
+            return (
+                jax.device_put(batch_slice, self.data_sharding)
+                if self.data_sharding
+                else batch_slice
+            )
+
+        leaves = [fetch_and_shard(leaf) for leaf in self._storage_leaves]
+        batch = self._storage_treedef.unflatten(leaves)
+
+        if self._postprocess_fn is not None:
+            return self._postprocess_fn(batch)
+        if self._freeze_dict and isinstance(batch, dict):
+            return frozen_dict.freeze(batch)
+        return batch
+
+    def __len__(self):
+        return self.size
+
+
+if __name__ == "__main__":
+    # 1. Complex Nested Structure (Dicts of Dicts of Arrays)
+    dummy_data = {
+        "observations": {
+            "camera_front": np.zeros((1, 64, 64, 3), dtype=np.uint8),
+            "camera_wrist": np.zeros((1, 64, 64, 3), dtype=np.uint8),
+            "proprioception": {
+                "joints": np.zeros((1, 7), dtype=np.float32),
+                "gripper": np.zeros((1, 1), dtype=np.float32),
+            },
+        },
+        "actions": np.zeros((1, 7), dtype=np.float32),
+        "rewards": np.zeros((1, 1), dtype=np.float32),
+    }
+
+    # 2. Initialize
+    buffer = ShardedReplayBuffer(
+        dummy_data=dummy_data, max_capacity=100_000, batch_size=256, data_sharding=None
+    )
+
+    # 3. Insert Nested Data
+    # (Assuming `get_step()` returns a dict matching the structure above)
+    fake_data = {
+        "observations": {
+            "camera_front": np.zeros((256, 64, 64, 3), dtype=np.uint8),
+            "camera_wrist": np.zeros((256, 64, 64, 3), dtype=np.uint8),
+            "proprioception": {
+                "joints": np.zeros((256, 7), dtype=np.float32),
+                "gripper": np.zeros((256, 1), dtype=np.float32),
+            },
+        },
+        "actions": np.zeros((256, 7), dtype=np.float32),
+        "rewards": np.zeros((256, 1), dtype=np.float32),
+    }
+    buffer.insert(fake_data)
+
+    # 4. Sample
+    # `batch` will have the exact same structure as `dummy_data`,
+    # but every leaf will be a Sharded JAX Array of size 256.
+    batch = buffer.sample()
+
+    print(batch["observations"]["proprioception"]["joints"].shape)
+    # Output: (256, 7) on device
