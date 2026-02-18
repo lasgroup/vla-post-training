@@ -10,7 +10,13 @@ from openpi.training import config as _config
 
 def init_logging():
     """Custom logging format for better readability."""
-    level_mapping = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
+    level_mapping = {
+        "DEBUG": "D",
+        "INFO": "I",
+        "WARNING": "W",
+        "ERROR": "E",
+        "CRITICAL": "C",
+    }
 
     class CustomFormatter(logging.Formatter):
         def format(self, record):
@@ -27,7 +33,13 @@ def init_logging():
     logger.handlers[0].setFormatter(formatter)
 
 
-def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = False, enabled: bool = True):
+def init_wandb(
+    config: _config.TrainConfig,
+    *,
+    resuming: bool,
+    log_code: bool = False,
+    enabled: bool = True,
+):
     if not enabled:
         wandb.init(mode="disabled")
         return
@@ -52,7 +64,12 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
 
 def log_images(batch):
     images_to_log = [
-        wandb.Image(np.concatenate([(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()], axis=1))
+        wandb.Image(
+            np.concatenate(
+                [(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()],
+                axis=1,
+            )
+        )
         for i in range(min(5, len(next(iter(batch[0].images.values())))))
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
