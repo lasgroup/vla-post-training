@@ -12,7 +12,7 @@ from src.rl.networks import MLP
 from src.rl.networks.constants import default_init
 
 
-class LearnedStdNormalPolicy(nn.Module):
+class LearnedStdNormalPolicyDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
@@ -83,7 +83,7 @@ class TanhMultivariateNormalDiag(tfd.TransformedDistribution):
         return self.bijector.forward(self.distribution.mode())
 
 
-class LearnedStdTanhNormalPolicy(nn.Module):
+class LearnedStdTanhNormalPolicyDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,

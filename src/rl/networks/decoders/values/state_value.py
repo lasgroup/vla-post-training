@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from src.rl.networks.mlp import MLP
 
 
-class StateValue(nn.Module):
+class StateValueDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
@@ -26,7 +26,7 @@ class StateValue(nn.Module):
         return jnp.squeeze(critic, -1)
 
 
-class StateValueEnsemble(nn.Module):
+class StateValueEnsembleDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
@@ -37,7 +37,7 @@ class StateValueEnsemble(nn.Module):
         @nn.split_rngs(splits=num_vs)
         @nn.vmap(out_axes=0, in_axes=0)
         def create_critic(rgs):
-            return StateValue(
+            return StateValueDecoder(
                 observation=observation,
                 hidden_dims=hidden_dims,
                 activations=activations,

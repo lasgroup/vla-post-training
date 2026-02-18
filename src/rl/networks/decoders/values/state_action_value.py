@@ -18,7 +18,7 @@ PrecisionLike = Union[None, str, jax.lax.Precision, Tuple[str, str],
 Tuple[jax.lax.Precision, jax.lax.Precision]]
 
 
-class StateActionValue(nn.Module):
+class StateActionValueDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
@@ -46,7 +46,7 @@ class StateActionValue(nn.Module):
         return jnp.squeeze(critic, -1)
 
 
-class StateActionEnsemble(nn.Module):
+class StateActionEnsembleDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
@@ -58,7 +58,7 @@ class StateActionEnsemble(nn.Module):
         @nn.split_rngs(splits=num_qs)
         @nn.vmap(out_axes=0, in_axes=0)
         def create_critic(rgs):
-            return StateActionValue(
+            return StateActionValueDecoder(
                 observation=observation,
                 action=action,
                 hidden_dims=hidden_dims,

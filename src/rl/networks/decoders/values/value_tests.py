@@ -2,8 +2,8 @@ import sys
 import pytest
 import jax.numpy as jnp
 import flax.nnx as nn
-from state_action_value import StateActionValue, StateActionEnsemble
-from state_value import StateValue, StateValueEnsemble
+from state_action_value import StateActionValueDecoder, StateActionEnsembleDecoder
+from state_value import StateValueDecoder, StateValueEnsembleDecoder
 
 # ==========================================
 # 3. TEST SUITE
@@ -17,7 +17,7 @@ def test_state_action_value_shape():
     dummy_obs = jnp.zeros(10)
     dummy_act = jnp.zeros(2)
 
-    net = StateActionValue(
+    net = StateActionValueDecoder(
         observation=dummy_obs,
         action=dummy_act,
         hidden_dims=[32, 32], rngs=rngs)
@@ -37,7 +37,7 @@ def test_state_action_ensemble_shape():
     num_qs = 5
     dummy_obs = jnp.zeros(10)
     dummy_act = jnp.zeros(2)
-    net = StateActionEnsemble(
+    net = StateActionEnsembleDecoder(
         observation=dummy_obs,
         action=dummy_act,
         hidden_dims=[32, 32], num_qs=num_qs, rngs=rngs)
@@ -53,7 +53,7 @@ def test_state_action_ensemble_shape():
 def test_state_value_shape():
     """Test single V-function output shape."""
     dummy_obs = jnp.zeros(10)
-    net = StateValue(observation=dummy_obs, hidden_dims=[32], rngs=rngs)
+    net = StateValueDecoder(observation=dummy_obs, hidden_dims=[32], rngs=rngs)
 
     obs = jnp.zeros((3, 10))
     out = net(obs)
@@ -66,7 +66,7 @@ def test_state_value_ensemble_shape():
     """Test V-Ensemble output shape."""
     num_vs = 3
     dummy_obs = jnp.zeros(10)
-    net = StateValueEnsemble(
+    net = StateValueEnsembleDecoder(
         observation=dummy_obs,
         hidden_dims=[32], num_vs=num_vs, rngs=rngs)
 

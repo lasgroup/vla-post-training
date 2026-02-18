@@ -12,7 +12,7 @@ from src.rl.networks import MLP
 from src.rl.networks.constants import default_init, xavier_init
 
 
-class NormalPolicy(nn.Module):
+class NormalPolicyDecoder(nn.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,

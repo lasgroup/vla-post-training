@@ -1,8 +1,8 @@
 import jax
 import jax.numpy as jnp
 import flax.nnx as nn
-from normal_policy import NormalPolicy
-from learned_std_normal_policy import LearnedStdTanhNormalPolicy, LearnedStdNormalPolicy
+from normal_policy import NormalPolicyDecoder
+from learned_std_normal_policy import LearnedStdTanhNormalPolicyDecoder, LearnedStdNormalPolicyDecoder
 
 
 def test_policies():
@@ -27,7 +27,7 @@ def test_policies():
     # Test 1: NormalPolicy (Fixed Std)
     # ---------------------------------------------------------
     print("\n[1/3] Testing NormalPolicy...")
-    policy_1 = NormalPolicy(
+    policy_1 = NormalPolicyDecoder(
         observation=dummy_obs,
         action=dummy_action,
         hidden_dims=hidden_dims,
@@ -59,7 +59,7 @@ def test_policies():
     # Test 2: LearnedStdNormalPolicy
     # ---------------------------------------------------------
     print("\n[2/3] Testing LearnedStdNormalPolicy...")
-    policy_2 = LearnedStdNormalPolicy(
+    policy_2 = LearnedStdNormalPolicyDecoder(
         observation=dummy_obs,
         action=dummy_action,
         hidden_dims=hidden_dims,
@@ -89,7 +89,7 @@ def test_policies():
     low_limit = -2.0
     high_limit = 2.0
 
-    policy_3 = LearnedStdTanhNormalPolicy(
+    policy_3 = LearnedStdTanhNormalPolicyDecoder(
         observation=dummy_obs,
         action=dummy_action,
         hidden_dims=hidden_dims,
