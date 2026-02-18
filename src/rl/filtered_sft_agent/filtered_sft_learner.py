@@ -194,7 +194,8 @@ def init_train_state(
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-
+        # TODO(Marco Bagatella): Add a link to the Pi paper where they tell why should we have the action filter
+        self.post_step_action_filter = lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
                 f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
@@ -801,7 +802,9 @@ class FilteredSFTLearner(Agent):
                     "Cannot construct transitions: current observation is missing state."
                 )
 
-            frame["actions"] = np.asarray(actions, dtype=np.float32)
+            frame["actions"] = self.post_step_action_filter(
+                np.asarray(actions, dtype=np.float32)
+            )
             next_state = frame["state"]
             if next_obs is not None:
                 next_obs = _extract_policy_obs(next_obs)
