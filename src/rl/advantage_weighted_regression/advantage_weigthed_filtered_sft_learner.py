@@ -2,7 +2,6 @@
 import functools
 from typing import Any
 
-import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 
@@ -10,13 +9,14 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 from src.rl.advantage_weighted_regression.update_critic import (
-    StateActionValueCritic,
-    StateValueCritic,
-    critic_hidden_dims,
-    init_critic_train_state,
+    init_state_action_critic_train_state,
+    init_state_value_train_state,
     train_q_step,
     train_value_step,
+    StateActionCriticDef,
+    StateValueDef
 )
+from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.legacy_filtered_sft_agent.legacy_filtered_sft_learner import (
     LegacyFilteredSFTLearner,
 )
@@ -24,40 +24,34 @@ from src.training.config import OnlineTrainConfig
 
 
 class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
-    def __init__(self, config: OnlineTrainConfig):
+    def __init__(self,
+                 config: OnlineTrainConfig,
+                 dummy_obs: ObsType,
+                 dummy_act: ActionType,
+                 state_action_critic_def: StateActionCriticDef,
+                 state_value_def: StateValueDef,
+                 ):
         super().__init__(config)
         self._critic_updates_per_step = self._get_critic_updates_per_step()
 
-        obs_spec, action_spec = self._config.model.inputs_spec(batch_size=1)
-        state_dim = int(obs_spec.state.shape[-1])
-        action_horizon = int(action_spec.shape[-2])
-        action_dim = int(action_spec.shape[-1])
-        hidden_dims = critic_hidden_dims(self._config)
-
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
-            init_critic_train_state(
+            init_state_action_critic_train_state(
                 self._config,
                 q_init_rng,
                 self._mesh,
-                critic_factory=lambda rng: StateActionValueCritic(
-                    state_dim=state_dim,
-                    action_horizon=action_horizon,
-                    action_dim=action_dim,
-                    hidden_dims=hidden_dims,
-                    rngs=nnx.Rngs(rng),
-                ),
+                critic_def=state_action_critic_def,
+                dummy_obs=dummy_obs,
+                dummy_act=dummy_act
             )
         )
-        self._value_state, self._value_state_sharding = init_critic_train_state(
+
+        self._value_state, self._value_state_sharding = init_state_value_train_state(
             self._config,
             v_init_rng,
             self._mesh,
-            critic_factory=lambda rng: StateValueCritic(
-                state_dim=state_dim,
-                hidden_dims=hidden_dims,
-                rngs=nnx.Rngs(rng),
-            ),
+            critic_def=state_value_def,
+            dummy_obs=dummy_obs,
         )
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
@@ -97,10 +91,11 @@ class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
     def _online_batch_to_critic_batch(self, online_batch: dict[str, Any]) -> tuple[
         _model.Observation,
         _model.Actions,
+        _model.Observation,
         at.Float[at.Array, "b s"],
         at.Float[at.Array, " b"],
-        at.Float[at.Array, " b"],
     ]:
+        # TODO: This requires some fixing since we pass the full raw observation to the critic now
         online_observation = online_batch["observation"]
         observation_dict: dict[str, Any] = {
             "image": dict(online_observation["image"]),

@@ -15,14 +15,19 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig
+from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic, StateValue
 
 CriticBatch = tuple[
     _model.Observation,
     _model.Actions,
-    at.Float[at.Array, "b s"],
+    _model.Observation,
+    at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
 ]
+
+StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
+StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
@@ -38,21 +43,10 @@ def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
     return config.ema_decay
 
 
-def critic_hidden_dims(config: OnlineTrainConfig) -> tuple[int, ...]:
-    rl_config = getattr(config, "rl", None)
-    hidden_dims = getattr(rl_config, "critic_hidden_dims", (256, 256))
-    if isinstance(hidden_dims, int):
-        hidden_dims = (hidden_dims,)
-    hidden_dims = tuple(int(dim) for dim in hidden_dims)
-    if not hidden_dims:
-        raise ValueError("critic_hidden_dims must have at least one hidden layer.")
-    return hidden_dims
-
-
 def create_critic(
     critic_state: training_utils.TrainState,
     config: OnlineTrainConfig,
-) -> nnx.Module:
+) -> StateActionCritic | StateValue:
     critic_params = critic_state.params
     if critic_state.ema_params is not None and _use_ema_critic(config):
         critic_params = critic_state.ema_params
@@ -69,91 +63,41 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
     return values
 
 
-class _MLPRegressor(nnx.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: Sequence[int],
-        *,
-        rngs: nnx.Rngs,
-    ):
-        layers = []
-        prev_dim = int(input_dim)
-        for hidden_dim in hidden_dims:
-            hidden_dim = int(hidden_dim)
-            layers.append(nnx.Linear(prev_dim, hidden_dim, rngs=rngs))
-            prev_dim = hidden_dim
-        self.layers = layers
-        self.output = nnx.Linear(prev_dim, 1, rngs=rngs)
-
-    @at.typecheck
-    def __call__(
-        self, inputs: at.Float[at.ArrayLike, "b d"]
-    ) -> at.Float[at.Array, " b"]:
-        x = jnp.asarray(inputs, dtype=jnp.float32)
-        for layer in self.layers:
-            x = jax.nn.silu(layer(x))
-        x = self.output(x)
-        return jnp.squeeze(x, axis=-1)
+@at.typecheck
+def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, " b"]:
+    critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
+    # using an ensemble of critics
+    if critic_values.ndim > 2:
+        # Take min across the ensemble members
+        # TODO: Add different summarization options such as sampling or mean
+        critic_values = jnp.min(critic_values, axis=0)
+    return _as_scalar_batch(critic_values)
 
 
-class StateValueCritic(nnx.Module):
-    def __init__(
-        self,
-        *,
-        state_dim: int,
-        hidden_dims: Sequence[int],
-        rngs: nnx.Rngs,
-    ):
-        self.mlp = _MLPRegressor(state_dim, hidden_dims, rngs=rngs)
-
-    @at.typecheck
-    def __call__(
-        self, observation: _model.Observation
-    ) -> at.Float[at.Array, " b"]:
-        return self.mlp(jnp.asarray(observation.state, dtype=jnp.float32))
+@at.typecheck
+def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, " b"]:
+    return values.reshape((values.shape[0], -1))
 
 
-class StateActionValueCritic(nnx.Module):
-    def __init__(
-        self,
-        *,
-        state_dim: int,
-        action_horizon: int,
-        action_dim: int,
-        hidden_dims: Sequence[int],
-        rngs: nnx.Rngs,
-    ):
-        self.mlp = _MLPRegressor(
-            state_dim + action_horizon * action_dim,
-            hidden_dims,
-            rngs=rngs,
-        )
-
-    @at.typecheck
-    def __call__(
-        self, observation: _model.Observation, actions: _model.Actions
-    ) -> at.Float[at.Array, " b"]:
-        state = jnp.asarray(observation.state, dtype=jnp.float32)
-        actions = jnp.asarray(actions, dtype=jnp.float32)
-        flattened_actions = actions.reshape((actions.shape[0], -1))
-        return self.mlp(jnp.concatenate([state, flattened_actions], axis=-1))
-
-
-def init_critic_train_state(
+def init_state_action_critic_train_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
     mesh: jax.sharding.Mesh,
     *,
-    critic_factory: Callable[[at.KeyArrayLike], nnx.Module],
+    critic_def: StateActionCriticDef,
+    dummy_obs: ObsType,
+    dummy_act: ActionType,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
+    # flatten the array across the array dim
+    dummy_act = flatten_action_horizon(dummy_act)
+    dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
 
-    def init(rng: at.KeyArrayLike) -> training_utils.TrainState:
-        critic = critic_factory(rng)
+    def init(obs, act, rng) -> training_utils.TrainState:
+        critic = critic_def(obs, act, rng)
         params = nnx.state(critic)
         return training_utils.TrainState(
             step=0,
@@ -165,7 +109,7 @@ def init_critic_train_state(
             ema_params=None if ema_decay is None else params,
         )
 
-    train_state_shape = jax.eval_shape(init, init_rng)
+    train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
     replicated_sharding = jax.sharding.NamedSharding(
         mesh, jax.sharding.PartitionSpec()
@@ -174,7 +118,46 @@ def init_critic_train_state(
         init,
         in_shardings=replicated_sharding,
         out_shardings=state_sharding,
-    )(init_rng)
+    )(dummy_obs, dummy_act, init_rng)
+    return train_state, state_sharding
+
+
+def init_state_value_train_state(
+    config: OnlineTrainConfig,
+    init_rng: at.KeyArrayLike,
+    mesh: jax.sharding.Mesh,
+    *,
+    critic_def: StateValueDef,
+    dummy_obs: ObsType,
+) -> tuple[training_utils.TrainState, Any]:
+    tx = _optimizer.create_optimizer(
+        config.optimizer, config.lr_schedule, weight_decay_mask=None
+    )
+    ema_decay = _critic_ema_decay(config)
+
+    def init(obs, rng) -> training_utils.TrainState:
+        critic = critic_def(obs, rng)
+        params = nnx.state(critic)
+        return training_utils.TrainState(
+            step=0,
+            params=params,
+            model_def=nnx.graphdef(critic),
+            tx=tx,
+            opt_state=tx.init(nnx.filter_state(params, nnx.Param)),
+            ema_decay=ema_decay,
+            ema_params=None if ema_decay is None else params,
+        )
+
+    train_state_shape = jax.eval_shape(init, dummy_obs, init_rng)
+    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
+    replicated_sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec()
+    )
+    train_state = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
+    )(dummy_obs, init_rng)
     return train_state, state_sharding
 
 
@@ -225,17 +208,6 @@ def _kernel_param_norm(model: nnx.Module) -> at.Float[at.Array, ""]:
 
 
 @at.typecheck
-def _next_observation(
-    observation: _model.Observation,
-    next_state: at.Float[at.ArrayLike, "b s"],
-) -> _model.Observation:
-    return dataclasses.replace(
-        observation,
-        state=jnp.asarray(next_state, dtype=jnp.float32),
-    )
-
-
-@at.typecheck
 def train_q_step(
     config: OnlineTrainConfig,
     rng: at.KeyArrayLike,
@@ -249,25 +221,27 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
 
-    observation, actions, next_state, reward, discount = batch
+    observation, actions, next_observation, reward, discount = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
+    actions = flatten_action_horizon(actions)
 
     @at.typecheck
     def loss_fn(
-        critic_model: nnx.Module,
+        critic_model: StateActionCritic,
         observation: _model.Observation,
         actions: _model.Actions,
-        next_state: at.Float[at.ArrayLike, "b s"],
+        next_observation: _model.Observation,
         reward: at.Float[at.ArrayLike, " b"],
         discount: at.Float[at.ArrayLike, " b"],
-        target_value_model: nnx.Module,
+        target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        q_values = _as_scalar_batch(critic_model(observation, actions))
-        bootstrapped_values = _as_scalar_batch(
-            target_value_model(_next_observation(observation, next_state))
+
+        q_values = summarize_critic_values(critic_model(observation, actions))
+        bootstrapped_values = summarize_critic_values(
+            target_value_model(next_observation)
         )
-        td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
+        td_targets = reward +  discount * jax.lax.stop_gradient(bootstrapped_values)
         td_errors = q_values - td_targets
         loss = jnp.mean(jnp.square(td_errors))
         return loss, {
@@ -283,7 +257,7 @@ def train_q_step(
         q_model,
         observation,
         actions,
-        next_state,
+        next_observation,
         reward,
         discount,
         value_model,
@@ -311,17 +285,17 @@ def train_value_step(
     q_model = create_critic(q_state, config)
     q_model.eval()
 
-    observation, actions, _, _, _ = batch
+    observation, actions, _, _, _, _ = batch
 
     @at.typecheck
     def loss_fn(
-        critic_model: nnx.Module,
+        critic_model: StateValue,
         observation: _model.Observation,
         actions: _model.Actions,
-        target_q_model: nnx.Module,
+        target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        values = _as_scalar_batch(critic_model(observation))
-        q_values = _as_scalar_batch(target_q_model(observation, actions))
+        values = summarize_critic_values(critic_model(observation))
+        q_values = summarize_critic_values(target_q_model(observation, actions))
         q_targets = jax.lax.stop_gradient(q_values)
         errors = values - q_targets
         loss = jnp.mean(jnp.square(errors))
