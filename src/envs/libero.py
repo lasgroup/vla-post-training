@@ -35,6 +35,11 @@ def get_libero_warm_start_action():
 
 def make_env_libero(config, discount: float = 0.99):
     env_args_multitask = []
+    max_steps_multitask = []
+    initial_states_multitask = []
+    warm_start_action_multitask = []
+    task_descriptions = []
+
     for task in config.collect.tasks:
         if not task.startswith("libero_"):
             raise ValueError(f"Unexpected task {task} in config.collect.tasks. Expected tasks to start with 'libero_'.")
@@ -53,7 +58,12 @@ def make_env_libero(config, discount: float = 0.99):
             "camera_heights": config.collect.env_resolution,
             "camera_widths": config.collect.env_resolution,
         }
+
         env_args_multitask.append(env_args)
+        max_steps_multitask.append(max_steps)
+        initial_states_multitask.append(initial_states)
+        warm_start_action_multitask.append(warm_start_action)
+        task_descriptions.append(task_description)
 
     env_factories = []
     num_envs_multitask = len(config.collect.tasks) 
@@ -66,24 +76,24 @@ def make_env_libero(config, discount: float = 0.99):
             # Converts gym envs to gymnasium style envs
             base_env = ensure_gymnasium_env(base_env)
             # Sets initial states for the environment
-            base_env = SetInitialStateWrapper(base_env, initial_states=initial_states)
+            base_env = SetInitialStateWrapper(base_env, initial_states=initial_states_multitask[rank])
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class="libero",
-                task_description=task_description,
+                task_description=task_descriptions[rank],
                 add_states=config.collect.add_states
             )
             # Warm ups upon reset
             base_env = WarmUpOnResetWrapper(
                 env=base_env,
                 num_steps_wait=config.collect.num_steps_wait,
-                warm_up_action=warm_start_action,
+                warm_up_action=warm_start_action_multitask[rank],
             )
             # Add timelimit wrapper
             base_env = TimeLimit(
                 base_env,
-                max_episode_steps=max_steps,
+                max_episode_steps=max_steps_multitask[rank],
             )
             # Add query frequency wrapper to rollout action chunks
             base_env = QueryFrequencyWrapper(
@@ -101,7 +111,7 @@ def make_env_libero(config, discount: float = 0.99):
     # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
     env.seed(config.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     # re-use training seed
-    return env, task_description
+    return env, task_descriptions
 
 
 def get_max_steps_libero(task_name):

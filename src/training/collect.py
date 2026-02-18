@@ -10,7 +10,7 @@ from src.envs.venv import SubprocVectorEnv
 from openpi_client import image_tools
 
 
-def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_prefix_key: str = "pi0/"):
+def process_obs_for_pi0(observations: Dict, config, task_descriptions: list[str], obs_prefix_key: str = "pi0/"):
     element = {}
     prompt_in_obs = False
     for key, val in observations.items():
@@ -30,17 +30,16 @@ def process_obs_for_pi0(observations: Dict, config, task_description: str, obs_p
                 element[obs_key] = val
     # If prompt is not stored in obs, we add the default prompt here.
     if not prompt_in_obs:
-        element["prompt"] = task_description
+        element["prompt"] = np.asarray(task_descriptions) # TODO, WORKS ONLY WITH SINGLE TASK
     return element
 
 
-def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_description: str):
+def get_action_chunk_from_policy(policy, obs, sharding_spec, config, task_descriptions: list[str]):
     if config.collect.add_per_step_data:
         current_obs = jax.tree_util.tree_map(lambda x: x[:, -1], obs["observation"])
     else:
         current_obs = obs["observation"]
-    element = process_obs_for_pi0(current_obs, obs_prefix_key="pi0/", config=config, task_description=task_description)
-
+    element = process_obs_for_pi0(current_obs, obs_prefix_key="pi0/", config=config, task_descriptions=task_descriptions)
     action_chunk = policy.infer(element, sharding_spec=sharding_spec)["actions"]
     return action_chunk
 
@@ -99,11 +98,14 @@ def collect_data(
         dataset,
         sharding_spec,
         env: SubprocVectorEnv,
-        task_description,
+        task_descriptions: list[str],
         config):
     num_envs = len(env)
     total_episodes, total_successes = 0, 0
-    logging.info(f"Collecting for task: {task_description}")
+    episodes_per_env = [0 for _ in range(num_envs)]
+    successes_per_env = [0 for _ in range(num_envs)]
+    unique_tasks = set(task_descriptions)
+    logging.info(f"Collecting for tasks: {unique_tasks}")
     total_episodes = 0
     num_rollouts = config.collect.num_rollouts
 
@@ -119,7 +121,8 @@ def collect_data(
                                                         obs,
                                                         sharding_spec,
                                                         config,
-                                                        task_description=task_description)
+                                                        task_descriptions=task_descriptions, 
+                                                        )
             # Apply full action chunk to the policy.
             # If config.collect.add_per_step_data is True, next_obs consists of all the transitions
             # obtained during the full action_chunk
@@ -152,8 +155,10 @@ def collect_data(
                 success = terminate[env_index]
                 episode_data = frames[env_index]
                 if success:
-                    add_episode_to_dataset(episode_data, config, dataset, task_description=task_description)
+                    add_episode_to_dataset(episode_data, config, dataset, task_description=task_descriptions[env_index]) 
                 total_successes += success
+                episodes_per_env[env_index] += 1
+                successes_per_env[env_index] += int(success)
                 # Reset the environment
                 env_obs, _ = env.reset(id=env_index)
 
@@ -168,6 +173,9 @@ def collect_data(
             obs = next_obs
 
     metrics = {"success_rate": float(total_successes) / float(total_episodes)}
+    per_env_success_rates = [s / e if e > 0 else 0.0 for s, e in zip(successes_per_env, episodes_per_env)]
+    for i in range(num_envs):
+        metrics[f"success_rate_{config.collect.tasks[i]}"] = per_env_success_rates[i]
     env.close()
     return metrics, dataset.num_episodes
 
@@ -198,12 +206,12 @@ def collect_data_lerobot_libero(
     )
 
     # rollout parallel environments
-    env, task_description = make_env_libero(config)
+    env, task_descriptions = make_env_libero(config)
     return collect_data(
         policy=policy,
         dataset=collected_dataset,
         sharding_spec=sharding_spec,
         env=env,
-        task_description=task_description,
+        task_descriptions=task_descriptions,
         config=config,
     )
