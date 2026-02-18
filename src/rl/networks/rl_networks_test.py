@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import flax.nnx as nn
+import flax.nnx as nnx
 
 # Import the networks to test
 from src.rl.networks.rl_networks import StateActionCritic, StateValue, Policy
@@ -22,7 +22,7 @@ def create_dummy_obs(batch_size=4):
     }
 
 
-rngs = nn.Rngs(42)
+rngs = nnx.Rngs(42)
 
 
 # Simple Encoder Factory for testing (uses MLPEncoder logic)

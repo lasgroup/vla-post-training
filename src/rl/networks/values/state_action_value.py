@@ -1,6 +1,6 @@
 from typing import Callable, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 import jax
@@ -19,11 +19,11 @@ PrecisionLike = Union[None, str, jax.lax.Precision, Tuple[str, str],
                       Tuple[jax.lax.Precision, jax.lax.Precision]]
 
 
-class StateActionValue(nn.Module):
+class StateActionValue(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  use_action_sep: bool = False,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.use_action_sep = use_action_sep
 
         if use_action_sep:

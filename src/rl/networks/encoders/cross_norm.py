@@ -13,7 +13,7 @@ Dtype = Any  # this could be a real type?
 
 Axes = Union[int, Iterable[int]]
 
-import flax.nnx as nn
+import flax.nnx as nnx
 
 
 def _canonicalize_axes(rank: int, axes: Axes) -> Tuple[int, ...]:
@@ -127,7 +127,7 @@ def _normalize(x: Array, mean: Array, var: Array,
     return jnp.asarray(y, dtype)
 
 
-class CrossNorm(nn.Module):
+class CrossNorm(nnx.Module):
     """CrossNorm Module.
 
   Attributes:
@@ -166,7 +166,7 @@ class CrossNorm(nn.Module):
                  axis_name: Optional[str] = None,
                  axis_index_groups: Any = None,
                  alpha: float = 0.5,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.use_running_average = use_running_average
         self.axis = axis
         self.momentum = momentum
@@ -185,16 +185,16 @@ class CrossNorm(nn.Module):
             feature_axes = _canonicalize_axes(x_example.ndim, self.axis)
             feature_shape = [x_example.shape[ax] for ax in feature_axes]
 
-        self.mean = nn.BatchStat(jnp.zeros(feature_shape, jnp.float32))
-        self.var = nn.BatchStat(jnp.ones(feature_shape, jnp.float32))
+        self.mean = nnx.BatchStat(jnp.zeros(feature_shape, jnp.float32))
+        self.var = nnx.BatchStat(jnp.ones(feature_shape, jnp.float32))
 
         if use_scale:
-            self.scale = nn.Param(scale_init(rngs.params(), feature_shape, param_dtype))
+            self.scale = nnx.Param(scale_init(rngs.params(), feature_shape, param_dtype))
         else:
             self.scale = None
 
         if use_bias:
-            self.bias = nn.Param(bias_init(rngs.params(), feature_shape, param_dtype))
+            self.bias = nnx.Param(bias_init(rngs.params(), feature_shape, param_dtype))
         else:
             self.bias = None
 
@@ -231,9 +231,9 @@ class CrossNorm(nn.Module):
                           scale_val, bias_val)
 
 
-class ResNetGroupNorm(nn.Module):
-    def __init__(self, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nn.Rngs):
-        self.gn = nn.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
+class ResNetGroupNorm(nnx.Module):
+    def __init__(self, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nnx.Rngs):
+        self.gn = nnx.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
 
     def __call__(self, x, use_running_average: bool = False):
         if x.ndim == 3:

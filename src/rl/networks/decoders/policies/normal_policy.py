@@ -1,6 +1,6 @@
 from typing import Optional, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 from tensorflow_probability.substrates import jax as tfp
 
@@ -12,7 +12,7 @@ from src.rl.networks import MLP
 from src.rl.networks.constants import default_init, xavier_init
 
 
-class NormalPolicyDecoder(nn.Module):
+class NormalPolicyDecoder(nnx.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  action: jnp.ndarray | int,
@@ -22,7 +22,7 @@ class NormalPolicyDecoder(nn.Module):
                  init_scale: Optional[float] = 1.,
                  output_scale: Optional[float] = 1.,
                  init_method: str = 'xavier',
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.std = std
         self.output_scale = output_scale
         action_dim = action if isinstance(action, int) else action.shape[-1]
@@ -39,7 +39,7 @@ class NormalPolicyDecoder(nn.Module):
         else:
             kernel_init = default_init(init_scale)
 
-        self.mean_head = nn.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=kernel_init, rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,

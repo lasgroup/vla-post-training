@@ -1,7 +1,7 @@
 import sys
 import pytest
 import jax.numpy as jnp
-import flax.nnx as nn
+import flax.nnx as nnx
 from state_action_value import StateActionValueDecoder, StateActionEnsembleDecoder
 from state_value import StateValueDecoder, StateValueEnsembleDecoder
 
@@ -9,7 +9,7 @@ from state_value import StateValueDecoder, StateValueEnsembleDecoder
 # 3. TEST SUITE
 # ==========================================
 
-rngs = nn.Rngs(42)
+rngs = nnx.Rngs(42)
 
 
 def test_state_action_value_shape():
@@ -88,7 +88,7 @@ def test_jit_compatibility():
         hidden_dims=[16],
         num_qs=2, rngs=rngs)
 
-    @nn.jit
+    @nnx.jit
     def forward(model, s, a):
         return model(s, a)
 

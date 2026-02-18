@@ -1,20 +1,20 @@
 from typing import Callable, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks.values.state_action_value import StateActionValue
 
 
-class StateActionEnsemble(nn.Module):
+class StateActionEnsemble(nnx.Module):
     def __init__(self, hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  num_qs: int = 2,
                  use_action_sep: bool = False,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
         self.num_qs = num_qs
         
-        self.vmap_critic = nn.vmap(StateActionValue,
+        self.vmap_critic = nnx.vmap(StateActionValue,
                                    variable_axes={'params': 0},
                                    split_rngs={'params': True},
                                    in_axes=None,

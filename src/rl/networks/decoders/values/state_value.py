@@ -1,17 +1,17 @@
 from typing import Callable, Sequence
 
-import flax.nnx as nn
+import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks.mlp import MLP
 
 
-class StateValueDecoder(nn.Module):
+class StateValueDecoder(nnx.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
-                 *, rngs: nn.Rngs):
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
+                 *, rngs: nnx.Rngs):
         self.critic = MLP(input=observation,
                           hidden_dims=(*hidden_dims, 1),
                           activations=activations,
@@ -26,16 +26,16 @@ class StateValueDecoder(nn.Module):
         return jnp.squeeze(critic, -1)
 
 
-class StateValueEnsembleDecoder(nn.Module):
+class StateValueEnsembleDecoder(nnx.Module):
     def __init__(self,
                  observation: jnp.ndarray | int,
                  hidden_dims: Sequence[int],
-                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu,
+                 activations: Callable[[jnp.ndarray], jnp.ndarray] = nnx.relu,
                  num_vs: int = 2,
-                 *, rngs: nn.Rngs):
+                 *, rngs: nnx.Rngs):
 
-        @nn.split_rngs(splits=num_vs)
-        @nn.vmap(out_axes=0, in_axes=0)
+        @nnx.split_rngs(splits=num_vs)
+        @nnx.vmap(out_axes=0, in_axes=0)
         def create_critic(rgs):
             return StateValueDecoder(
                 observation=observation,
@@ -47,7 +47,7 @@ class StateValueEnsembleDecoder(nn.Module):
 
     def __call__(self, observations, training: bool = False):
         # Attempt to use the model
-        @nn.vmap(in_axes=(0, None), out_axes=0)  # head dim
+        @nnx.vmap(in_axes=(0, None), out_axes=0)  # head dim
         def call_model(model, s):
             return model(s, training=training)
         return call_model(self.vmap_critic, observations)
