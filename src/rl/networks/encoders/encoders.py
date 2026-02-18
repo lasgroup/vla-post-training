@@ -9,9 +9,9 @@ from src.rl.networks.constants import xavier_init
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.utils import extract_from_dict, EncoderType
 
-EncoderDef = Callable[[Union[FrozenDict, Dict]], EncoderType]
-MLPEncoderDef = Callable[[Union[FrozenDict, Dict]], EncoderType]
-MLPDef = Callable[[jnp.ndarray], MLP]
+EncoderDef = Callable[[Union[FrozenDict, Dict], nn.Rngs], EncoderType]
+MLPEncoderDef = Callable[[Union[FrozenDict, Dict], nn.Rngs], EncoderType]
+MLPDef = Callable[[jnp.ndarray, nn.Rngs], MLP]
 
 
 class ImageEncoder(nn.Module):
@@ -22,7 +22,7 @@ class ImageEncoder(nn.Module):
                  use_bottleneck: bool = True,
                  *, rngs: nn.Rngs):
         # Initialize encoder
-        self.encoder = encoder_def(dummy_obs)
+        self.encoder = encoder_def(dummy_obs, rngs)
         # Get a dummy embedding
         dummy_x = self.encoder(dummy_obs, False)
         self.use_bottleneck = use_bottleneck
@@ -51,14 +51,16 @@ class MLPEncoder(nn.Module):
     def __init__(self,
                  dummy_obs: Union[FrozenDict, Dict],
                  encoder_def: MLPDef,
-                 state_vector_keys: List[str] | None = None,):
+                 state_vector_keys: List[str] | None = None,
+                 *,
+                 rngs: nn.Rngs):
         if state_vector_keys is None:
             state_vector_keys = ['state']
         self._state_vector_keys = state_vector_keys
         # Get a dummy state
         dummy_state = self._prepare_inputs(dummy_obs)
         # Initialize encoder
-        self.encoder = encoder_def(dummy_state)
+        self.encoder = encoder_def(dummy_state, rngs)
 
     def _prepare_inputs(self, observations: Union[FrozenDict, Dict]):
         observations = FrozenDict(observations)
@@ -81,13 +83,15 @@ class BaseEncoder(nn.Module):
                  dummy_obs: Union[FrozenDict, Dict, jnp.ndarray],
                  mlp_encoder_def: EncoderDef | None = None,
                  image_encoder_def: MLPEncoderDef | None = None,
+                 *,
+                 rngs: nn.Rngs
                  ):
         if mlp_encoder_def is not None:
-            self.mlp_encoder = mlp_encoder_def(dummy_obs)
+            self.mlp_encoder = mlp_encoder_def(dummy_obs, rngs)
         else:
             self.mlp_encoder = None
         if image_encoder_def is not None:
-            self.image_encoder = image_encoder_def(dummy_obs)
+            self.image_encoder = image_encoder_def(dummy_obs, rngs)
         else:
             self.image_encoder = None
 

@@ -22,10 +22,10 @@ StateActionValueDecoderType = Union[StateActionValueDecoder, StateActionEnsemble
 StateValueDecoderType = Union[StateValueDecoder, StateValueEnsembleDecoder]
 PolicyDecoderDef = Union[NormalPolicyDecoder, LearnedStdNormalPolicyDecoder, LearnedStdTanhNormalPolicyDecoder]
 
-EncoderDef = Callable[[ObsType], BaseEncoder]
-StateActionDecoderDef = Callable[[EmbeddingType, ActionType], StateActionValueDecoderType]
-StateValueDecoderDef = Callable[[EmbeddingType], StateValueDecoderType]
-PolicyDecoderDef = Callable[[EmbeddingType, ActionType], PolicyDecoderDef]
+EncoderDef = Callable[[ObsType, nn.Rngs], BaseEncoder]
+StateActionDecoderDef = Callable[[EmbeddingType, ActionType, nn.Rngs], StateActionValueDecoderType]
+StateValueDecoderDef = Callable[[EmbeddingType, nn.Rngs], StateValueDecoderType]
+PolicyDecoderDef = Callable[[EmbeddingType, ActionType, nn.Rngs], PolicyDecoderDef]
 
 
 class StateActionCritic(nn.Module):
@@ -34,12 +34,14 @@ class StateActionCritic(nn.Module):
                  action: ActionType,
                  encoder_def: EncoderDef,
                  decoder_def: StateActionDecoderDef,
+                 rngs: nn.Rngs,
                  ):
-        self.encoder = encoder_def(observation)
+        self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
         self.state_action_decoder = decoder_def(
             dummy_embedding,
-            action
+            action,
+            rngs,
         )
 
     def __call__(self, observation: ObsType, action: ActionType, training: bool = False) -> jnp.ndarray:
@@ -53,11 +55,13 @@ class StateValue(nn.Module):
                  observation: ObsType,
                  encoder_def: EncoderDef,
                  decoder_def: StateValueDecoderDef,
+                 rngs: nn.Rngs,
                  ):
-        self.encoder = encoder_def(observation)
+        self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
         self.state_value_decoder = decoder_def(
             dummy_embedding,
+            rngs,
         )
 
     def __call__(self, observation: ObsType, training: bool = False) -> jnp.ndarray:
@@ -72,10 +76,11 @@ class Policy(nn.Module):
                  action: ActionType,
                  encoder_def: EncoderDef,
                  decoder_def: PolicyDecoderDef,
+                 rngs: nn.Rngs,
                  ):
-        self.encoder = encoder_def(observation)
+        self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
-        self.policy_decoder = decoder_def(dummy_embedding, action)
+        self.policy_decoder = decoder_def(dummy_embedding, action, rngs)
 
     def __call__(self, observation: ObsType, training: bool = False) -> tfd.Distribution:
         embedding = self.encoder(observation, training=training)

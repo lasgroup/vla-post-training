@@ -1,9 +1,6 @@
-import pytest
 import jax
 import jax.numpy as jnp
 import flax.nnx as nn
-from flax.core.frozen_dict import FrozenDict
-from functools import partial
 
 # Import the networks to test
 from src.rl.networks.rl_networks import StateActionCritic, StateValue, Policy
@@ -29,18 +26,19 @@ rngs = nn.Rngs(42)
 
 
 # Simple Encoder Factory for testing (uses MLPEncoder logic)
-def simple_encoder_factory(obs_dict):
+def simple_encoder_factory(obs_dict, rng):
     # Inner MLP factory
-    def mlp_def(flat_input):
-        return MLP(input=flat_input, hidden_dims=[16], rngs=rngs)
+    def mlp_def(flat_input, rg):
+        return MLP(input=flat_input, hidden_dims=[16], rngs=rg)
 
     # Outer MLPEncoder wrapper
-    def mlp_encoder_def(o):
-        return MLPEncoder(dummy_obs=o, encoder_def=mlp_def, state_vector_keys=['state', 'other'])
+    def mlp_encoder_def(o, rg):
+        return MLPEncoder(dummy_obs=o, encoder_def=mlp_def, state_vector_keys=['state', 'other'], rngs=rg)
 
     return BaseEncoder(dummy_obs=obs_dict,
                        mlp_encoder_def=mlp_encoder_def,
-                       image_encoder_def=None)  # No images for this fast test
+                       image_encoder_def=None,
+                       rngs=rng)  # No images for this fast test
 
 
 # =========================================
@@ -56,12 +54,12 @@ def test_state_action_critic_integration():
 
     # Define Decoder Factory
     # The integration class passes (embedding, action) to this factory
-    def decoder_factory(embedding, action_input):
+    def decoder_factory(embedding, action_input, rg):
         return StateActionValueDecoder(
             observation=embedding,
             action=action_input,
             hidden_dims=[32, 32],
-            rngs=rngs
+            rngs=rg
         )
 
     # Instantiate the full Q-network
@@ -69,7 +67,8 @@ def test_state_action_critic_integration():
         observation=obs,
         action=actions,
         encoder_def=simple_encoder_factory,
-        decoder_def=decoder_factory
+        decoder_def=decoder_factory,
+        rngs=rngs
     )
     # Run Forward
     q_values = q_net(obs, actions, training=False)
@@ -91,18 +90,19 @@ def test_state_value_integration():
     obs = create_dummy_obs(batch_size)
 
     # Define Decoder Factory
-    def decoder_factory(embedding):
+    def decoder_factory(embedding, rg):
         return StateValueDecoder(
             observation=embedding,
             hidden_dims=[32],
-            rngs=rngs
+            rngs=rg
         )
 
     # Instantiate V-network
     v_net = StateValue(
         observation=obs,
         encoder_def=simple_encoder_factory,
-        decoder_def=decoder_factory
+        decoder_def=decoder_factory,
+        rngs=rngs
     )
 
     # Run Forward
@@ -127,13 +127,13 @@ def test_policy_integration():
     dummy_action = jnp.zeros((batch_size, action_dim))
 
     # Define Policy Decoder Factory
-    def policy_decoder_factory(embedding, action_input):
+    def policy_decoder_factory(embedding, action_input, rg):
         return NormalPolicyDecoder(
             observation=embedding,
             action=action_input,
             hidden_dims=[32],
             std=0.1,
-            rngs=rngs
+            rngs=rg
         )
 
     # Instantiate Policy
@@ -141,7 +141,8 @@ def test_policy_integration():
         observation=obs,
         action=dummy_action,
         encoder_def=simple_encoder_factory,
-        decoder_def=policy_decoder_factory
+        decoder_def=policy_decoder_factory,
+        rngs=rngs
     )
 
     # Run Forward

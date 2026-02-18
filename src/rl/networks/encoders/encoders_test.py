@@ -14,6 +14,7 @@ from spatial_softmax import SpatialSoftmax
 from encoders import ImageEncoder, MLPEncoder, BaseEncoder
 from src.rl.networks.mlp import MLP
 
+rngs = nn.Rngs(42)
 
 # =========================================
 # HELPERS
@@ -248,20 +249,20 @@ def test_base_encoder_merge():
     image_latent_dim = 50
 
     # Inner CNN factory
-    def cnn_factory(obs_dict):
+    def cnn_factory(obs_dict, rng):
         return CNNEncoder(input_example=obs_dict,
                           features=(16, 32),
                           strides=(2, 2),
                           image_keys=['pixels_left', 'pixels_right'],
-                          rngs=rngs)
+                          rngs=rng)
 
     # Outer ImageEncoder factory (as expected by BaseEncoder)
-    def image_encoder_def(obs_dict):
+    def image_encoder_def(obs_dict, rng):
         return ImageEncoder(dummy_obs=obs_dict,
                             encoder_def=cnn_factory,
                             latent_dim=image_latent_dim,
                             use_bottleneck=True,
-                            rngs=rngs)
+                            rngs=rng)
 
     # 2. Define MLP Encoder Factory
     #    We want to encode 'state' and 'velocity'
@@ -269,23 +270,25 @@ def test_base_encoder_merge():
     mlp_latent_dim = 20
 
     # Inner MLP factory (takes flat vector)
-    def mlp_factory(flat_input):
+    def mlp_factory(flat_input, rng):
         return MLP(input=flat_input,
                    hidden_dims=[32, mlp_latent_dim],  # Output 20
                    activations=nn.relu,
-                   rngs=rngs)
+                   rngs=rng)
 
     # Outer MLPEncoder factory
-    def mlp_encoder_def(obs_dict):
+    def mlp_encoder_def(obs_dict, rng):
         return MLPEncoder(dummy_obs=obs_dict,
                           encoder_def=mlp_factory,
-                          state_vector_keys=state_keys)
+                          state_vector_keys=state_keys,
+                          rngs=rng)
 
     # 3. Instantiate BaseEncoder
     #    This is the component we are testing
     model = BaseEncoder(dummy_obs=obs,
                         mlp_encoder_def=mlp_encoder_def,
-                        image_encoder_def=image_encoder_def)
+                        image_encoder_def=image_encoder_def,
+                        rngs=rngs)
 
     # 4. Run Forward Pass
     out = model(obs, training=True)
@@ -309,7 +312,8 @@ def test_base_encoder_defaults():
 
     model = BaseEncoder(dummy_obs=obs,
                         mlp_encoder_def=None,
-                        image_encoder_def=None)
+                        image_encoder_def=None,
+                        rngs=rngs)
 
     out = model(obs)
 
