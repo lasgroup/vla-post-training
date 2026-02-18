@@ -41,6 +41,7 @@ class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     discount: float = 0.99
+    return_prefix_rep = True
 
 
 # Use `get_config` if you need to get a config by name in your code.

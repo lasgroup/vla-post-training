@@ -3,6 +3,7 @@ import jax
 import numpy as np
 from src.envs.venv import BaseVectorEnv
 from src.rl.agent import Agent
+from src.rl.prefix_embedding import unpack_action_and_prefix
 import tqdm_loggable.auto as tqdm
 
 
@@ -10,10 +11,16 @@ def _shift_window(
     observation: dict[str, Any], next_observation: dict[str, Any]
 ) -> dict[str, Any]:
     def move_obs(curr, nxt):
+        curr_arr = np.asarray(curr)
+        nxt_arr = np.asarray(nxt)
         # curr shape: (E, H, D) -> keep last step: (E, 1, D)
-        last_step = curr[:, -1:]
+        last_step = curr_arr[:, -1:]
         # nxt shape: (E, H, D) -> keep first H-1 steps: (E, H-1, D)
-        next_steps = nxt[:, :-1]
+        next_steps = nxt_arr[:, :-1]
+        if last_step.shape[2:] != next_steps.shape[2:]:
+            # Prefix placeholders may not know the true token dimensions at reset.
+            # Use zeros matching the new observation shape for the first aligned slot.
+            last_step = np.zeros_like(nxt_arr[:, :1])
         # Result shape: (E, H, D), aligned with action chunk rollout.
         return np.concatenate([last_step, next_steps], axis=1)
 
@@ -38,6 +45,7 @@ def collect_data(
                 task_description=task_description,
                 batch_actions=True,
             )
+            action_values, _ = unpack_action_and_prefix(action_chunk)
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 
             if config.collect.add_per_step_data:
@@ -48,7 +56,7 @@ def collect_data(
             step_data = {
                 "observation": aligned_obs,
                 "next_observation": next_obs,
-                "action": action_chunk,
+                "action": action_values,
                 "reward": reward,
                 "terminate": terminate,
                 "truncate": truncate,

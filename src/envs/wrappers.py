@@ -5,6 +5,11 @@ import logging
 import math
 import numpy as np
 
+from src.rl.prefix_embedding import (
+    PREFIX_EMBEDDING_NAME,
+    unpack_action_and_prefix,
+)
+
 
 class GymnasiumEnvAdapter(gym.Env):
     """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
@@ -261,6 +266,178 @@ class QueryFrequencyWrapper(gym.Wrapper):
             last_info = jax.tree.map(lambda x: x[-1], stacked["info"])
 
             return last_obs, discounted_reward, last_term, last_trunc, last_info
+
+
+class PrefixEmbeddingVectorEnvWrapper(gym.Env):
+    """Adds prefix embeddings to vectorized observations while stripping them from actions."""
+
+    def __init__(
+        self,
+        env,
+        *,
+        add_per_step_data: bool,
+        prefix_embedding_name: str = PREFIX_EMBEDDING_NAME,
+    ):
+        super().__init__()
+        self.env = env
+        self._add_per_step_data = add_per_step_data
+        self._prefix_embedding_name = prefix_embedding_name
+        self._prefix_tail_shape: tuple[int, ...] | None = None
+        self.metadata = getattr(env, "metadata", {})
+        self.render_mode = getattr(env, "render_mode", None)
+
+    def _unwrap_vector_space(self, space):
+        # BaseVectorEnv exposes Gym reserved attrs as lists (one per worker).
+        if isinstance(space, list):
+            if not space:
+                raise ValueError("Wrapped vector env has an empty space list.")
+            return space[0]
+        return space
+
+    @property
+    def action_space(self):
+        return self._unwrap_vector_space(getattr(self.env, "action_space", None))
+
+    def _prefix_leading_shape_from_obs_space(
+        self, obs_space: gym.spaces.Dict
+    ) -> tuple[int, ...]:
+        if not self._add_per_step_data:
+            return ()
+        for sub_space in obs_space.spaces.values():
+            if isinstance(sub_space, gym.spaces.Box) and len(sub_space.shape) >= 1:
+                return (int(sub_space.shape[0]),)
+        return (1,)
+
+    @property
+    def observation_space(self):
+        base_space = self._unwrap_vector_space(
+            getattr(self.env, "observation_space", None)
+        )
+        if not isinstance(base_space, gym.spaces.Dict):
+            return base_space
+
+        spaces = dict(base_space.spaces)
+        tail = (
+            self._prefix_tail_shape if self._prefix_tail_shape is not None else (1, 1)
+        )
+        spaces[self._prefix_embedding_name] = gym.spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=self._prefix_leading_shape_from_obs_space(base_space) + tail,
+            dtype=np.float32,
+        )
+        return gym.spaces.Dict(spaces)
+
+    def _first_array_leaf(self, observation: Dict[str, Any]) -> np.ndarray:
+        for leaf in jax.tree_util.tree_leaves(observation):
+            if hasattr(leaf, "shape"):
+                return np.asarray(leaf)
+        raise ValueError("Cannot infer batch shape from an empty observation tree.")
+
+    def _batch_leading_shape(self, observation: Dict[str, Any]) -> tuple[int, ...]:
+        ref = self._first_array_leaf(observation)
+        if self._add_per_step_data:
+            if ref.ndim < 2:
+                raise ValueError(
+                    "Expected at least 2 dimensions for per-step observations."
+                )
+            return int(ref.shape[0]), int(ref.shape[1])
+        if ref.ndim < 1:
+            raise ValueError("Expected at least 1 dimension for batched observations.")
+        return (int(ref.shape[0]),)
+
+    def _placeholder_prefix(self, observation: Dict[str, Any]) -> np.ndarray:
+        leading = self._batch_leading_shape(observation)
+        tail = (
+            self._prefix_tail_shape if self._prefix_tail_shape is not None else (1, 1)
+        )
+        return np.zeros(leading + tail, dtype=np.float32)
+
+    def _format_prefix_for_observation(
+        self,
+        prefix_embedding: Any,
+        observation: Dict[str, Any],
+    ) -> np.ndarray:
+        prefix = np.asarray(prefix_embedding, dtype=np.float32)
+        leading = self._batch_leading_shape(observation)
+
+        if self._add_per_step_data:
+            batch_size, horizon = leading
+            if prefix.ndim == 2:
+                prefix = np.broadcast_to(
+                    prefix[None, ...], (batch_size,) + prefix.shape
+                )
+            if prefix.ndim == 3 and prefix.shape[0] == batch_size:
+                prefix = np.repeat(prefix[:, None, ...], horizon, axis=1)
+            elif prefix.ndim == 4 and prefix.shape[:2] == (batch_size, horizon):
+                pass
+            else:
+                raise ValueError(
+                    "Prefix embedding has incompatible shape for per-step observations: "
+                    f"{prefix.shape}."
+                )
+        else:
+            (batch_size,) = leading
+            if prefix.ndim == 2:
+                prefix = np.broadcast_to(
+                    prefix[None, ...], (batch_size,) + prefix.shape
+                )
+            elif prefix.ndim == 3 and prefix.shape[0] == batch_size:
+                pass
+            else:
+                raise ValueError(
+                    "Prefix embedding has incompatible shape for batched observations: "
+                    f"{prefix.shape}."
+                )
+
+        self._prefix_tail_shape = tuple(int(x) for x in prefix.shape[len(leading) :])
+        return prefix.astype(np.float32, copy=False)
+
+    def _inject_prefix(
+        self, observation: Dict[str, Any], prefix_embedding: np.ndarray
+    ) -> Dict[str, Any]:
+        updated = dict(observation)
+        updated[self._prefix_embedding_name] = prefix_embedding
+        return updated
+
+    def reset(self, *args, **kwargs):
+        result = self.env.reset(*args, **kwargs)
+        if isinstance(result, (tuple, list)) and len(result) == 2:
+            observation, info = result
+            observation = self._inject_prefix(
+                observation, self._placeholder_prefix(observation)
+            )
+            return observation, info
+        observation = self._inject_prefix(result, self._placeholder_prefix(result))
+        return observation
+
+    def step(self, action, *args, **kwargs):
+        env_action, prefix_embedding = unpack_action_and_prefix(action)
+        observation, reward, terminated, truncated, info = self.env.step(
+            env_action, *args, **kwargs
+        )
+        if prefix_embedding is None:
+            prefix = self._placeholder_prefix(observation)
+        else:
+            prefix = self._format_prefix_for_observation(prefix_embedding, observation)
+        observation = self._inject_prefix(observation, prefix)
+        return observation, reward, terminated, truncated, info
+
+    def __len__(self) -> int:
+        return len(self.env)
+
+    def render(self, *args, **kwargs):
+        if hasattr(self.env, "render"):
+            return self.env.render(*args, **kwargs)
+        return None
+
+    def close(self):
+        if hasattr(self.env, "close"):
+            return self.env.close()
+        return None
+
+    def __getattr__(self, name: str):
+        return getattr(self.env, name)
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):

@@ -34,7 +34,9 @@ class Agent(object):
         raise NotImplementedError
 
     @abstractmethod
-    def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
+    def sample_actions(
+        self, observations: np.ndarray | Dict, **kwargs
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         """Stochastic action decoding."""
         raise NotImplementedError
 
