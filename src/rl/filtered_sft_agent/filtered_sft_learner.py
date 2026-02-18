@@ -36,7 +36,7 @@ from src.envs.wrappers import (
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME, unpack_action_and_prefix
 
 
 def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_class):
@@ -58,6 +58,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     seed = config.seed
     discount = config.discount
     add_per_step_data = config.collect.add_per_step_data
+    return_prefix_rep = bool(getattr(config, "return_prefix_rep", False))
     env_factories = []
     for i in range(env_num):
 
@@ -72,8 +73,13 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
                 add_states=add_states,
                 pi0_obs_prefix=obs_prefix_key,
             )
-            # Add query frequency wrapper to rollout action chunks
-            base_env = QueryFrequencyWrapper(
+            # Add query-frequency wrapper to rollout action chunks.
+            query_wrapper = (
+                PrefixEmbeddingVectorEnvWrapper
+                if return_prefix_rep
+                else QueryFrequencyWrapper
+            )
+            base_env = query_wrapper(
                 env=base_env,
                 query_frequency=replan_steps,
                 discount=discount,
@@ -92,12 +98,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     env.seed(
         seed
     )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
-    if bool(getattr(config, "return_prefix_rep", False)):
-        env = PrefixEmbeddingVectorEnvWrapper(
-            env,
-            add_per_step_data=add_per_step_data,
-            prefix_embedding_name=PREFIX_EMBEDDING_NAME,
-        )
     # re-use training seed
     return env
 
@@ -811,24 +811,28 @@ class FilteredSFTLearner(Agent):
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
-        # Vector envs expect a batch dimension for actions. Policy inference
-        # unbatches when batch_size == 1, so add it back for single-env runs.
-        actions = self._policy.infer_with_model(
+        sampled_actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
             noise=noise,
+            return_prefix_rep=return_prefix_rep,
             sharding_spec=self._policy_sharding_spec,
         )["actions"]
-        if batch_actions and actions.ndim == 2:
-            actions = actions[np.newaxis, ...]
-        if not return_prefix_rep:
-            return actions
+        if not batch_actions:
+            return sampled_actions
 
-        prefix_rep = self._compute_prefix_rep_with_model(
-            model=model,
-            observations=observations,
-        )
-        return actions, prefix_rep
+        # Vector envs expect a batch dimension for actions. Policy inference
+        # can unbatch when batch_size == 1, so add it back for single-env runs.
+        if isinstance(sampled_actions, (tuple, list)):
+            actions = np.asarray(sampled_actions[0])
+            if actions.ndim == 2:
+                actions = actions[np.newaxis, ...]
+            return (actions, *sampled_actions[1:])
+
+        actions = np.asarray(sampled_actions)
+        if actions.ndim == 2:
+            actions = actions[np.newaxis, ...]
+        return actions
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
@@ -851,16 +855,12 @@ class FilteredSFTLearner(Agent):
             batch_actions=batch_actions,
             return_prefix_rep=bool(return_prefix_rep),
         )
-        if return_prefix_rep:
-            actions, prefix_rep = sampled
-            return (
-                np.asarray(actions, dtype=np.float32),
-                np.asarray(prefix_rep, dtype=np.float32),
-            )
+        if isinstance(sampled, (tuple, list)):
+            return tuple(np.asarray(x, dtype=np.float32) for x in sampled)
         return np.asarray(sampled, dtype=np.float32)
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        kwargs.setdefault("return_prefix_rep", False)
+        # kwargs.setdefault("return_prefix_rep", False)
         return self._generate_actions(observations, **kwargs)
 
     def sample_actions(
@@ -906,27 +906,80 @@ class FilteredSFTLearner(Agent):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
-    def _compute_final_prefix_representation(
+    def _broadcast_prefix_embedding(
+        self, prefix_embedding: Any, observation: Dict[str, Any]
+    ) -> np.ndarray:
+        """Shape prefix embeddings to match observation layout.
+
+        For per-step collection, policy prefix embeddings are per observation
+        (shape [S, E] or [1, S, E]) while observations are sequences over the
+        query horizon. This helper repeats the prefix embedding across that
+        horizon so it can be stored alongside per-step observations.
+        """
+        prefix = np.asarray(prefix_embedding, dtype=np.float32)
+        if not self._config.collect.add_per_step_data:
+            if prefix.ndim == 3 and prefix.shape[0] == 1:
+                return prefix[0]
+            return prefix
+
+        obs_leaves = jax.tree_util.tree_leaves(observation)
+        horizon = next(
+            (
+                int(np.asarray(leaf).shape[0])
+                for leaf in obs_leaves
+                if np.asarray(leaf).ndim >= 1
+            ),
+            None,
+        )
+        if horizon is None:
+            raise ValueError(
+                "Cannot infer per-step horizon for prefix embedding broadcast."
+            )
+
+        if prefix.ndim == 2:
+            return np.repeat(prefix[None, ...], horizon, axis=0)
+        if prefix.ndim == 3:
+            if prefix.shape[0] == 1:
+                return np.repeat(prefix, horizon, axis=0)
+            if prefix.shape[0] == horizon:
+                return prefix
+            raise ValueError(
+                "Per-step prefix embedding has incompatible leading dimension: "
+                f"got {prefix.shape[0]}, expected 1 or {horizon}."
+            )
+        raise ValueError(
+            "Per-step prefix embedding must be rank-2 or rank-3, "
+            f"got shape {prefix.shape}."
+        )
+
+    def _compute_prefix_for_observation(
         self,
         *,
-        next_observation: Dict[str, Any] | None,
+        observation: Dict[str, Any] | None,
         task_description: str | None,
     ) -> np.ndarray | None:
-        if next_observation is None:
+        """Compute policy prefix embedding for one observation dict.
+
+        Used for the final transition in an episode, where the next-step
+        prefix embedding is not available from action payloads.
+        """
+        if observation is None:
             return None
         if getattr(self._policy, "_is_pytorch_model", False):
             return None
         prompt = task_description or getattr(self._config, "default_prompt", None)
         if prompt is None:
-            logging.warning(
-                "Cannot compute final prefix representation without a task description."
-            )
             return None
 
-        batched_obs = jax.tree.map(
-            lambda x: np.asarray(x)[None, ...],
-            next_observation,
-        )
+        # For per-step collection the observation is a short horizon [H, ...].
+        # We only need the final state in that horizon for the terminal next-observation prefix.
+        if self._config.collect.add_per_step_data:
+            observation = jax.tree.map(
+                lambda x: (arr[-1] if (arr := np.asarray(x)).ndim > 0 else arr),
+                observation,
+            )
+
+        batched_obs = jax.tree.map(lambda x: np.asarray(x)[None, ...], observation)
         processed_obs = self._process_obs_for_pi0(
             batched_obs,
             task_description=str(prompt),
@@ -945,60 +998,58 @@ class FilteredSFTLearner(Agent):
             prefix_rep = prefix_rep[0]
         return np.asarray(prefix_rep, dtype=np.float32)
 
-    def _match_prefix_layout(
-        self,
-        prefix_rep: np.ndarray,
-        reference_prefix: np.ndarray | None,
-    ) -> np.ndarray:
-        prefix = np.asarray(prefix_rep, dtype=np.float32)
-        if reference_prefix is None:
-            return prefix
-        reference = np.asarray(reference_prefix)
-        if prefix.shape == reference.shape:
-            return prefix
-        if reference.ndim == prefix.ndim + 1:
-            return np.broadcast_to(prefix[None, ...], reference.shape).copy()
-        if reference.ndim == prefix.ndim and prefix.shape[0] == 1:
-            return np.broadcast_to(prefix, reference.shape).copy()
-        return prefix
-
-    def _align_episode_prefix_embeddings(
+    def _attach_prefix_embeddings_to_episode_data(
         self,
         episode_data: list[Dict[str, Any]],
         *,
         task_description: str | None,
     ) -> None:
+        """Unpack `(actions, prefix)` payloads and align prefixes to transitions.
+
+        - Replaces each `ep["action"]` payload with pure actions.
+        - Writes the unpacked prefix embedding to `ep["observation"]`.
+        - Writes the shifted prefix embedding to `ep["next_observation"]`
+          using the next step's payload.
+        - Computes the final next-observation prefix with the current model.
+        """
         if not episode_data:
             return
-        step_prefixes: list[np.ndarray] = []
+
+        step_prefixes: list[np.ndarray | None] = []
         for ep in episode_data:
-            next_obs = ep.get("next_observation")
-            if not isinstance(next_obs, dict) or PREFIX_EMBEDDING_NAME not in next_obs:
-                return
+            actions, prefix_embedding = unpack_action_and_prefix(ep["action"])
+            ep["action"] = np.asarray(actions, dtype=np.float32)
             step_prefixes.append(
-                np.asarray(next_obs[PREFIX_EMBEDDING_NAME], dtype=np.float32)
+                None
+                if prefix_embedding is None
+                else np.asarray(prefix_embedding, dtype=np.float32)
             )
 
-        final_prefix = self._compute_final_prefix_representation(
-            next_observation=episode_data[-1].get("next_observation"),
+        final_next_prefix = self._compute_prefix_for_observation(
+            observation=episode_data[-1].get("next_observation"),
             task_description=task_description,
         )
-        if final_prefix is None:
-            shifted_prefixes = [*step_prefixes, step_prefixes[-1]]
-        else:
-            final_prefix = self._match_prefix_layout(
-                final_prefix,
-                step_prefixes[-1] if step_prefixes else None,
-            )
-            shifted_prefixes = [*step_prefixes, final_prefix]
 
-        for i, ep in enumerate(episode_data):
-            observation = ep.get("observation")
-            if isinstance(observation, dict):
-                observation[PREFIX_EMBEDDING_NAME] = shifted_prefixes[i]
-            next_observation = ep.get("next_observation")
-            if isinstance(next_observation, dict):
-                next_observation[PREFIX_EMBEDDING_NAME] = shifted_prefixes[i + 1]
+        for idx, ep in enumerate(episode_data):
+            obs = ep.get("observation")
+            curr_prefix = step_prefixes[idx]
+            if curr_prefix is not None and isinstance(obs, dict):
+                obs[PREFIX_EMBEDDING_NAME] = self._broadcast_prefix_embedding(
+                    curr_prefix, obs
+                )
+
+            next_obs = ep.get("next_observation")
+            if not isinstance(next_obs, dict):
+                continue
+            next_prefix = (
+                step_prefixes[idx + 1]
+                if idx + 1 < len(step_prefixes)
+                else final_next_prefix
+            )
+            if next_prefix is not None:
+                next_obs[PREFIX_EMBEDDING_NAME] = self._broadcast_prefix_embedding(
+                    next_prefix, next_obs
+                )
 
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
         if env_index < 0 or env_index >= len(self._episode_storage):
@@ -1017,7 +1068,7 @@ class FilteredSFTLearner(Agent):
         obs_prefix = self._config.collect.obs_prefix_key
         discount_gamma = float(self._config.discount)
         if bool(getattr(self._config, "return_prefix_rep", False)):
-            self._align_episode_prefix_embeddings(
+            self._attach_prefix_embeddings_to_episode_data(
                 episode_data,
                 task_description=task_description,
             )
@@ -1056,11 +1107,18 @@ class FilteredSFTLearner(Agent):
                 np.asarray(actions, dtype=np.float32)
             )
             next_state = frame["state"]
+            next_prefix_embedding = frame.get(PREFIX_EMBEDDING_NAME)
             if next_obs is not None:
                 next_obs = _extract_policy_obs(next_obs)
                 if "state" in next_obs:
                     next_state = next_obs["state"]
+                if PREFIX_EMBEDDING_NAME in next_obs:
+                    next_prefix_embedding = next_obs[PREFIX_EMBEDDING_NAME]
             frame["next_observation"] = {"state": next_state}
+            if next_prefix_embedding is not None:
+                frame["next_observation"][PREFIX_EMBEDDING_NAME] = np.asarray(
+                    next_prefix_embedding, dtype=np.float32
+                )
             frame["reward"] = np.float32(reward)
             frame["done"] = np.bool_(done)
             frame["discount"] = np.float32(discount)
@@ -1073,6 +1131,7 @@ class FilteredSFTLearner(Agent):
         if self._config.collect.add_per_step_data:
             # Build one-step transitions first, then convert to H-step sliding windows.
             for ep in episode_data:
+                ep_actions = np.asarray(ep["action"], dtype=np.float32)
                 ep_obs, ep_next_obs, ep_rewards, terminate, truncate = (
                     ep["observation"],
                     ep.get("next_observation"),
@@ -1105,7 +1164,7 @@ class FilteredSFTLearner(Agent):
                     transitions.append(
                         process_frame(
                             step_obs,
-                            actions=np.asarray(ep["action"][step], dtype=np.float32),
+                            actions=ep_actions[step],
                             next_obs=step_next_obs,
                             reward=step_reward,
                             done=step_done,
@@ -1172,6 +1231,7 @@ class FilteredSFTLearner(Agent):
             episode_batch = windowed_batch
         else:
             for ep in episode_data:
+                ep_actions = np.asarray(ep["action"], dtype=np.float32)
                 reward = ep.get("reward")
                 terminate = ep.get("terminate", False)
                 truncate = ep.get("truncate", False)
@@ -1189,7 +1249,7 @@ class FilteredSFTLearner(Agent):
                 transitions.append(
                     process_frame(
                         ep["observation"],
-                        actions=np.asarray(ep["action"], dtype=np.float32),
+                        actions=ep_actions,
                         next_obs=ep.get("next_observation"),
                         reward=reward_value,
                         done=done,
