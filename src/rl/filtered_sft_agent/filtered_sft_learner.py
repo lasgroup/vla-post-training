@@ -25,7 +25,7 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.agent import Agent
-from rl.filtered_sft_agent.update import train_step
+from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -35,19 +35,19 @@ from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 
 
-def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_class):
+def get_env_and_agent_for_filtered_sft(env_fn, config, task_descriptions, env_class):
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
-        task_description=task_description,
+        task_descriptions=task_descriptions,
         env_class=env_class,
     )
     agent = FilteredSFTLearner(config)
     return env, agent
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
-    env_num = config.collect.env_num
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_descriptions: list[str], env_class: str):
+    env_num_multiask = len(config.collect.tasks)
     add_states = config.collect.add_states
     obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
@@ -55,16 +55,17 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     discount = config.discount
     add_per_step_data = config.collect.add_per_step_data
     env_factories = []
-    for i in range(env_num):
+    for i in range(env_num_multiask):
 
         def _make_env(rank=i):
+            task_index = rank % env_num_multiask
             # Create the base environment
             base_env = env_fn(rank)
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
-                task_description=task_description,
+                task_description=task_descriptions[task_index],
                 add_states=add_states,
                 pi0_obs_prefix=obs_prefix_key,
             )
@@ -82,7 +83,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
 
     env = (
         SubprocVectorEnv(env_factories)
-        if env_num > 1
+        if env_num_multiask > 1
         else DummyVectorEnv(env_factories)
     )
     # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
@@ -610,7 +611,7 @@ class FilteredSFTLearner(Agent):
     def _process_obs_for_pi0(
         self,
         observations: Dict,
-        task_description: str | None = None,
+        task_descriptions: str | None = None, 
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
@@ -644,8 +645,8 @@ class FilteredSFTLearner(Agent):
                     processed_obs[obs_key] = val
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
-            assert task_description is not None, "No task description is provided"
-            processed_obs["prompt"] = task_description
+            assert task_descriptions is not None, "No task description is provided"
+            processed_obs["prompt"] = task_descriptions # TODO: change to task_descriptions
         return processed_obs
 
     def _infer_policy_batch_size(self, observations: Dict[str, Any]) -> int:
@@ -700,13 +701,13 @@ class FilteredSFTLearner(Agent):
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray:
-        task_description = kwargs.get("task_description")
+        task_descriptions = kwargs.get("task_descriptions") 
         batch_actions = kwargs.get("batch_actions")
         if batch_actions is None:
             batch_actions = False
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
-            observations, task_description=task_description
+            observations, task_descriptions=task_descriptions 
         )
         actions = self._sample_action(
             observations=processed_obs,

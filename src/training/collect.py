@@ -27,12 +27,16 @@ def _shift_window(
 
 
 def collect_data(
-    agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
+    agent: Agent, env: BaseVectorEnv, task_descriptions: list[str], config, step: int
 ):
     agent.start_data_collection(step=step)
+    env_num_multiask = len(config.collect.tasks)
 
     total_episodes = 0
     total_successes = 0
+    episodes_per_env = [0] * env_num_multiask
+    successes_per_env = [0] * env_num_multiask
+    
     num_rollouts = config.collect.num_rollouts
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
@@ -41,7 +45,7 @@ def collect_data(
         while total_episodes < num_rollouts:
             action_chunk = agent.sample_actions(
                 obs,
-                task_description=task_description,
+                task_descriptions=task_descriptions, 
                 batch_actions=True,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
@@ -75,10 +79,13 @@ def collect_data(
             for env_index in done_indices:
                 success = bool(current_terminate[env_index])
                 total_successes += int(success)
+                successes_per_env[env_index] += int(success)
+                episodes_per_env[env_index] += 1
+
                 agent.save_episode(
                     is_success=success,
                     env_index=int(env_index),
-                    task_description=task_description,
+                    task_description=task_descriptions[env_index], 
                 )
 
                 reset_out = env.reset(id=int(env_index))
@@ -101,4 +108,11 @@ def collect_data(
     success_rate = (
         float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
     )
-    return {"success_rate": success_rate}, collected_episodes
+
+    metrics = {"success_rate": success_rate}
+
+    per_env_success_rates = [s / e if e > 0 else 0.0 for s, e in zip(successes_per_env, episodes_per_env)]
+    for i in range(env_num_multiask):
+        metrics[f"success_rate_{config.collect.tasks[i]}"] = per_env_success_rates[i]
+
+    return metrics, collected_episodes

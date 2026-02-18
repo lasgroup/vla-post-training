@@ -55,11 +55,11 @@ def main(config: _config.OnlineTrainConfig):
 
     from src.envs.libero import make_env_libero
 
-    env_fn, task_description = make_env_libero(config)
+    env_fn, task_descriptions = make_env_libero(config)
     env, agent = get_env_and_agent_for_filtered_sft(
         env_fn=env_fn,
         config=config,
-        task_description=task_description,
+        task_descriptions=task_descriptions,
         env_class="libero",
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
@@ -98,7 +98,7 @@ def main(config: _config.OnlineTrainConfig):
                 agent=agent,
                 env=env,
                 config=config,
-                task_description=task_description,
+                task_descriptions=task_descriptions,
                 step=step,
             )
             wandb.log(collect_info, step=step)
