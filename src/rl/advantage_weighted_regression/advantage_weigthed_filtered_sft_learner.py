@@ -17,13 +17,11 @@ from src.rl.advantage_weighted_regression.update_critic import (
     StateValueDef
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
-from src.rl.legacy_filtered_sft_agent.legacy_filtered_sft_learner import (
-    LegacyFilteredSFTLearner,
-)
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.training.config import OnlineTrainConfig
 
 
-class AdvantageWeightedFilteredSFTLearner(LegacyFilteredSFTLearner):
+class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def __init__(self,
                  config: OnlineTrainConfig,
                  dummy_obs: ObsType,
