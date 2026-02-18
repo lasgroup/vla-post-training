@@ -11,6 +11,7 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
+from src.rl.networks.rl_networks import StateActionCritic, StateValue
 
 
 @at.typecheck
@@ -41,14 +42,15 @@ def train_step(
         rng: at.KeyArrayLike,
         observation: _model.Observation,
         actions: _model.Actions,
-        critic_model: nnx.Module,
-        value_model: nnx.Module,
+        critic_model: StateActionCritic,
+        value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         value = value_model(observation)
         q_value = critic_model(observation, actions)
         advantage = q_value - value
         score = advantage / _awr_beta(config)
+        score = jnp.minimum(score, 20.0)  # Clipping
         # Normalize the weights across the batch axis for training stability and expand dim by one for the chunk loss.
         score = jax.nn.softmax(score, axis=0)[..., jnp.newaxis]
         chunked_loss = model.compute_loss(rng, observation, actions, train=True)
@@ -56,7 +58,7 @@ def train_step(
             "advantage_weights": jnp.mean(score),
             "chunked_loss": jnp.mean(chunked_loss),
         }
-        return jnp.mean(score * chunked_loss), aux_data
+        return jnp.sum(score * chunked_loss), aux_data
 
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
