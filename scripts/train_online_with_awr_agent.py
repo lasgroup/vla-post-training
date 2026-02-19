@@ -2,8 +2,8 @@
 # suppress Numba FNV hashing warnings
 import warnings
 
-from rl.networks.encoders.encoders import MLPEncoder
-from rl.networks.mlp import MLP
+from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.mlp import MLP
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
