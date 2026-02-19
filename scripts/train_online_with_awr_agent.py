@@ -2,6 +2,9 @@
 # suppress Numba FNV hashing warnings
 import warnings
 
+from rl.networks.encoders.encoders import MLPEncoder
+from rl.networks.mlp import MLP
+
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
 # suppress lerobot version warnings
@@ -195,16 +198,32 @@ def _build_pi0_backbone_critic_defs(
     *,
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
-    critic_hidden_dims = tuple(_get_rl_attr(config, "critic_hidden_dims", (1024, 512)))
+    critic_encoder_hidden_dims = tuple(
+        _get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512))
+    )
+    critic_decoder_hidden_dims = tuple(
+        _get_rl_attr(config, "critic_decoder_hidden_dims", ())
+    )
     critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
     critic_num_vs = int(_get_rl_attr(config, "critic_num_vs", 2))
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        return Pi0BackboneObservationEncoder(
-            observation=observation,
-            prefix_embedding_shape=prefix_embedding_shape,
+        network_def = lambda o, rg: MLP(
+            input=o,
+            hidden_dims=critic_encoder_hidden_dims,
+            activate_final=True,
+        )
+        return MLPEncoder(
+            dummy_obs=observation,
+            encoder_def=network_def,
+            state_vector_keys=[PREFIX_EMBEDDING_NAME, "state"],
             rngs=rngs,
         )
+        # return Pi0BackboneObservationEncoder(
+        # observation=observation,
+        # prefix_embedding_shape=prefix_embedding_shape,
+        # rngs=rngs,
+        # )
 
     def state_action_decoder_def(
         embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
@@ -212,7 +231,7 @@ def _build_pi0_backbone_critic_defs(
         return StateActionEnsembleDecoder(
             observation=embedding,
             action=action,
-            hidden_dims=critic_hidden_dims,
+            hidden_dims=critic_decoder_hidden_dims,
             num_qs=critic_num_qs,
             rngs=rngs,
         )
@@ -222,7 +241,7 @@ def _build_pi0_backbone_critic_defs(
     ) -> StateValueEnsembleDecoder:
         return StateValueEnsembleDecoder(
             observation=embedding,
-            hidden_dims=critic_hidden_dims,
+            hidden_dims=critic_decoder_hidden_dims,
             num_vs=critic_num_vs,
             rngs=rngs,
         )

@@ -1,9 +1,12 @@
 import sys
+from pathlib import Path
 import pytest
 import jax.numpy as jnp
 import flax.nnx as nnx
+
 from state_action_value import StateActionValueDecoder, StateActionEnsembleDecoder
 from state_value import StateValueDecoder, StateValueEnsembleDecoder
+
 
 # ==========================================
 # 3. TEST SUITE
@@ -18,9 +21,8 @@ def test_state_action_value_shape():
     dummy_act = jnp.zeros(2)
 
     net = StateActionValueDecoder(
-        observation=dummy_obs,
-        action=dummy_act,
-        hidden_dims=[32, 32], rngs=rngs)
+        observation=dummy_obs, action=dummy_act, hidden_dims=[32, 32], rngs=rngs
+    )
 
     # Batch size 4, State dim 10, Action dim 2
     obs = jnp.zeros((4, 10))
@@ -40,7 +42,10 @@ def test_state_action_ensemble_shape():
     net = StateActionEnsembleDecoder(
         observation=dummy_obs,
         action=dummy_act,
-        hidden_dims=[32, 32], num_qs=num_qs, rngs=rngs)
+        hidden_dims=[32, 32],
+        num_qs=num_qs,
+        rngs=rngs,
+    )
     obs = jnp.ones((1, 10))
     act = jnp.ones((1, 2))
 
@@ -67,8 +72,8 @@ def test_state_value_ensemble_shape():
     num_vs = 3
     dummy_obs = jnp.zeros(10)
     net = StateValueEnsembleDecoder(
-        observation=dummy_obs,
-        hidden_dims=[32], num_vs=num_vs, rngs=rngs)
+        observation=dummy_obs, hidden_dims=[32], num_vs=num_vs, rngs=rngs
+    )
 
     obs = jnp.ones((5, 10))
     out = net(obs)
@@ -82,11 +87,9 @@ def test_jit_compatibility():
     """Ensure modules work under JIT."""
     dummy_obs = jnp.zeros(10)
     dummy_act = jnp.zeros(2)
-    net = StateActionEnsemble(
-        observation=dummy_obs,
-        action=dummy_act,
-        hidden_dims=[16],
-        num_qs=2, rngs=rngs)
+    net = StateActionEnsembleDecoder(
+        observation=dummy_obs, action=dummy_act, hidden_dims=[16], num_qs=2, rngs=rngs
+    )
 
     @nnx.jit
     def forward(model, s, a):
@@ -100,4 +103,5 @@ def test_jit_compatibility():
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main(["-v", __file__]))
+    print(test_state_value_ensemble_shape())
+    # sys.exit(pytest.main(["-v", __file__]))
