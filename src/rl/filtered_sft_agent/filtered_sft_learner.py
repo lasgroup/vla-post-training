@@ -48,7 +48,6 @@ def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_cla
 
 def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
     env_num = config.collect.env_num
-    add_states = config.collect.add_states
     obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
     seed = config.seed
@@ -65,7 +64,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
-                add_states=add_states,
                 pi0_obs_prefix=obs_prefix_key,
             )
             # Add query frequency wrapper to rollout action chunks

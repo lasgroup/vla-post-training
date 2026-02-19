@@ -282,14 +282,12 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         env: gym.Env,
         env_class: str,
         task_description: str,
-        add_states: bool = True,
         include_prompt_in_obs: bool = False,
         pi0_obs_prefix: str = "pi0",
     ):
         super().__init__(env)
         self.task_description = task_description
         self._env_class = env_class
-        self._add_states = add_states
         self._include_prompt_in_obs = include_prompt_in_obs
         self._pi0_obs_prefix = pi0_obs_prefix
         logging.info(f"\nTask: {self.task_description}")
@@ -310,7 +308,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
             if "prompt" in key:
                 spaces[key] = gym.spaces.Text(max_length=256_000)
                 continue
-            if "image" in key or "pixels" in key:
+            if "image" in key:
                 low, high = 0, 255
             else:
                 low, high = -np.inf, np.inf
@@ -323,9 +321,6 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
     def observation(self, observation):
         curr_image = obs_to_img(observation, env_class=self._env_class)
         qpos = obs_to_qpos(observation, env_class=self._env_class)
-        obs_dict = {"pixels": curr_image[np.newaxis, ..., np.newaxis]}
-        if self._add_states:
-            obs_dict["state"] = qpos[np.newaxis, ..., np.newaxis]
 
         # Do not inject prompt into env observations; prompt should be provided via default_prompt.
         obs_pi_zero = obs_to_pi_zero_input(
@@ -337,8 +332,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         obs_pi_zero = {
             f"{self._pi0_obs_prefix}/{key}": val for key, val in obs_pi_zero.items()
         }
-        obs_dict = obs_dict | obs_pi_zero
-        return obs_dict
+        return obs_pi_zero
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):

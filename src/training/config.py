@@ -20,7 +20,6 @@ class CollectionConfig:
     env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
-    add_states: bool = True
     num_rollouts: int = 50
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
