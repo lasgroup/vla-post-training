@@ -15,7 +15,12 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig
-from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic, StateValue
+from src.rl.networks.rl_networks import (
+    ObsType,
+    ActionType,
+    StateActionCritic,
+    StateValue,
+)
 
 CriticBatch = tuple[
     ObsType,
@@ -63,13 +68,30 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 
 
 @at.typecheck
-def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, " b"]:
+def summarize_critic_values(
+    critic_values: at.ArrayLike,
+    *,
+    expected_batch_size: int | None = None,
+) -> at.Float[at.Array, " b"]:
+    jax.debug.print(f"########  Critic shape {x}", x=critic_values.shape)
     critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
-    # using an ensemble of critics
-    if critic_values.ndim > 2:
-        # Take min across the ensemble members
-        # TODO: Add different summarization options such as sampling or mean
-        critic_values = jnp.min(critic_values, axis=0)
+    if critic_values.ndim <= 1:
+        return _as_scalar_batch(critic_values)
+
+    # Handle batch-first scalar outputs shaped [B, 1].
+    if critic_values.ndim == 2 and critic_values.shape[-1] == 1:
+        return critic_values[:, 0]
+
+    # If the first axis is already batch, collapse non-batch dims.
+    if (
+        expected_batch_size is not None
+        and critic_values.shape[0] == expected_batch_size
+    ):
+        return _as_scalar_batch(critic_values)
+
+    # Otherwise assume leading axis is ensemble/head and reduce it.
+    # TODO: Add different summarization options such as sampling or mean.
+    critic_values = jnp.min(critic_values, axis=0)
     return _as_scalar_batch(critic_values)
 
 
@@ -116,9 +138,7 @@ def init_state_action_critic_train_state(
 
     train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec()
-    )
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     train_state = jax.jit(
         init,
         in_shardings=replicated_sharding,
@@ -155,9 +175,7 @@ def init_state_value_train_state(
 
     train_state_shape = jax.eval_shape(init, dummy_obs, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec()
-    )
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     train_state = jax.jit(
         init,
         in_shardings=replicated_sharding,
@@ -187,8 +205,7 @@ def _update_train_state(
         new_state = dataclasses.replace(
             new_state,
             ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old
-                + (1 - state.ema_decay) * new,
+                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
                 state.ema_params,
                 new_params,
             ),
@@ -202,9 +219,7 @@ def _kernel_param_norm(model: nnx.Module) -> at.Float[at.Array, ""]:
         nnx.All(
             nnx.Param,
             nnx.Not(
-                nnx_utils.PathRegex(
-                    ".*/(bias|scale|pos_embedding|input_embedding)"
-                )
+                nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")
             ),
             lambda _, x: x.value.ndim > 1,
         ),
@@ -229,6 +244,7 @@ def train_q_step(
     observation, actions, next_observation, reward, discount = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
+    batch_size = int(reward.shape[0])
     actions = flatten_action_horizon(actions)
 
     @at.typecheck
@@ -242,11 +258,15 @@ def train_q_step(
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
 
-        q_values = summarize_critic_values(critic_model(observation, actions))
-        bootstrapped_values = summarize_critic_values(
-            target_value_model(next_observation)
+        q_values = summarize_critic_values(
+            critic_model(observation, actions),
+            expected_batch_size=batch_size,
         )
-        td_targets = reward +  discount * jax.lax.stop_gradient(bootstrapped_values)
+        bootstrapped_values = summarize_critic_values(
+            target_value_model(next_observation),
+            expected_batch_size=batch_size,
+        )
+        td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         td_errors = q_values - td_targets
         loss = jnp.mean(jnp.square(td_errors))
         return loss, {
@@ -290,7 +310,8 @@ def train_value_step(
     q_model = create_critic(q_state, config)
     q_model.eval()
 
-    observation, actions, _, _, _, _ = batch
+    observation, actions, _, _, _ = batch
+    batch_size = int(actions.shape[0])
 
     @at.typecheck
     def loss_fn(
@@ -299,8 +320,14 @@ def train_value_step(
         actions: _model.Actions,
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        values = summarize_critic_values(critic_model(observation))
-        q_values = summarize_critic_values(target_q_model(observation, actions))
+        values = summarize_critic_values(
+            critic_model(observation),
+            expected_batch_size=batch_size,
+        )
+        q_values = summarize_critic_values(
+            target_q_model(observation, actions),
+            expected_batch_size=batch_size,
+        )
         q_targets = jax.lax.stop_gradient(q_values)
         errors = values - q_targets
         loss = jnp.mean(jnp.square(errors))
