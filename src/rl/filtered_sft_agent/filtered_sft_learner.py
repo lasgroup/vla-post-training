@@ -25,7 +25,7 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.agent import Agent
-from rl.filtered_sft_agent.update import train_step
+from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -235,15 +235,14 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
+        assert 0.0 <= self._config.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.online_ratio)))
         self._data_loader = create_data_loader(
-            config, sharding=self._data_sharding, shuffle=True
+            config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer(self._data_sharding)
         self._collection_success_episodes = 0
-        # batch = next(data_iter)
-        # logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-        # log_images(batch)
 
         # Initialize train state.
         self._train_state, self._train_state_sharding = init_train_state(
@@ -274,24 +273,7 @@ class FilteredSFTLearner(Agent):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 
         # Create policy for data collection
-        policy_checkpoint_dir = os.environ.get("OPENPI_POLICY_CHECKPOINT_DIR")
-        if policy_checkpoint_dir is None and isinstance(
-            self._config.weight_loader,
-            _weight_loaders.CheckpointWeightLoader,
-        ):
-            params_path = self._config.weight_loader.params_path
-            if params_path.endswith("/params"):
-                policy_checkpoint_dir = params_path[: -len("/params")]
-            else:
-                policy_checkpoint_dir = params_path
-        if policy_checkpoint_dir is None:
-            policy_checkpoint_dir = self._checkpoint_manager._directory
-            if not (policy_checkpoint_dir / "params").exists():
-                raise FileNotFoundError(
-                    "Policy checkpoint not found. Set OPENPI_POLICY_CHECKPOINT_DIR to a checkpoint "
-                    "containing 'params' (e.g. .../openpi-assets/checkpoints/pi05_libero)."
-                )
-
+        policy_checkpoint_dir = self._config.weight_loader.params_path[: -len("/params")]
         self._policy = policy_config.create_trained_policy(
             self._config,
             policy_checkpoint_dir,
@@ -395,12 +377,10 @@ class FilteredSFTLearner(Agent):
         }
         dummy_rewards = np.zeros((1,), dtype=np.float32)
         dummy_discounts = np.zeros((1,), dtype=np.float32)
-        batch_size = int(train_config.batch_size)
         # Keep enough online data for stable sampling when mixing with offline batches.
-        max_capacity = max(batch_size, 256, batch_size * 8)
+        max_capacity = self._config.online_buffer_size
         logging.info(
-            "Initializing online replay buffer (batch_size=%d, capacity=%d)",
-            batch_size,
+            "Initializing online replay buffer (capacity=%d)",
             max_capacity,
         )
         token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -599,7 +579,6 @@ class FilteredSFTLearner(Agent):
                 "discount": dummy_discounts,
             },
             max_capacity=max_capacity,
-            batch_size=batch_size,
             data_sharding=data_sharding,
             seed=train_config.seed,
             preprocess_fn=_preprocess_insert,
@@ -729,21 +708,6 @@ class FilteredSFTLearner(Agent):
             _model.Observation.from_dict(online_batch["observation"]),
             online_batch["actions"],
         )
-
-    def sample_online_transitions(self) -> Dict[str, Any]:
-        """Sample transitions stored in the online replay buffer."""
-        if self._online_data_buffer.size == 0:
-            raise ValueError(
-                "Cannot sample transitions from an empty online replay buffer."
-            )
-        batch = self._online_data_buffer.sample()
-        return {
-            "observation": batch["observation"],
-            "actions": batch["actions"],
-            "next_observation": batch["next_observation"],
-            "reward": batch["reward"],
-            "discount": batch["discount"],
-        }
 
     def save_checkpoint(self, step: int | None = None):
         if step is None:
@@ -974,24 +938,20 @@ class FilteredSFTLearner(Agent):
 
     def update(self):
         self.training_steps += 1
+        if self._online_data_buffer.size == 0:
+            return {}
         batch = next(self._data_iter)
-        use_online = (
-            self._online_data_buffer.size >= self._online_data_buffer.batch_size
-        )
-        if use_online:
-            online_batch_raw = self._online_data_buffer.sample()
+        online_ratio = self._config.online_ratio
+        if online_ratio > 0.0:
+            online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
+            online_batch_raw = self._online_data_buffer.sample(batch_size=online_batch_size)
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
-            # online_ratio controls whether we fully switch to online data or mix by
-            # simple concatenation along the batch dimension.
-            online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
-            if online_ratio >= 1.0:
-                batch = online_batch
-            elif online_ratio > 0:
-                batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x, y], axis=0),
-                    batch,
-                    online_batch,
-                )
+            batch = online_batch if online_ratio >= 1.0 else jax.tree.map(
+                lambda x, y: jnp.concatenate([x, y], axis=0),
+                batch,
+                online_batch,
+            )
+
         train_rng, self._rng = jax.random.split(self._rng)
         train_state = self._train_state
         with sharding.set_mesh(self._mesh):

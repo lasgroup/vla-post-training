@@ -39,6 +39,8 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
+    online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
+    online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99
 
 

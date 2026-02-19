@@ -312,7 +312,7 @@ class ShardedReplayBuffer:
         self,
         dummy_data: NestedData,
         max_capacity: int,
-        batch_size: int,
+        batch_size: int | None = None,
         data_sharding: jax.sharding.NamedSharding | None = None,
         seed: Optional[int] = None,
         preprocess_fn: Callable[[NestedData], NestedData] | None = None,
@@ -385,19 +385,16 @@ class ShardedReplayBuffer:
         self.ptr = int((self.ptr + num_new) % self.max_capacity)
         self.size = int(min(self.size + num_new, self.max_capacity))
 
-    def sample(self) -> NestedData:
+    def sample(self, batch_size=None) -> NestedData:
         """
         Samples a nested batch and shards every leaf.
         """
         if self.size == 0:
             raise ValueError("Cannot sample from an empty buffer")
-        # if self.size < self.batch_size:
-        #    # Fallback or error if not enough data yet
-        #    # For simplicity, we sample with replacement if buffer is tiny,
-        #    # or you can just return partial batches (requires care in training loop)
-        #    indices = self._rng.integers(0, self.size, size=self.batch_size)
-        # else:
-        indices = self._rng.integers(0, self.size, size=self.batch_size)
+        if batch_size is None:
+            assert self.batch_size is not None, "Batch size must be specified for sampling"
+            batch_size = self.batch_size
+        indices = self._rng.integers(0, self.size, size=batch_size)
 
         def fetch_and_shard(buffer_leaf):
             batch_slice = buffer_leaf[indices]
