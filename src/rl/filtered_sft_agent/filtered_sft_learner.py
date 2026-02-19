@@ -586,11 +586,9 @@ class FilteredSFTLearner(Agent):
                 k: (np.asarray(v) if k != "prompt" and not isinstance(v, dict) else v)
                 for k, v in raw.items()
             }
-            transition_state = _pad_feature_dim(
-                raw.get("state"), transition_state_dim, name="state"
-            )
+            state_source = raw.get("state")
             next_observation = raw.get("next_observation")
-            next_state_source = raw.get("next_state", raw.get("state"))
+            next_state_source = raw.get("next_state", state_source)
             next_prefix_embedding = None
             if isinstance(next_observation, dict):
                 next_state_source = next_observation.get("state", next_state_source)
@@ -598,16 +596,11 @@ class FilteredSFTLearner(Agent):
                     next_prefix_embedding = next_observation.get(
                         PREFIX_EMBEDDING_NAME
                     )
-            transition_next_state = _pad_feature_dim(
-                next_state_source,
-                transition_state_dim,
-                name="next_state",
-            )
 
             obs_transform_input = {
                 "image": raw.get("image"),
                 "wrist_image": raw.get("wrist_image"),
-                "state": transition_state,
+                "state": state_source,
                 "prompt": prompt,
                 "actions": raw.get("actions"),
             }
@@ -617,7 +610,7 @@ class FilteredSFTLearner(Agent):
             next_obs_transform_input = {
                 "image": next_observation.get("image", raw.get("image")),
                 "wrist_image": next_observation.get("wrist_image", raw.get("wrist_image")),
-                "state": transition_next_state,
+                "state": next_state_source,
                 "prompt": prompt,
             }
             next_data = pre_token_transform(next_obs_transform_input)
@@ -683,8 +676,12 @@ class FilteredSFTLearner(Agent):
                 raise TypeError(f"Unsupported token transform: {type(token_transform)}")
 
             actions = np.asarray(data.pop("actions"), dtype=np.float32)
-            data["state"] = np.asarray(data["state"], dtype=np.float32)
-            next_data["state"] = np.asarray(next_data["state"], dtype=np.float32)
+            data["state"] = _pad_feature_dim(
+                data["state"], transition_state_dim, name="state"
+            ).astype(np.float32, copy=False)
+            next_data["state"] = _pad_feature_dim(
+                next_data["state"], transition_state_dim, name="next_state"
+            ).astype(np.float32, copy=False)
             insert_batch_size = int(actions.shape[0])
             if prefix_embedding is not None:
                 prefix_embedding = np.asarray(prefix_embedding, dtype=np.float32)
@@ -724,14 +721,14 @@ class FilteredSFTLearner(Agent):
                 processed_next_prefix = next_prefix_embedding.astype(
                     np.float32, copy=False
                 )
-            if transition_state.shape[0] != insert_batch_size:
+            if data["state"].shape[0] != insert_batch_size:
                 raise ValueError(
-                    f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
+                    f"Transition state batch mismatch: {data['state'].shape[0]} vs {insert_batch_size}."
                 )
-            if transition_next_state.shape[0] != insert_batch_size:
+            if next_data["state"].shape[0] != insert_batch_size:
                 raise ValueError(
                     "Transition next_state batch mismatch: "
-                    f"{transition_next_state.shape[0]} vs {insert_batch_size}."
+                    f"{next_data['state'].shape[0]} vs {insert_batch_size}."
                 )
             transition_reward = _ensure_batch_scalar(
                 raw.get("reward"), batch_size=insert_batch_size, default=0.0
