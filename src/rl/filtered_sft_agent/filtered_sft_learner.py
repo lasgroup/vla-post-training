@@ -455,6 +455,10 @@ class FilteredSFTLearner(Agent):
         dummy_next_obs_dict = {
             "state": np.zeros((1, transition_state_dim), dtype=np.float32)
         }
+        if prefix_embedding_template is not None:
+            dummy_next_obs_dict[PREFIX_EMBEDDING_NAME] = np.asarray(
+                prefix_embedding_template, dtype=np.float32
+            )
         dummy_rewards = np.zeros((1,), dtype=np.float32)
         dummy_discounts = np.zeros((1,), dtype=np.float32)
         batch_size = int(train_config.batch_size)
@@ -569,8 +573,13 @@ class FilteredSFTLearner(Agent):
             )
             next_observation = raw.get("next_observation")
             next_state_source = raw.get("next_state", raw.get("state"))
+            next_prefix_embedding = None
             if isinstance(next_observation, dict):
                 next_state_source = next_observation.get("state", next_state_source)
+                if store_prefix_embedding:
+                    next_prefix_embedding = next_observation.get(
+                        PREFIX_EMBEDDING_NAME
+                    )
             transition_next_state = _pad_feature_dim(
                 next_state_source,
                 transition_state_dim,
@@ -653,6 +662,26 @@ class FilteredSFTLearner(Agent):
                 data[PREFIX_EMBEDDING_NAME] = prefix_embedding.astype(
                     np.float32, copy=False
                 )
+
+            processed_next_prefix = None
+            if next_prefix_embedding is not None:
+                next_prefix_embedding = np.asarray(next_prefix_embedding, dtype=np.float32)
+                if next_prefix_embedding.ndim == 2:
+                    next_prefix_embedding = next_prefix_embedding[None, ...]
+                if next_prefix_embedding.shape[0] != insert_batch_size:
+                    if next_prefix_embedding.shape[0] == 1:
+                        next_prefix_embedding = np.broadcast_to(
+                            next_prefix_embedding,
+                            (insert_batch_size,) + next_prefix_embedding.shape[1:],
+                        )
+                    else:
+                        raise ValueError(
+                            "Next prefix embedding batch mismatch: "
+                            f"{next_prefix_embedding.shape[0]} vs {insert_batch_size}."
+                        )
+                processed_next_prefix = next_prefix_embedding.astype(
+                    np.float32, copy=False
+                )
             if transition_state.shape[0] != insert_batch_size:
                 raise ValueError(
                     f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
@@ -671,12 +700,16 @@ class FilteredSFTLearner(Agent):
                 default=transition_gamma,
             )
 
+            transition_next_observation = {
+                "state": transition_next_state.astype(np.float32, copy=False)
+            }
+            if processed_next_prefix is not None:
+                transition_next_observation[PREFIX_EMBEDDING_NAME] = processed_next_prefix
+
             return {
                 "observation": data,
                 "actions": actions,
-                "next_observation": {
-                    "state": transition_next_state.astype(np.float32, copy=False)
-                },
+                "next_observation": transition_next_observation,
                 "reward": transition_reward,
                 "discount": transition_discount,
             }

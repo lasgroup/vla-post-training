@@ -18,9 +18,9 @@ from src.training.config import OnlineTrainConfig
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic, StateValue
 
 CriticBatch = tuple[
-    _model.Observation,
+    ObsType,
     _model.Actions,
-    _model.Observation,
+    ObsType,
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
@@ -229,9 +229,9 @@ def train_q_step(
     @at.typecheck
     def loss_fn(
         critic_model: StateActionCritic,
-        observation: _model.Observation,
+        observation: ObsType,
         actions: _model.Actions,
-        next_observation: _model.Observation,
+        next_observation: ObsType,
         reward: at.Float[at.ArrayLike, " b"],
         discount: at.Float[at.ArrayLike, " b"],
         target_value_model: StateValue,
@@ -290,7 +290,7 @@ def train_value_step(
     @at.typecheck
     def loss_fn(
         critic_model: StateValue,
-        observation: _model.Observation,
+        observation: ObsType,
         actions: _model.Actions,
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:

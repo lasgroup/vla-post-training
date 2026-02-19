@@ -2,6 +2,7 @@
 import functools
 from typing import Any
 
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 
@@ -18,6 +19,7 @@ from src.rl.advantage_weighted_regression.update_critic import (
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig
 
 
@@ -85,20 +87,20 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         updates = int(getattr(rl_config, "critic_updates_per_step", 1))
         return max(1, updates)
 
-    @at.typecheck
-    def _online_batch_to_critic_batch(self, online_batch: dict[str, Any]) -> tuple[
-        _model.Observation,
-        _model.Actions,
-        _model.Observation,
-        at.Float[at.Array, "b s"],
-        at.Float[at.Array, " b"],
-    ]:
-        # TODO: This requires some fixing since we pass the full raw observation to the critic now
-        online_observation = online_batch["observation"]
-        observation_dict: dict[str, Any] = {
-            "image": dict(online_observation["image"]),
-            "image_mask": dict(online_observation["image_mask"]),
-            "state": online_observation["state"],
+    def _build_model_observation(
+        self, observation: dict[str, Any]
+    ) -> _model.Observation | None:
+        if not isinstance(observation, dict):
+            return None
+        if "image" not in observation or "image_mask" not in observation:
+            return None
+        if "state" not in observation:
+            return None
+
+        model_observation: dict[str, Any] = {
+            "image": dict(observation["image"]),
+            "image_mask": dict(observation["image_mask"]),
+            "state": observation["state"],
         }
         for key in (
             "tokenized_prompt",
@@ -106,13 +108,65 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             "token_ar_mask",
             "token_loss_mask",
         ):
-            if key in online_observation:
-                observation_dict[key] = online_observation[key]
+            if key in observation:
+                model_observation[key] = observation[key]
+
+        return _model.Observation.from_dict(model_observation)
+
+    def _recompute_prefix_embedding(
+        self,
+        *,
+        model: _model.BaseModel,
+        observation: dict[str, Any] | None,
+    ) -> jax.Array | None:
+        if observation is None:
+            return None
+        model_observation = self._build_model_observation(observation)
+        if model_observation is None:
+            return None
+        prefix = self._get_prefix_rep_with_model(
+            m=model,
+            observation=model_observation,
+        )
+        return jnp.asarray(prefix, dtype=jnp.float32)
+
+    @at.typecheck
+    def _online_batch_to_critic_batch(
+        self,
+        online_batch: dict[str, Any],
+        *,
+        policy_model: _model.BaseModel,
+    ) -> tuple[
+        ObsType,
+        _model.Actions,
+        ObsType,
+        at.Float[at.Array, "b s"],
+        at.Float[at.Array, " b"],
+    ]:
+        online_observation = online_batch["observation"]
+        observation_dict: dict[str, Any] = {
+            "state": online_observation["state"],
+        }
+        curr_prefix_embedding = self._recompute_prefix_embedding(
+            model=policy_model,
+            observation=online_observation,
+        )
+        if curr_prefix_embedding is not None:
+            observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
+
+        next_observation = online_batch["next_observation"]
+        next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
+        next_prefix_embedding = self._recompute_prefix_embedding(
+            model=policy_model,
+            observation=next_observation if isinstance(next_observation, dict) else None,
+        )
+        if next_prefix_embedding is not None:
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
 
         return (
-            _model.Observation.from_dict(observation_dict),
+            observation_dict,
             online_batch["actions"],
-            online_batch["next_observation"]["state"],
+            next_observation_dict,
             online_batch["reward"],
             online_batch["discount"],
         )
@@ -120,9 +174,18 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     @at.typecheck
     def _update_critics(self) -> dict[str, at.Array]:
         critic_info: dict[str, at.Array] = {}
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        policy_model = nnx.merge(self._train_state.model_def, params)
         for _ in range(self._critic_updates_per_step):
             transition_batch = self.sample_online_transitions()
-            critic_batch = self._online_batch_to_critic_batch(transition_batch)
+            critic_batch = self._online_batch_to_critic_batch(
+                transition_batch,
+                policy_model=policy_model,
+            )
             q_rng, v_rng, self._rng = jax.random.split(self._rng, 3)
 
             with sharding.set_mesh(self._mesh):

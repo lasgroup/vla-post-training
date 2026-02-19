@@ -26,8 +26,9 @@ import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
+import gc
 import platform
-from typing import Any, Sequence
+from typing import Any
 
 import flax.nnx as nnx
 from flax.training import common_utils
@@ -46,8 +47,8 @@ from src.rl.advantage_weighted_regression.update_critic import (
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
-from src.rl.networks.encoders.resnet_encoderv1 import ResNet18
-from src.rl.networks.rl_networks import StateActionCritic, StateValue
+from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
 from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
@@ -58,94 +59,140 @@ def _get_rl_attr(config: _config.OnlineTrainConfig, name: str, default: Any) -> 
     return getattr(rl_config, name, default)
 
 
-class ResNetObservationEncoder(nnx.Module):
-    """Encodes OpenPI observations with a ResNet image backbone + low-dim state."""
+def _infer_prefix_embedding_shape(
+    config: _config.OnlineTrainConfig,
+) -> tuple[int, ...] | None:
+    model = None
+    try:
+        init_rng = jax.random.key(config.seed)
+        model = config.model.create(init_rng)
+        if not hasattr(model, "get_prefix_rep"):
+            return None
+        fake_obs = config.model.fake_obs(batch_size=1)
+        prefix_rep = model.get_prefix_rep(fake_obs)
+        if isinstance(prefix_rep, tuple):
+            prefix_rep = prefix_rep[0]
+        prefix_rep = jnp.asarray(prefix_rep, dtype=jnp.float32)
+        return tuple(int(x) for x in prefix_rep.shape[1:])
+    except Exception as exc:  # pragma: no cover - startup fallback path
+        logging.warning("Failed to infer Pi0 prefix embedding shape: %s", exc)
+        return None
+    finally:
+        del model
+        gc.collect()
+
+
+def _make_dummy_critic_observation(
+    config: _config.OnlineTrainConfig,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
+) -> dict[str, jax.Array]:
+    fake_obs = config.model.fake_obs(batch_size=1)
+    dummy_obs = {"state": jnp.asarray(fake_obs.state, dtype=jnp.float32)}
+    if prefix_embedding_shape is not None:
+        dummy_obs[PREFIX_EMBEDDING_NAME] = jnp.zeros(
+            (1, *prefix_embedding_shape), dtype=jnp.float32
+        )
+    return dummy_obs
+
+
+class Pi0BackboneObservationEncoder(nnx.Module):
+    """Uses Pi0 prefix embeddings (if available) plus state as critic observations."""
 
     def __init__(
         self,
-        observation: _model.Observation,
+        observation: ObsType,
         *,
-        image_keys: Sequence[str],
-        num_filters: int,
-        norm: str,
-        use_spatial_softmax: bool,
+        prefix_embedding_shape: tuple[int, ...] | None,
         rngs: nnx.Rngs,
     ):
-        self._image_keys = tuple(image_keys)
-        self._image_shapes = {
-            name: tuple(jnp.asarray(image).shape[1:])
-            for name, image in observation.images.items()
-        }
-        init_inputs = self._to_resnet_inputs(observation)
-        self._resnet = ResNet18(
-            input_example=init_inputs,
-            image_keys=list(self._image_keys),
-            num_filters=num_filters,
-            norm=norm,
-            use_spatial_softmax=use_spatial_softmax,
-            rngs=rngs,
-        )
+        del rngs
+        self._prefix_embedding_shape = prefix_embedding_shape
+        # Validate observation compatibility at init time.
+        self._extract_state(observation)
 
-    def _to_resnet_inputs(
-        self, observation: _model.Observation | jax.Array
-    ) -> dict[str, dict[str, jax.Array] | jax.Array]:
+    @staticmethod
+    def _extract_state(observation: ObsType) -> jax.Array:
         if isinstance(observation, _model.Observation):
-            state = jnp.asarray(observation.state, dtype=jnp.float32)
-            # Observation.from_dict stores images in [-1, 1] float; ResNetEncoder expects [0, 255].
-            image_dict = {
-                name: jnp.clip(
-                    (jnp.asarray(image, dtype=jnp.float32) + 1.0) * 127.5,
-                    0.0,
-                    255.0,
-                )
-                for name, image in observation.images.items()
-            }
+            state = observation.state
+        elif isinstance(observation, dict):
+            state = observation.get("state")
+            if state is None:
+                raise KeyError("Critic observation dict must include a 'state' field.")
         else:
-            state = jnp.asarray(observation, dtype=jnp.float32)
-            if state.ndim == 1:
-                state = state[jnp.newaxis, :]
-            batch_size = state.shape[0]
-            image_dict = {
-                name: jnp.zeros((batch_size, *shape), dtype=jnp.float32)
-                for name, shape in self._image_shapes.items()
-            }
-        return {
-            "image": image_dict,
-            "state": state,
-        }
-
-    def __call__(
-        self, observation: _model.Observation | jax.Array, training: bool = False
-    ) -> jax.Array:
-        obs_dict = self._to_resnet_inputs(observation)
-        image_features = self._resnet(obs_dict, train=training)
-        state = obs_dict["state"]
+            state = observation
+        state = jnp.asarray(state, dtype=jnp.float32)
+        if state.ndim == 1:
+            state = state[jnp.newaxis, :]
         if state.ndim > 2:
             state = state.reshape((state.shape[0], -1))
-        return jnp.concatenate([image_features, state], axis=-1)
+        return state
+
+    def _extract_prefix_embedding(
+        self, observation: ObsType, *, batch_size: int
+    ) -> jax.Array | None:
+        prefix = None
+        if isinstance(observation, dict):
+            prefix = observation.get(PREFIX_EMBEDDING_NAME)
+
+        if prefix is None:
+            if self._prefix_embedding_shape is None:
+                return None
+            prefix = jnp.zeros(
+                (batch_size, *self._prefix_embedding_shape), dtype=jnp.float32
+            )
+        else:
+            prefix = jnp.asarray(prefix, dtype=jnp.float32)
+            if prefix.ndim == 1:
+                prefix = prefix[jnp.newaxis, :]
+            if prefix.ndim == 2 and prefix.shape[0] != batch_size:
+                if prefix.shape[0] == 1:
+                    prefix = jnp.broadcast_to(prefix, (batch_size, prefix.shape[-1]))
+                else:
+                    raise ValueError(
+                        "Prefix embedding batch mismatch: "
+                        f"{prefix.shape[0]} vs {batch_size}."
+                    )
+            if prefix.ndim >= 3 and prefix.shape[0] != batch_size:
+                if prefix.shape[0] == 1:
+                    prefix = jnp.broadcast_to(prefix, (batch_size,) + prefix.shape[1:])
+                else:
+                    raise ValueError(
+                        "Prefix embedding batch mismatch: "
+                        f"{prefix.shape[0]} vs {batch_size}."
+                    )
+
+        if prefix.ndim == 2:
+            return prefix
+
+        # Prefix embeddings are expected as [B, S, E]. Pool sequence tokens to [B, E].
+        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
+        return jnp.mean(prefix, axis=1)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
+        del training
+        state = self._extract_state(observation)
+        prefix_embedding = self._extract_prefix_embedding(
+            observation, batch_size=state.shape[0]
+        )
+        if prefix_embedding is None:
+            return state
+        return jnp.concatenate([state, prefix_embedding], axis=-1)
 
 
-def _build_resnet_critic_defs(
+def _build_pi0_backbone_critic_defs(
     config: _config.OnlineTrainConfig,
-    dummy_obs: _model.Observation,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
-    image_keys = [f"image|{name}" for name in sorted(dummy_obs.images.keys())]
     critic_hidden_dims = tuple(_get_rl_attr(config, "critic_hidden_dims", (1024, 512)))
     critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
     critic_num_vs = int(_get_rl_attr(config, "critic_num_vs", 2))
-    resnet_num_filters = int(_get_rl_attr(config, "critic_resnet_num_filters", 32))
-    resnet_norm = str(_get_rl_attr(config, "critic_resnet_norm", "group"))
-    use_spatial_softmax = bool(
-        _get_rl_attr(config, "critic_resnet_use_spatial_softmax", True)
-    )
 
-    def encoder_def(observation: _model.Observation, rngs: nnx.Rngs):
-        return ResNetObservationEncoder(
+    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
+        return Pi0BackboneObservationEncoder(
             observation=observation,
-            image_keys=image_keys,
-            num_filters=resnet_num_filters,
-            norm=resnet_norm,
-            use_spatial_softmax=use_spatial_softmax,
+            prefix_embedding_shape=prefix_embedding_shape,
             rngs=rngs,
         )
 
@@ -171,7 +218,7 @@ def _build_resnet_critic_defs(
         )
 
     def state_action_critic_def(
-        observation: _model.Observation, action: jax.Array, rngs: nnx.Rngs
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
     ) -> StateActionCritic:
         return StateActionCritic(
             observation=observation,
@@ -181,7 +228,7 @@ def _build_resnet_critic_defs(
             rngs=rngs,
         )
 
-    def state_value_def(observation: _model.Observation, rngs: nnx.Rngs) -> StateValue:
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
         return StateValue(
             observation=observation,
             encoder_def=encoder_def,
@@ -195,6 +242,11 @@ def _build_resnet_critic_defs(
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
+    if bool(getattr(config, "return_prefix_rep", False)):
+        logging.info(
+            "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
+            "from observations every update."
+        )
 
     from src.envs.libero import make_env_libero
 
@@ -206,10 +258,22 @@ def main(config: _config.OnlineTrainConfig):
         env_class="libero",
     )
 
-    dummy_obs = config.model.fake_obs(batch_size=1)
+    prefix_embedding_shape = _infer_prefix_embedding_shape(config)
+    if prefix_embedding_shape is None:
+        logging.warning(
+            "Could not infer Pi0 prefix embedding shape; critic encoder will use state only."
+        )
+    else:
+        logging.info(
+            "Using Pi0 prefix embeddings for critic observations with shape %s.",
+            prefix_embedding_shape,
+        )
+    dummy_obs = _make_dummy_critic_observation(
+        config, prefix_embedding_shape=prefix_embedding_shape
+    )
     dummy_act = config.model.fake_act(batch_size=1)
-    state_action_critic_def, state_value_def = _build_resnet_critic_defs(
-        config, dummy_obs
+    state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+        config, prefix_embedding_shape=prefix_embedding_shape
     )
     agent = AdvantageWeightedFilteredSFTLearner(
         config=config,
