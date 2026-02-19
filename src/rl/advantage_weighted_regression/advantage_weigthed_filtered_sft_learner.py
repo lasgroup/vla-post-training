@@ -140,7 +140,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         ObsType,
         _model.Actions,
         ObsType,
-        at.Float[at.Array, "b s"],
+        at.Float[at.Array, " b"],
         at.Float[at.Array, " b"],
     ]:
         online_observation = online_batch["observation"]

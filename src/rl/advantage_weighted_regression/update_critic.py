@@ -75,7 +75,7 @@ def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, "
 
 
 @at.typecheck
-def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, " b"]:
+def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, "b a"]:
     return values.reshape((values.shape[0], -1))
 
 
