@@ -196,6 +196,7 @@ def init_train_state(
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
+        self._env_num_mulitask = len(config.collect.tasks)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -272,7 +273,7 @@ class FilteredSFTLearner(Agent):
         )
 
         # Create temporary episode storage
-        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
+        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
 
         # Create policy for data collection
         policy_checkpoint_dir = os.environ.get("OPENPI_POLICY_CHECKPOINT_DIR")
@@ -758,13 +759,13 @@ class FilteredSFTLearner(Agent):
         def get_env_value(vec, env_id):
             return jax.tree.map(lambda x: x[env_id], vec)
 
-        for i in range(self._config.collect.env_num):
+        for i in range(self._env_num_mulitask):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
         if env_index < 0 or env_index >= len(self._episode_storage):
             raise IndexError(
-                f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
+                f"env_index={env_index} is out of range for {len(self._episode_storage)} environments." # TODO
             )
 
         # Extract episode data from storage
@@ -963,13 +964,13 @@ class FilteredSFTLearner(Agent):
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
-        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
+        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
-        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
+        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
         self._collection_success_episodes = 0
         return collected_episodes
 
