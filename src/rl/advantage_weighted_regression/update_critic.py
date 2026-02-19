@@ -291,6 +291,7 @@ def train_value_step(
     q_model.eval()
 
     observation, actions, _, _, _ = batch
+    actions = flatten_action_horizon(actions)
 
     @at.typecheck
     def loss_fn(
