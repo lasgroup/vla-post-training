@@ -1,6 +1,7 @@
 # ruff: noqa: F722
 import functools
 from typing import Any
+import gc
 
 import flax.nnx as nnx
 import jax
@@ -18,7 +19,7 @@ from src.rl.advantage_weighted_regression.update_critic import (
     train_q_step,
     train_value_step,
     StateActionCriticDef,
-    StateValueDef
+    StateValueDef,
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
@@ -27,13 +28,14 @@ from src.training.config import OnlineTrainConfig
 
 
 class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
-    def __init__(self,
-                 config: OnlineTrainConfig,
-                 dummy_obs: ObsType,
-                 dummy_act: ActionType,
-                 state_action_critic_def: StateActionCriticDef,
-                 state_value_def: StateValueDef,
-                 ):
+    def __init__(
+        self,
+        config: OnlineTrainConfig,
+        dummy_obs: ObsType,
+        dummy_act: ActionType,
+        state_action_critic_def: StateActionCriticDef,
+        state_value_def: StateValueDef,
+    ):
         super().__init__(config)
         self._critic_updates_per_step = self._get_critic_updates_per_step()
 
@@ -45,7 +47,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 self._mesh,
                 critic_def=state_action_critic_def,
                 dummy_obs=dummy_obs,
-                dummy_act=dummy_act
+                dummy_act=dummy_act,
             )
         )
 
@@ -84,7 +86,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             out_shardings=(self._value_state_sharding, self._replicated_sharding),
             donate_argnums=(1,),
         )
-        self._actor_train_step = jax.jit(
+        del self._train_step
+        gc.collect()
+        self._train_step = jax.jit(
             functools.partial(train_actor_step, self._config),
             in_shardings=(
                 self._replicated_sharding,
@@ -183,7 +187,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
         next_prefix_embedding = self._recompute_prefix_embedding(
             model=policy_model,
-            observation=next_observation if isinstance(next_observation, dict) else None,
+            observation=(
+                next_observation if isinstance(next_observation, dict) else None
+            ),
         )
         if next_prefix_embedding is not None:
             next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
@@ -317,7 +323,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
         train_rng, self._rng = jax.random.split(self._rng)
         with sharding.set_mesh(self._mesh):
-            train_state, actor_info = self._actor_train_step(
+            train_state, actor_info = self._train_step(
                 train_rng,
                 self._train_state,
                 self._state_action_critic_state,
