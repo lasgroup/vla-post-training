@@ -408,15 +408,41 @@ class FilteredSFTLearner(Agent):
                 "Model transforms must include a prompt tokenization transform."
             )
 
-        pre_token_transform = _transforms.compose(
+        obs_repack_transforms = []
+        for transform in data_config.repack_transforms.inputs:
+            if isinstance(transform, _transforms.RepackTransform):
+                flat_structure = _transforms.flatten_dict(transform.structure)
+                flat_structure = {
+                    k: v
+                    for k, v in flat_structure.items()
+                    if k != "actions" and v != "actions"
+                }
+                transform = _transforms.RepackTransform(
+                    _transforms.unflatten_dict(flat_structure)
+                )
+            obs_repack_transforms.append(transform)
+        obs_pre_token_transform = _transforms.compose(
             [
-                *data_config.repack_transforms.inputs,
+                *obs_repack_transforms,
                 *data_config.data_transforms.inputs,
                 _transforms.Normalize(
                     data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
                 ),
                 *non_token_model_transforms,
             ]
+        )
+        next_obs_pre_token_transform = _transforms.compose(
+            [
+                *obs_repack_transforms,
+                *data_config.data_transforms.inputs,
+                _transforms.Normalize(
+                    data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *non_token_model_transforms,
+            ]
+        )
+        action_normalize_transform = _transforms.Normalize(
+            data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
         )
 
         obs_spec, act_spec = train_config.model.inputs_spec(batch_size=1)
@@ -602,9 +628,24 @@ class FilteredSFTLearner(Agent):
                 "wrist_image": raw.get("wrist_image"),
                 "state": state_source,
                 "prompt": prompt,
-                "actions": raw.get("actions"),
             }
-            data = pre_token_transform(obs_transform_input)
+            data = obs_pre_token_transform(obs_transform_input)
+
+            raw_actions = raw.get("actions")
+            if raw_actions is None:
+                raise ValueError("Online insertion requires 'actions'.")
+            actions = _pad_actions_to_horizon(raw_actions, action_horizon).astype(
+                np.float32, copy=False
+            )
+            actions = action_normalize_transform({"actions": actions}).get(
+                "actions", actions
+            )
+            actions = _transforms.pad_to_dim(
+                np.asarray(actions, dtype=np.float32),
+                int(act_spec.shape[-1]),
+                axis=-1,
+            )
+            data["actions"] = actions
 
             next_observation = next_observation if isinstance(next_observation, dict) else {}
             next_obs_transform_input = {
@@ -613,12 +654,7 @@ class FilteredSFTLearner(Agent):
                 "state": next_state_source,
                 "prompt": prompt,
             }
-            next_data = pre_token_transform(next_obs_transform_input)
-
-            if "actions" in data:
-                data["actions"] = _pad_actions_to_horizon(
-                    data["actions"], action_horizon
-                )
+            next_data = next_obs_pre_token_transform(next_obs_transform_input)
 
             # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
