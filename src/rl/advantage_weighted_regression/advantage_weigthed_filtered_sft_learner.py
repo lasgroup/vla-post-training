@@ -128,7 +128,14 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             m=model,
             observation=model_observation,
         )
-        return jnp.asarray(prefix, dtype=jnp.float32)
+        prefix = jnp.asarray(prefix, dtype=jnp.float32)
+        if prefix.ndim == 1:
+            return prefix[jnp.newaxis, :]
+        if prefix.ndim == 2:
+            return prefix
+        # Prefix reps are usually [B, S, E]; pool token axis to [B, E].
+        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
+        return jnp.mean(prefix, axis=1)
 
     @at.typecheck
     def _online_batch_to_critic_batch(

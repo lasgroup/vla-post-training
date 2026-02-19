@@ -2,8 +2,8 @@
 # suppress Numba FNV hashing warnings
 import warnings
 
-from src.rl.networks.encoders.encoders import MLPEncoder
 from src.rl.networks.mlp import MLP
+from src.rl.networks.encoders.encoders import MLPEncoder
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
@@ -48,7 +48,6 @@ import jax.numpy as jnp
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi.models.model as _model
 import openpi.training.utils as training_utils
 from src.rl.advantage_weighted_regression import AdvantageWeightedFilteredSFTLearner
 from src.rl.advantage_weighted_regression.update_critic import (
@@ -72,6 +71,16 @@ def _get_rl_attr(config: _config.OnlineTrainConfig, name: str, default: Any) -> 
     return getattr(rl_config, name, default)
 
 
+def _pool_prefix_embedding(prefix_rep: jax.Array) -> jax.Array:
+    prefix_rep = jnp.asarray(prefix_rep, dtype=jnp.float32)
+    if prefix_rep.ndim == 1:
+        return prefix_rep[jnp.newaxis, :]
+    if prefix_rep.ndim == 2:
+        return prefix_rep
+    prefix_rep = prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1]))
+    return jnp.mean(prefix_rep, axis=1)
+
+
 def _infer_prefix_embedding_shape(
     config: _config.OnlineTrainConfig,
 ) -> tuple[int, ...] | None:
@@ -85,7 +94,7 @@ def _infer_prefix_embedding_shape(
         prefix_rep = model.get_prefix_rep(fake_obs)
         if isinstance(prefix_rep, tuple):
             prefix_rep = prefix_rep[0]
-        prefix_rep = jnp.asarray(prefix_rep, dtype=jnp.float32)
+        prefix_rep = _pool_prefix_embedding(prefix_rep)
         return tuple(int(x) for x in prefix_rep.shape[1:])
     except Exception as exc:  # pragma: no cover - startup fallback path
         logging.warning("Failed to infer Pi0 prefix embedding shape: %s", exc)
@@ -108,91 +117,6 @@ def _make_dummy_critic_observation(
         )
     return dummy_obs
 
-
-class Pi0BackboneObservationEncoder(nnx.Module):
-    """Uses Pi0 prefix embeddings (if available) plus state as critic observations."""
-
-    def __init__(
-        self,
-        observation: ObsType,
-        *,
-        prefix_embedding_shape: tuple[int, ...] | None,
-        rngs: nnx.Rngs,
-    ):
-        del rngs
-        self._prefix_embedding_shape = prefix_embedding_shape
-        # Validate observation compatibility at init time.
-        self._extract_state(observation)
-
-    @staticmethod
-    def _extract_state(observation: ObsType) -> jax.Array:
-        if isinstance(observation, _model.Observation):
-            state = observation.state
-        elif isinstance(observation, dict):
-            state = observation.get("state")
-            if state is None:
-                raise KeyError("Critic observation dict must include a 'state' field.")
-        else:
-            state = observation
-        state = jnp.asarray(state, dtype=jnp.float32)
-        if state.ndim == 1:
-            state = state[jnp.newaxis, :]
-        if state.ndim > 2:
-            state = state.reshape((state.shape[0], -1))
-        return state
-
-    def _extract_prefix_embedding(
-        self, observation: ObsType, *, batch_size: int
-    ) -> jax.Array | None:
-        prefix = None
-        if isinstance(observation, dict):
-            prefix = observation.get(PREFIX_EMBEDDING_NAME)
-
-        if prefix is None:
-            if self._prefix_embedding_shape is None:
-                return None
-            prefix = jnp.zeros(
-                (batch_size, *self._prefix_embedding_shape), dtype=jnp.float32
-            )
-        else:
-            prefix = jnp.asarray(prefix, dtype=jnp.float32)
-            if prefix.ndim == 1:
-                prefix = prefix[jnp.newaxis, :]
-            if prefix.ndim == 2 and prefix.shape[0] != batch_size:
-                if prefix.shape[0] == 1:
-                    prefix = jnp.broadcast_to(prefix, (batch_size, prefix.shape[-1]))
-                else:
-                    raise ValueError(
-                        "Prefix embedding batch mismatch: "
-                        f"{prefix.shape[0]} vs {batch_size}."
-                    )
-            if prefix.ndim >= 3 and prefix.shape[0] != batch_size:
-                if prefix.shape[0] == 1:
-                    prefix = jnp.broadcast_to(prefix, (batch_size,) + prefix.shape[1:])
-                else:
-                    raise ValueError(
-                        "Prefix embedding batch mismatch: "
-                        f"{prefix.shape[0]} vs {batch_size}."
-                    )
-
-        if prefix.ndim == 2:
-            return prefix
-
-        # Prefix embeddings are expected as [B, S, E]. Pool sequence tokens to [B, E].
-        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        return jnp.mean(prefix, axis=1)
-
-    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
-        del training
-        state = self._extract_state(observation)
-        prefix_embedding = self._extract_prefix_embedding(
-            observation, batch_size=state.shape[0]
-        )
-        if prefix_embedding is None:
-            return state
-        return jnp.concatenate([state, prefix_embedding], axis=-1)
-
-
 def _build_pi0_backbone_critic_defs(
     config: _config.OnlineTrainConfig,
     *,
@@ -212,18 +136,17 @@ def _build_pi0_backbone_critic_defs(
             input=o,
             hidden_dims=critic_encoder_hidden_dims,
             activate_final=True,
+            rngs=rg,
         )
+        state_vector_keys = ["state"]
+        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
+            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
         return MLPEncoder(
             dummy_obs=observation,
             encoder_def=network_def,
-            state_vector_keys=[PREFIX_EMBEDDING_NAME, "state"],
+            state_vector_keys=state_vector_keys,
             rngs=rngs,
         )
-        # return Pi0BackboneObservationEncoder(
-        # observation=observation,
-        # prefix_embedding_shape=prefix_embedding_shape,
-        # rngs=rngs,
-        # )
 
     def state_action_decoder_def(
         embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
