@@ -385,8 +385,7 @@ class FilteredSFTLearner(Agent):
         )
         token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         action_horizon = int(train_config.model.action_horizon)
-        default_prompt = getattr(train_config, "default_prompt", None)
-        transition_gamma = float(getattr(train_config, "discount", 1.0))
+        transition_gamma = float(train_config.discount)
 
         def _pad_feature_dim(values: Any, target_dim: int, *, name: str) -> np.ndarray:
             arr = np.asarray(values, dtype=np.float32)
@@ -422,93 +421,34 @@ class FilteredSFTLearner(Agent):
                 arr = arr.reshape(batch_size, -1)[:, 0]
             return arr.astype(np.float32, copy=False)
 
-        def _normalize_observation_layout(
-            raw_episode: Dict[str, Any],
-        ) -> Dict[str, Any]:
-            """Normalize accepted observation layouts into a single structure."""
-            raw = dict(raw_episode)
-            aliases = (
-                ("observation.image", "image"),
-                ("observation.wrist_image", "wrist_image"),
-                ("observation.state", "state"),
-                ("observation/image", "image"),
-                ("observation/wrist_image", "wrist_image"),
-                ("observation/state", "state"),
-            )
-            for source, target in aliases:
-                if target not in raw and source in raw:
-                    raw[target] = raw[source]
-
-            obs = raw.get("observation")
-            if not isinstance(obs, dict):
-                obs = {}
-
-            for key in ("image", "wrist_image", "state"):
-                if key not in raw and key in obs:
-                    raw[key] = obs[key]
-                if key in raw:
-                    obs[key] = raw[key]
-
-            if obs:
-                raw["observation"] = obs
-            return raw
-
         def _preprocess_insert(episode_data: Dict[str, Any]):
-            raw = _normalize_observation_layout(episode_data)
-            if "actions" not in raw and "action" in raw:
-                raw["actions"] = raw.pop("action")
-
-            prompt = raw.get("prompt", default_prompt)
-            if prompt is None:
-                raise ValueError(
-                    "Prompt is required for online insertion. Provide task_description during "
-                    "collection or configure a default prompt."
-                )
-            if not isinstance(prompt, str):
-                prompt_arr = np.asarray(prompt)
-                prompt = prompt_arr.reshape(-1)[0].item() if prompt_arr.size else ""
-            prompt = str(prompt)
-            raw["prompt"] = prompt
-
+            raw = episode_data
+            raw["observation"] = {k: raw[k] for k in ("image", "wrist_image", "state")}
+            prompt = raw["prompt"]
             raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
             transition_state = _pad_feature_dim(
-                raw.get("state"), transition_state_dim, name="state"
+                raw["state"], transition_state_dim, name="state"
             )
-            next_observation = raw.get("next_observation")
-            next_state_source = raw.get("next_state", raw.get("state"))
-            if isinstance(next_observation, dict):
-                next_state_source = next_observation.get("state", next_state_source)
-            transition_next_state = _pad_feature_dim(
-                next_state_source,
-                transition_state_dim,
-                name="next_state",
-            )
-
             data = pre_token_transform(raw)
-
-            if "actions" in data:
-                data["actions"] = _pad_actions_to_horizon(
-                    data["actions"], action_horizon
-                )
+            data["actions"] = _pad_actions_to_horizon(
+                data["actions"], action_horizon
+            )
 
             # Ensure batched image masks.
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
-            if "image_mask" in data:
-                for k, v in data["image_mask"].items():
-                    v = np.asarray(v)
-                    if v.ndim == 0:
-                        data["image_mask"][k] = np.full(
-                            batch_shape, bool(v), dtype=np.bool_
-                        )
+            for k, v in data["image_mask"].items():
+                v = np.asarray(v)
+                if v.ndim == 0:
+                    data["image_mask"][k] = np.full(
+                        batch_shape, bool(v), dtype=np.bool_
+                    )
 
+            data.pop("prompt", None)
             if isinstance(token_transform, _transforms.TokenizePrompt):
-                cached = token_cache.get(prompt)
-                if cached is None:
+                if prompt not in token_cache:
                     tok = token_transform({"prompt": prompt})
-                    cached = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
-                    token_cache[prompt] = cached
-                tokens, token_masks = cached
-                data.pop("prompt", None)
+                    token_cache[prompt] = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
+                tokens, token_masks = token_cache[prompt]
                 data["tokenized_prompt"] = np.broadcast_to(
                     tokens, batch_shape + tokens.shape
                 ).copy()
@@ -516,26 +456,17 @@ class FilteredSFTLearner(Agent):
                     token_masks, batch_shape + token_masks.shape
                 ).copy()
             elif isinstance(token_transform, _transforms.TokenizeFASTInputs):
-                data.pop("prompt", None)
                 state = np.asarray(data["state"])
-                actions = data.get("actions")
-                if actions is None:
-                    raise ValueError("FAST tokenization requires actions.")
-                actions = np.asarray(actions)
+                actions = np.asarray(data["actions"])
                 t = int(state.shape[0])
-                toks, masks, ar_masks, loss_masks = [], [], [], []
+                keys = ["tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"]
+                buff = {k: [] for k in keys}
                 for i in range(t):
                     out = token_transform(
                         {"prompt": prompt, "state": state[i], "actions": actions[i]}
                     )
-                    toks.append(out["tokenized_prompt"])
-                    masks.append(out["tokenized_prompt_mask"])
-                    ar_masks.append(out["token_ar_mask"])
-                    loss_masks.append(out["token_loss_mask"])
-                data["tokenized_prompt"] = np.stack(toks, axis=0)
-                data["tokenized_prompt_mask"] = np.stack(masks, axis=0)
-                data["token_ar_mask"] = np.stack(ar_masks, axis=0)
-                data["token_loss_mask"] = np.stack(loss_masks, axis=0)
+                    buff = {k: buff[k] + [out[k]] for k in keys}
+                data =  {**data, **{k: np.stack(v, axis=0) for k, v in buff.items()}}
             else:
                 raise TypeError(f"Unsupported token transform: {type(token_transform)}")
 
@@ -545,11 +476,6 @@ class FilteredSFTLearner(Agent):
             if transition_state.shape[0] != insert_batch_size:
                 raise ValueError(
                     f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
-                )
-            if transition_next_state.shape[0] != insert_batch_size:
-                raise ValueError(
-                    "Transition next_state batch mismatch: "
-                    f"{transition_next_state.shape[0]} vs {insert_batch_size}."
                 )
             transition_reward = _ensure_batch_scalar(
                 raw.get("reward"), batch_size=insert_batch_size, default=0.0
@@ -564,7 +490,7 @@ class FilteredSFTLearner(Agent):
                 "observation": data,
                 "actions": actions,
                 "next_observation": {
-                    "state": transition_next_state.astype(np.float32, copy=False)
+                    "state": transition_state.astype(np.float32, copy=False)
                 },
                 "reward": transition_reward,
                 "discount": transition_discount,
