@@ -23,7 +23,6 @@ CriticBatch = tuple[
     ObsType,
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
-    at.Float[at.Array, " b"],
 ]
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
@@ -79,6 +78,12 @@ def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, "b a"]:
     return values.reshape((values.shape[0], -1))
 
 
+def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
+    if isinstance(rng, nnx.Rngs):
+        return rng
+    return nnx.Rngs(rng)
+
+
 def init_state_action_critic_train_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
@@ -97,7 +102,7 @@ def init_state_action_critic_train_state(
     dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
 
     def init(obs, act, rng) -> training_utils.TrainState:
-        critic = critic_def(obs, act, rng)
+        critic = critic_def(obs, act, _ensure_rngs(rng))
         params = nnx.state(critic)
         return training_utils.TrainState(
             step=0,
@@ -136,7 +141,7 @@ def init_state_value_train_state(
     ema_decay = _critic_ema_decay(config)
 
     def init(obs, rng) -> training_utils.TrainState:
-        critic = critic_def(obs, rng)
+        critic = critic_def(obs, _ensure_rngs(rng))
         params = nnx.state(critic)
         return training_utils.TrainState(
             step=0,
