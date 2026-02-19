@@ -68,30 +68,13 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 
 
 @at.typecheck
-def summarize_critic_values(
-    critic_values: at.ArrayLike,
-    *,
-    expected_batch_size: int | None = None,
-) -> at.Float[at.Array, " b"]:
-    jax.debug.print(f"########  Critic shape {x}", x=critic_values.shape)
+def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, " b"]:
     critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
-    if critic_values.ndim <= 1:
-        return _as_scalar_batch(critic_values)
-
-    # Handle batch-first scalar outputs shaped [B, 1].
-    if critic_values.ndim == 2 and critic_values.shape[-1] == 1:
-        return critic_values[:, 0]
-
-    # If the first axis is already batch, collapse non-batch dims.
-    if (
-        expected_batch_size is not None
-        and critic_values.shape[0] == expected_batch_size
-    ):
-        return _as_scalar_batch(critic_values)
-
-    # Otherwise assume leading axis is ensemble/head and reduce it.
-    # TODO: Add different summarization options such as sampling or mean.
-    critic_values = jnp.min(critic_values, axis=0)
+    # using an ensemble of critics
+    if critic_values.ndim > 1:
+        # Take min across the ensemble members
+        # TODO: Add different summarization options such as sampling or mean
+        critic_values = jnp.min(critic_values, axis=0)
     return _as_scalar_batch(critic_values)
 
 
@@ -244,7 +227,6 @@ def train_q_step(
     observation, actions, next_observation, reward, discount = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
-    batch_size = int(reward.shape[0])
     actions = flatten_action_horizon(actions)
 
     @at.typecheck
@@ -260,11 +242,9 @@ def train_q_step(
 
         q_values = summarize_critic_values(
             critic_model(observation, actions),
-            expected_batch_size=batch_size,
         )
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
-            expected_batch_size=batch_size,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         td_errors = q_values - td_targets
@@ -311,7 +291,6 @@ def train_value_step(
     q_model.eval()
 
     observation, actions, _, _, _ = batch
-    batch_size = int(actions.shape[0])
 
     @at.typecheck
     def loss_fn(
@@ -322,11 +301,9 @@ def train_value_step(
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         values = summarize_critic_values(
             critic_model(observation),
-            expected_batch_size=batch_size,
         )
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
-            expected_batch_size=batch_size,
         )
         q_targets = jax.lax.stop_gradient(q_values)
         errors = values - q_targets
