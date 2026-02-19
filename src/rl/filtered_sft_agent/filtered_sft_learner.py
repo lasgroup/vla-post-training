@@ -411,15 +411,14 @@ class FilteredSFTLearner(Agent):
         obs_repack_transforms = []
         for transform in data_config.repack_transforms.inputs:
             if isinstance(transform, _transforms.RepackTransform):
-                flat_structure = _transforms.flatten_dict(transform.structure)
-                flat_structure = {
+                # Keep the original flat slash-key structure expected by LiberoInputs
+                # while removing the actions mapping for observation-only preprocessing.
+                structure = {
                     k: v
-                    for k, v in flat_structure.items()
+                    for k, v in transform.structure.items()
                     if k != "actions" and v != "actions"
                 }
-                transform = _transforms.RepackTransform(
-                    _transforms.unflatten_dict(flat_structure)
-                )
+                transform = _transforms.RepackTransform(structure)
             obs_repack_transforms.append(transform)
         obs_pre_token_transform = _transforms.compose(
             [
