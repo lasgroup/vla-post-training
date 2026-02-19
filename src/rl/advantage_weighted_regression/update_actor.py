@@ -1,6 +1,10 @@
 # ruff: noqa: F722
 from src.training.config import OnlineTrainConfig
-from src.rl.advantage_weighted_regression.update_critic import create_critic
+from src.rl.advantage_weighted_regression.update_critic import (
+    create_critic,
+    flatten_action_horizon,
+    summarize_critic_values,
+)
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -11,7 +15,7 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
-from src.rl.networks.rl_networks import StateActionCritic, StateValue
+from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
 
 
 @at.typecheck
@@ -28,7 +32,7 @@ def train_step(
     policy_state: training_utils.TrainState,
     state_action_critic_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
-    batch: tuple[_model.Observation, _model.Actions],
+    batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy = nnx.merge(policy_state.model_def, policy_state.params)
     policy.train()
@@ -40,36 +44,42 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel,
         rng: at.KeyArrayLike,
-        observation: _model.Observation,
+        policy_observation: _model.Observation,
+        critic_observation: ObsType,
         actions: _model.Actions,
         critic_model: StateActionCritic,
         value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
-        value = value_model(observation)
-        q_value = critic_model(observation, actions)
+        critic_actions = flatten_action_horizon(actions)
+        value = summarize_critic_values(value_model(critic_observation))
+        q_value = summarize_critic_values(critic_model(critic_observation, critic_actions))
         advantage = q_value - value
         score = advantage / _awr_beta(config)
         score = jnp.minimum(score, 20.0)  # Clipping
-        # Normalize the weights across the batch axis for training stability and expand dim by one for the chunk loss.
-        score = jax.nn.softmax(score, axis=0)[..., jnp.newaxis]
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
+        # Normalize the weights across the batch axis for training stability.
+        score = jax.nn.softmax(score, axis=0)
+        chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
+        while score.ndim < chunked_loss.ndim:
+            score = score[..., jnp.newaxis]
         aux_data = {
             "advantage_weights": jnp.mean(score),
             "chunked_loss": jnp.mean(chunked_loss),
+            "advantage_mean": jnp.mean(advantage),
         }
         return jnp.sum(score * chunked_loss), aux_data
 
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
-    observation, actions = batch
+    policy_observation, critic_observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(loss_fn, has_aux=True, argnums=diff_state)(
         policy,
         train_rng,
-        observation,
+        policy_observation,
+        critic_observation,
         actions,
         state_action_critic,
         value_critic,

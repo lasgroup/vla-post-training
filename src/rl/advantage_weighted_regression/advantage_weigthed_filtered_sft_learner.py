@@ -9,6 +9,9 @@ import jax.numpy as jnp
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
+from src.rl.advantage_weighted_regression.update_actor import (
+    train_step as train_actor_step,
+)
 from src.rl.advantage_weighted_regression.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
@@ -79,6 +82,21 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 self._data_sharding,
             ),
             out_shardings=(self._value_state_sharding, self._replicated_sharding),
+            donate_argnums=(1,),
+        )
+        self._actor_train_step = jax.jit(
+            functools.partial(train_actor_step, self._config),
+            in_shardings=(
+                self._replicated_sharding,
+                self._train_state_sharding,
+                self._state_action_critic_state_sharding,
+                self._value_state_sharding,
+                self._data_sharding,
+            ),
+            out_shardings=(
+                self._train_state_sharding,
+                self._replicated_sharding,
+            ),
             donate_argnums=(1,),
         )
 
@@ -178,6 +196,40 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             online_batch["discount"],
         )
 
+    def _sft_batch_to_actor_batch(
+        self,
+        sft_batch: tuple[_model.Observation, _model.Actions],
+        *,
+        policy_model: _model.BaseModel,
+    ) -> tuple[_model.Observation, ObsType, _model.Actions]:
+        policy_observation, actions = sft_batch
+        if isinstance(policy_observation, _model.Observation):
+            pass
+        elif hasattr(policy_observation, "to_dict"):
+            policy_observation = _model.Observation.from_dict(
+                dict(policy_observation.to_dict())
+            )
+        elif isinstance(policy_observation, dict):
+            policy_observation = _model.Observation.from_dict(dict(policy_observation))
+        else:
+            raise TypeError(
+                "Unsupported observation type for actor update: "
+                f"{type(policy_observation)}."
+            )
+        policy_obs_dict = policy_observation.to_dict()
+
+        critic_observation: dict[str, Any] = {
+            "state": policy_obs_dict["state"],
+        }
+        prefix_embedding = self._recompute_prefix_embedding(
+            model=policy_model,
+            observation=policy_obs_dict,
+        )
+        if prefix_embedding is not None:
+            critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
+
+        return policy_observation, critic_observation, actions
+
     @at.typecheck
     def _update_critics(self) -> dict[str, at.Array]:
         critic_info: dict[str, at.Array] = {}
@@ -234,7 +286,47 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict[str, at.Array]:
-        info = super().update()
+        self.training_steps += 1
+        batch = next(self._data_iter)
+        use_online = (
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
+        )
+        if use_online:
+            online_batch_raw = self._online_data_buffer.sample()
+            online_batch = self._online_batch_to_sft_batch(online_batch_raw)
+            online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
+            if online_ratio >= 1.0:
+                batch = online_batch
+            elif online_ratio > 0:
+                batch = jax.tree.map(
+                    lambda x, y: jnp.concatenate([x, y], axis=0),
+                    batch,
+                    online_batch,
+                )
+
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        policy_model = nnx.merge(self._train_state.model_def, params)
+        actor_batch = self._sft_batch_to_actor_batch(
+            batch,
+            policy_model=policy_model,
+        )
+
+        train_rng, self._rng = jax.random.split(self._rng)
+        with sharding.set_mesh(self._mesh):
+            train_state, actor_info = self._actor_train_step(
+                train_rng,
+                self._train_state,
+                self._state_action_critic_state,
+                self._value_state,
+                actor_batch,
+            )
+        self._train_state = train_state
+        info = {f"actor/{key}": value for key, value in actor_info.items()}
+
         if self._online_data_buffer.size < self._online_data_buffer.batch_size:
             return info | {
                 "critic/online_buffer_size": jnp.asarray(
