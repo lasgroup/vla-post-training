@@ -34,44 +34,48 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
+    policy_observation, critic_observation, actions = batch
+
     policy = nnx.merge(policy_state.model_def, policy_state.params)
     policy.train()
 
     state_action_critic = create_critic(state_action_critic_state, config)
+    state_action_critic.eval()
+
     value_critic = create_critic(value_state, config)
+    value_critic.eval()
+
+    # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
+    critic_actions = flatten_action_horizon(actions)
+    value = summarize_critic_values(value_critic(critic_observation))
+    q_value = summarize_critic_values(state_action_critic(critic_observation, critic_actions))
+    advantage = q_value - value
+
+    score = advantage / _awr_beta(config)
+    score = jnp.minimum(score, 20.0)  # Clipping
+    score = jax.nn.softmax(score, axis=0)
+    score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
         rng: at.KeyArrayLike,
         policy_observation: _model.Observation,
-        critic_observation: ObsType,
         actions: _model.Actions,
-        critic_model: StateActionCritic,
-        value_model: StateValue,
+        score: jnp.ndarray,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
-        critic_actions = flatten_action_horizon(actions)
-        value = summarize_critic_values(value_model(critic_observation))
-        q_value = summarize_critic_values(critic_model(critic_observation, critic_actions))
-        advantage = q_value - value
-        score = advantage / _awr_beta(config)
-        score = jnp.minimum(score, 20.0)  # Clipping
-        # Normalize the weights across the batch axis for training stability.
-        score = jax.nn.softmax(score, axis=0)
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]
         aux_data = {
             "advantage_weights": jnp.mean(score),
             "chunked_loss": jnp.mean(chunked_loss),
-            "advantage_mean": jnp.mean(advantage),
         }
         return jnp.sum(score * chunked_loss), aux_data
 
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
-    policy_observation, critic_observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
@@ -79,10 +83,8 @@ def train_step(
         policy,
         train_rng,
         policy_observation,
-        critic_observation,
         actions,
-        state_action_critic,
-        value_critic,
+        score,
       )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
@@ -117,5 +119,6 @@ def train_step(
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
+        "advantage_mean": jnp.mean(advantage),
     } | aux_data
     return new_state, info

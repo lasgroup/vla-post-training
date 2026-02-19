@@ -20,6 +20,7 @@ from src.rl.advantage_weighted_regression.update_critic import (
     train_value_step,
     StateActionCriticDef,
     StateValueDef,
+    CriticBatch,
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
@@ -37,7 +38,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         state_value_def: StateValueDef,
     ):
         super().__init__(config)
-        self._critic_updates_per_step = self._get_critic_updates_per_step()
+        self._critic_update_frequency = self._get_critic_update_frequency()
+        self._policy_update_frequency = self._get_policy_update_frequency()
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -104,9 +106,14 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             donate_argnums=(1,),
         )
 
-    def _get_critic_updates_per_step(self) -> int:
+    def _get_critic_update_frequency(self) -> int:
         rl_config = getattr(self._config, "rl", None)
-        updates = int(getattr(rl_config, "critic_updates_per_step", 1))
+        updates = int(getattr(rl_config, "critic_update_frequency", 1))
+        return max(1, updates)
+
+    def _get_policy_update_frequency(self) -> int:
+        rl_config = getattr(self._config, "rl", None)
+        updates = int(getattr(rl_config, "policy_update_frequency", 1))
         return max(1, updates)
 
     def _build_model_observation(
@@ -237,68 +244,70 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         return policy_observation, critic_observation, actions
 
     @at.typecheck
-    def _update_critics(self) -> dict[str, at.Array]:
-        critic_info: dict[str, at.Array] = {}
+    def _update_critics(self, batch: CriticBatch) -> dict[str, at.Array]:
+        q_rng, v_rng, self._rng = jax.random.split(self._rng, 3)
+        with sharding.set_mesh(self._mesh):
+            q_state, q_info = self._q_train_step(
+                q_rng,
+                self._state_action_critic_state,
+                self._value_state,
+                batch,
+            )
+            value_state, value_info = self._value_train_step(
+                v_rng,
+                self._value_state,
+                q_state,
+                batch,
+            )
+        self._state_action_critic_state = q_state
+        self._value_state = value_state
+        current_info = {
+                f"critic/q_{key}": value for key, value in q_info.items()
+            } | {f"critic/value_{key}": value for key, value in value_info.items()}
+        return current_info
+
+    def _update_policy(self, batch: tuple[_model.Observation, ObsType, _model.Actions]):
+        train_rng, self._rng = jax.random.split(self._rng)
+        with sharding.set_mesh(self._mesh):
+            train_state, actor_info = self._train_step(
+                train_rng,
+                self._train_state,
+                self._state_action_critic_state,
+                self._value_state,
+                batch,
+            )
+        self._train_state = train_state
+        info = {f"actor/{key}": value for key, value in actor_info.items()}
+        return info
+
+    @at.typecheck
+    def update(self) -> dict[str, at.Array]:
+        self.training_steps += 1
+        update_critic = self._critic_update_frequency % self.training_steps == 0
+        update_policy = self._policy_update_frequency % self.training_steps == 0
+        if not update_critic and not update_policy:
+            return {'online_buffer_size': jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32)}
+
+        batch = next(self._data_iter)
+        use_online = (
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
+        )
         params = (
             self._train_state.ema_params
             if self._train_state.ema_params is not None
             else self._train_state.params
         )
         policy_model = nnx.merge(self._train_state.model_def, params)
-        for _ in range(self._critic_updates_per_step):
-            transition_batch = self.sample_online_transitions()
-            critic_batch = self._online_batch_to_critic_batch(
-                transition_batch,
-                policy_model=policy_model,
-            )
-            q_rng, v_rng, self._rng = jax.random.split(self._rng, 3)
-
-            with sharding.set_mesh(self._mesh):
-                q_state, q_info = self._q_train_step(
-                    q_rng,
-                    self._state_action_critic_state,
-                    self._value_state,
-                    critic_batch,
-                )
-                value_state, value_info = self._value_train_step(
-                    v_rng,
-                    self._value_state,
-                    q_state,
-                    critic_batch,
-                )
-            self._state_action_critic_state = q_state
-            self._value_state = value_state
-
-            current_info = {
-                f"critic/q_{key}": value for key, value in q_info.items()
-            } | {f"critic/value_{key}": value for key, value in value_info.items()}
-            if not critic_info:
-                critic_info = current_info
-            else:
-                critic_info = {
-                    key: critic_info[key] + current_info[key] for key in critic_info
-                }
-
-        if self._critic_updates_per_step > 1:
-            critic_info = {
-                key: value / self._critic_updates_per_step
-                for key, value in critic_info.items()
-            }
-
-        critic_info["critic/online_buffer_size"] = jnp.asarray(
-            float(self._online_data_buffer.size), dtype=jnp.float32
-        )
-        return critic_info
-
-    @at.typecheck
-    def update(self) -> dict[str, at.Array]:
-        self.training_steps += 1
-        batch = next(self._data_iter)
-        use_online = (
-            self._online_data_buffer.size >= self._online_data_buffer.batch_size
-        )
+        critic_info, actor_info = {}, {}
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
+            if update_critic:
+                critic_batch = self._online_batch_to_critic_batch(
+                    online_batch_raw,
+                    policy_model=policy_model,
+                )
+                critic_info = self._update_critics(critic_batch)
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
@@ -309,36 +318,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                     batch,
                     online_batch,
                 )
-
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
-        actor_batch = self._sft_batch_to_actor_batch(
-            batch,
-            policy_model=policy_model,
-        )
-
-        train_rng, self._rng = jax.random.split(self._rng)
-        with sharding.set_mesh(self._mesh):
-            train_state, actor_info = self._train_step(
-                train_rng,
-                self._train_state,
-                self._state_action_critic_state,
-                self._value_state,
-                actor_batch,
+        if update_policy:
+            actor_batch = self._sft_batch_to_actor_batch(
+                batch,
+                policy_model=policy_model,
             )
-        self._train_state = train_state
-        info = {f"actor/{key}": value for key, value in actor_info.items()}
-
-        if self._online_data_buffer.size < self._online_data_buffer.batch_size:
-            return info | {
-                "critic/online_buffer_size": jnp.asarray(
+            actor_info = self._update_policy(actor_batch)
+        return actor_info | critic_info | {'online_buffer_size': jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )
-            }
-
-        critic_info = self._update_critics()
-        return info | critic_info
+                )}
