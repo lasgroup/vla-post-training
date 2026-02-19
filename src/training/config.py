@@ -74,6 +74,9 @@ _CONFIGS.extend(
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
             num_train_steps=10_000,
             num_workers=4,  # override default num_workers
+            exp_name="test",
+            resume=True,
+            checkpoint_base_dir="/capstor/scratch/cscs/chenhli/checkpoints",
         ),
     ]
 )
