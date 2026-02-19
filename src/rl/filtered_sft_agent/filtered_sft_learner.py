@@ -453,7 +453,14 @@ class FilteredSFTLearner(Agent):
         dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
         transition_state_dim = int(obs_spec_dict["state"].shape[-1])
         dummy_next_obs_dict = {
-            "state": np.zeros((1, transition_state_dim), dtype=np.float32)
+            "image": {
+                k: _zeros_like_spec(v, override_dtype=np.uint8)
+                for k, v in obs_spec_dict["image"].items()
+            },
+            "image_mask": {
+                k: _zeros_like_spec(v) for k, v in obs_spec_dict["image_mask"].items()
+            },
+            "state": np.zeros((1, transition_state_dim), dtype=np.float32),
         }
         if prefix_embedding_template is not None:
             dummy_next_obs_dict[PREFIX_EMBEDDING_NAME] = np.asarray(
@@ -545,6 +552,14 @@ class FilteredSFTLearner(Agent):
 
             if obs:
                 raw["observation"] = obs
+
+            next_obs = raw.get("next_observation")
+            if isinstance(next_obs, dict):
+                normalized_next_obs = dict(next_obs)
+                for source, target in aliases:
+                    if target not in normalized_next_obs and source in normalized_next_obs:
+                        normalized_next_obs[target] = normalized_next_obs[source]
+                raw["next_observation"] = normalized_next_obs
             return raw
 
         def _preprocess_insert(episode_data: Dict[str, Any]):
@@ -567,7 +582,10 @@ class FilteredSFTLearner(Agent):
             prompt = str(prompt)
             raw["prompt"] = prompt
 
-            raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+            raw = {
+                k: (np.asarray(v) if k != "prompt" and not isinstance(v, dict) else v)
+                for k, v in raw.items()
+            }
             transition_state = _pad_feature_dim(
                 raw.get("state"), transition_state_dim, name="state"
             )
@@ -586,7 +604,23 @@ class FilteredSFTLearner(Agent):
                 name="next_state",
             )
 
-            data = pre_token_transform(raw)
+            obs_transform_input = {
+                "image": raw.get("image"),
+                "wrist_image": raw.get("wrist_image"),
+                "state": transition_state,
+                "prompt": prompt,
+                "actions": raw.get("actions"),
+            }
+            data = pre_token_transform(obs_transform_input)
+
+            next_observation = next_observation if isinstance(next_observation, dict) else {}
+            next_obs_transform_input = {
+                "image": next_observation.get("image", raw.get("image")),
+                "wrist_image": next_observation.get("wrist_image", raw.get("wrist_image")),
+                "state": transition_next_state,
+                "prompt": prompt,
+            }
+            next_data = pre_token_transform(next_obs_transform_input)
 
             if "actions" in data:
                 data["actions"] = _pad_actions_to_horizon(
@@ -600,6 +634,13 @@ class FilteredSFTLearner(Agent):
                     v = np.asarray(v)
                     if v.ndim == 0:
                         data["image_mask"][k] = np.full(
+                            batch_shape, bool(v), dtype=np.bool_
+                        )
+            if "image_mask" in next_data:
+                for k, v in next_data["image_mask"].items():
+                    v = np.asarray(v)
+                    if v.ndim == 0:
+                        next_data["image_mask"][k] = np.full(
                             batch_shape, bool(v), dtype=np.bool_
                         )
 
@@ -643,6 +684,7 @@ class FilteredSFTLearner(Agent):
 
             actions = np.asarray(data.pop("actions"), dtype=np.float32)
             data["state"] = np.asarray(data["state"], dtype=np.float32)
+            next_data["state"] = np.asarray(next_data["state"], dtype=np.float32)
             insert_batch_size = int(actions.shape[0])
             if prefix_embedding is not None:
                 prefix_embedding = np.asarray(prefix_embedding, dtype=np.float32)
@@ -701,7 +743,9 @@ class FilteredSFTLearner(Agent):
             )
 
             transition_next_observation = {
-                "state": transition_next_state.astype(np.float32, copy=False)
+                "image": next_data["image"],
+                "image_mask": next_data["image_mask"],
+                "state": next_data["state"].astype(np.float32, copy=False),
             }
             if processed_next_prefix is not None:
                 transition_next_observation[PREFIX_EMBEDDING_NAME] = processed_next_prefix
@@ -1139,15 +1183,27 @@ class FilteredSFTLearner(Agent):
             frame["actions"] = self.post_step_action_filter(
                 np.asarray(actions, dtype=np.float32)
             )
-            next_state = frame["state"]
+            next_frame = {
+                "image": frame.get("image"),
+                "wrist_image": frame.get("wrist_image"),
+                "state": frame["state"],
+            }
             next_prefix_embedding = frame.get(PREFIX_EMBEDDING_NAME)
             if next_obs is not None:
                 next_obs = _extract_policy_obs(next_obs)
+                if "image" in next_obs:
+                    next_frame["image"] = next_obs["image"]
+                if "wrist_image" in next_obs:
+                    next_frame["wrist_image"] = next_obs["wrist_image"]
                 if "state" in next_obs:
-                    next_state = next_obs["state"]
+                    next_frame["state"] = next_obs["state"]
                 if PREFIX_EMBEDDING_NAME in next_obs:
                     next_prefix_embedding = next_obs[PREFIX_EMBEDDING_NAME]
-            frame["next_observation"] = {"state": next_state}
+            frame["next_observation"] = {
+                k: v
+                for k, v in next_frame.items()
+                if v is not None
+            }
             if next_prefix_embedding is not None:
                 frame["next_observation"][PREFIX_EMBEDDING_NAME] = np.asarray(
                     next_prefix_embedding, dtype=np.float32
@@ -1211,9 +1267,6 @@ class FilteredSFTLearner(Agent):
             actions = np.asarray(episode_batch["actions"], dtype=np.float32)
             rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
             dones = np.asarray(episode_batch["done"], dtype=np.bool_)
-            next_states = np.asarray(
-                episode_batch["next_observation"]["state"], dtype=np.float32
-            )
             num_steps = int(actions.shape[0])
             num_windows = num_steps - action_horizon + 1
             if num_windows <= 0:
@@ -1256,11 +1309,12 @@ class FilteredSFTLearner(Agent):
                 ],
                 dtype=np.float32,
             )
-            windowed_batch["next_observation"] = {
-                "state": next_states[
+            windowed_batch["next_observation"] = jax.tree_util.tree_map(
+                lambda x: np.asarray(x)[
                     action_horizon - 1 : action_horizon - 1 + num_windows
-                ]
-            }
+                ],
+                episode_batch["next_observation"],
+            )
             episode_batch = windowed_batch
         else:
             for ep in episode_data:
