@@ -23,8 +23,16 @@ disable_progress_bars()
 
 # allows using subprocenvs
 import multiprocessing as mp
+import os
 
 mp.set_start_method("spawn", force=True)
+
+# Spawned env workers re-import this module. Keep them off GPU/JAX device init.
+if mp.current_process().name != "MainProcess":
+    os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
+# Avoid aggressive JAX GPU preallocation in the trainer process.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import gc
 import platform
@@ -270,72 +278,72 @@ def main(config: _config.OnlineTrainConfig):
             "Using Pi0 prefix embeddings for critic observations with shape %s.",
             prefix_embedding_shape,
         )
-    # dummy_obs = _make_dummy_critic_observation(
-    #     config, prefix_embedding_shape=prefix_embedding_shape
-    # )
-    # dummy_act = config.model.fake_act(batch_size=1)
-    # state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
-    #     config, prefix_embedding_shape=prefix_embedding_shape
-    # )
-    # agent = AdvantageWeightedFilteredSFTLearner(
-    #     config=config,
-    #     dummy_obs=dummy_obs,
-    #     dummy_act=dummy_act,
-    #     state_action_critic_def=state_action_critic_def,
-    #     state_value_def=state_value_def,
-    # )
-    # init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    dummy_obs = _make_dummy_critic_observation(
+        config, prefix_embedding_shape=prefix_embedding_shape
+    )
+    dummy_act = config.model.fake_act(batch_size=1)
+    state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+        config, prefix_embedding_shape=prefix_embedding_shape
+    )
+    agent = AdvantageWeightedFilteredSFTLearner(
+        config=config,
+        dummy_obs=dummy_obs,
+        dummy_act=dummy_act,
+        state_action_critic_def=state_action_critic_def,
+        state_value_def=state_value_def,
+    )
+    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
-    # batch = next(iter(agent._data_loader))
-    # logging.info(
-    #     f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}"
-    # )
-    # log_images(batch)
+    batch = next(iter(agent._data_loader))
+    logging.info(
+        f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}"
+    )
+    log_images(batch)
 
-    # start_step = int(jax.device_get(agent._train_state.step))
-    # agent.training_steps = start_step
-    # pbar = tqdm.tqdm(
-    #     range(start_step, config.num_train_steps),
-    #     initial=start_step,
-    #     total=config.num_train_steps,
-    #     dynamic_ncols=True,
-    # )
+    start_step = int(jax.device_get(agent._train_state.step))
+    agent.training_steps = start_step
+    pbar = tqdm.tqdm(
+        range(start_step, config.num_train_steps),
+        initial=start_step,
+        total=config.num_train_steps,
+        dynamic_ncols=True,
+    )
 
-    # infos = []
-    # for step in pbar:
-    #     info = agent.update()
-    #     infos.append(info)
+    infos = []
+    for step in pbar:
+        info = agent.update()
+        infos.append(info)
 
-    #     if step % config.log_interval == 0:
-    #         stacked_infos = common_utils.stack_forest(infos)
-    #         reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-    #         info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-    #         pbar.write(f"Step {step}: {info_str}")
-    #         wandb.log(reduced_info, step=step)
-    #         infos = []
+        if step % config.log_interval == 0:
+            stacked_infos = common_utils.stack_forest(infos)
+            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            pbar.write(f"Step {step}: {info_str}")
+            wandb.log(reduced_info, step=step)
+            infos = []
 
-    #     if step % config.collect.collect_interval == 0:
-    #         agent.save_checkpoint(step=step)
-    #         collect_info, n_collected_episodes = collect_data(
-    #             agent=agent,
-    #             env=env,
-    #             task_description=task_description,
-    #             config=config,
-    #             step=step,
-    #         )
-    #         wandb.log(collect_info, step=step)
-    #         if n_collected_episodes > 0:
-    #             logging.info(
-    #                 f"Collected {n_collected_episodes} successful episodes at step {step}."
-    #             )
+        if step % config.collect.collect_interval == 0:
+            agent.save_checkpoint(step=step)
+            collect_info, n_collected_episodes = collect_data(
+                agent=agent,
+                env=env,
+                task_description=task_description,
+                config=config,
+                step=step,
+            )
+            wandb.log(collect_info, step=step)
+            if n_collected_episodes > 0:
+                logging.info(
+                    f"Collected {n_collected_episodes} successful episodes at step {step}."
+                )
 
-    #     if (
-    #         step % config.save_interval == 0 and step > start_step
-    #     ) or step == config.num_train_steps - 1:
-    #         agent.save_checkpoint(step=step)
+        if (
+            step % config.save_interval == 0 and step > start_step
+        ) or step == config.num_train_steps - 1:
+            agent.save_checkpoint(step=step)
 
-    # logging.info("Waiting for checkpoint manager to finish")
-    # agent._checkpoint_manager.wait_until_finished()
+    logging.info("Waiting for checkpoint manager to finish")
+    agent._checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":

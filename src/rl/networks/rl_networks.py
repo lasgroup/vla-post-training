@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Union
+from typing import Callable, Union
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
 import flax.nnx as nnx
@@ -22,7 +22,7 @@ from tensorflow_probability.substrates import jax as tfp
 # TFP aliases
 tfd = tfp.distributions
 
-ObsType = Union[Dict, FrozenDict, jnp.ndarray]
+ObsType = Union[dict, FrozenDict, jnp.ndarray]
 EmbeddingType = jnp.ndarray
 ActionType = jnp.ndarray
 

@@ -1,6 +1,7 @@
 from gymnasium.wrappers import TimeLimit
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
+import logging
 import numpy as np
 import pathlib
 import os
@@ -35,7 +36,22 @@ def get_libero_warm_start_action():
     return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
 
 
-def make_env_libero(config, num_devices: int = 4):
+def _infer_num_visible_cuda_devices(default: int = 1) -> int:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not visible:
+        return default
+    device_ids = [
+        dev.strip()
+        for dev in visible.split(",")
+        if dev.strip() and dev.strip() != "-1"
+    ]
+    return max(default, len(device_ids))
+
+
+def make_env_libero(config, num_devices: int | None = None):
+    if num_devices is None:
+        num_devices = _infer_num_visible_cuda_devices(default=1)
+    logging.info("LIBERO render device pool size: %d", int(num_devices))
     assert len(config.collect.tasks) == 1, "Only single-task collection is supported."
     task_suite_name = "_".join(config.collect.tasks[0].split("_")[:-1])
     task_id = int(config.collect.tasks[0].split("_")[-1])
@@ -59,7 +75,7 @@ def make_env_libero(config, num_devices: int = 4):
 
     def env_fn(rank: int):
         args = env_args.copy()
-        args["render_gpu_device_id"] = rank % num_devices
+        args["render_gpu_device_id"] = rank % int(max(1, num_devices))
         env = OffScreenRenderEnv(**args)
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
