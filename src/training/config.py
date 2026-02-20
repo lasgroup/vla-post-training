@@ -42,6 +42,7 @@ class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     discount: float = 0.99
+    replay_buffer_size: int = 10 * 256
 
 
 # Use `get_config` if you need to get a config by name in your code.

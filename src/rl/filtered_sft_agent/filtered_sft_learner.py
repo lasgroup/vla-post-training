@@ -399,7 +399,7 @@ class FilteredSFTLearner(Agent):
         dummy_discounts = np.zeros((1,), dtype=np.float32)
         batch_size = int(train_config.batch_size)
         # Keep enough online data for stable sampling when mixing with offline batches.
-        max_capacity = max(batch_size, 256, batch_size * 8)
+        max_capacity = int(train_config.replay_buffer_size)
         logging.info(
             "Initializing online replay buffer (batch_size=%d, capacity=%d)",
             batch_size,
