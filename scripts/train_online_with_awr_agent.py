@@ -117,6 +117,7 @@ def _make_dummy_critic_observation(
         )
     return dummy_obs
 
+
 def _build_pi0_backbone_critic_defs(
     config: _config.OnlineTrainConfig,
     *,
@@ -233,6 +234,7 @@ def main(config: _config.OnlineTrainConfig):
         dummy_act=dummy_act,
         state_action_critic_def=state_action_critic_def,
         state_value_def=state_value_def,
+        task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
