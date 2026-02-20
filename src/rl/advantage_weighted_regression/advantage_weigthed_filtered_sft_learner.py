@@ -36,7 +36,10 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         dummy_act: ActionType,
         state_action_critic_def: StateActionCriticDef,
         state_value_def: StateValueDef,
+        task_description: str,
     ):
+        self.task_description = task_description
+
         super().__init__(config)
         self._critic_update_frequency = self._get_critic_update_frequency()
         self._policy_update_frequency = self._get_policy_update_frequency()
