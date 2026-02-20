@@ -123,14 +123,22 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         self,
         *,
         model: _model.BaseModel,
-        observation: dict[str, Any] | None,
+        observation: dict[str, Any] | _model.Observation | None,
     ) -> at.Float[at.Array, "batch embed"] | None:
         if observation is None:
             return None
-        processed_obs = self._process_obs_for_pi0(observation)
-        prefix = self._policy.get_prefix_rep_with_model(
-            model, obs=processed_obs
-        )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
+        if isinstance(observation, _model.Observation):
+            # Already-processed Observation: bypass _process_obs_for_pi0 and
+            # _input_transform (which expect raw env observations) and compute
+            # the prefix representation directly.
+            prefix = self._policy._get_prefix_rep_with_model(
+                model, observation=observation
+            )
+        else:
+            processed_obs = self._process_obs_for_pi0(observation)
+            prefix = self._policy.get_prefix_rep_with_model(
+                model, obs=processed_obs
+            )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
 
@@ -212,7 +220,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         }
         prefix_embedding = self._recompute_prefix_embedding(
             model=policy_model,
-            observation=policy_obs_dict,
+            observation=policy_observation,
         )
         if prefix_embedding is not None:
             critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
