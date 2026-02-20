@@ -853,9 +853,9 @@ class FilteredSFTLearner(Agent):
                     processed_obs[obs_key] = val
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
-            if task_description is None:
-                # TODO: How should we process task description? Probably correct way is to save it in the data?
-                # assert task_description is not None, "No task description is provided"
+            if task_description is not None:
+                processed_obs["prompt"] = task_description
+            else:
                 processed_obs["prompt"] = self.task_description
         return processed_obs
 
