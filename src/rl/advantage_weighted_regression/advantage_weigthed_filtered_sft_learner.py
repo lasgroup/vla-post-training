@@ -127,30 +127,18 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     ) -> at.Float[at.Array, "batch embed"] | None:
         if observation is None:
             return None
+        # Both SFT-loader Observations and online-buffer dicts are already
+        # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
+        # by the data pipeline / _preprocess_insert, so we must NOT re-apply
+        # _input_transform.  Convert to Observation if needed and go straight
+        # to the model.
         if isinstance(observation, _model.Observation):
-            # Already-processed Observation: bypass _input_transform (which
-            # expects raw env observations) and compute the prefix
-            # representation directly.
-            prefix = self._policy._get_prefix_rep_with_model(
-                model, observation=observation
-            )
+            obs = observation
         else:
-            # Online buffer observations have stripped keys ("state", "image",
-            # etc.).  Reformat them to the "observation/<key>" layout that
-            # _input_transform expects.
-            processed_obs: dict[str, Any] = {}
-            for key, val in observation.items():
-                if key == "prompt":
-                    processed_obs["prompt"] = val
-                elif key == PREFIX_EMBEDDING_NAME:
-                    continue
-                else:
-                    processed_obs[f"observation/{key}"] = val
-            if "prompt" not in processed_obs:
-                processed_obs["prompt"] = self.task_description
-            prefix = self._policy.get_prefix_rep_with_model(
-                model, obs=processed_obs
-            )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
+            obs = _model.Observation.from_dict(observation)
+        prefix = self._policy._get_prefix_rep_with_model(
+            model, observation=obs
+        )
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
 
