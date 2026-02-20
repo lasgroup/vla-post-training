@@ -487,6 +487,14 @@ class FilteredSFTLearner(Agent):
             },
             "state": np.zeros((1, transition_state_dim), dtype=np.float32),
         }
+        for k in (
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
+        ):
+            if k in obs_spec_dict and obs_spec_dict[k] is not None:
+                dummy_next_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
         if prefix_embedding_template is not None:
             dummy_next_obs_dict[PREFIX_EMBEDDING_NAME] = np.asarray(
                 prefix_embedding_template, dtype=np.float32
@@ -786,6 +794,17 @@ class FilteredSFTLearner(Agent):
                 "image_mask": next_data["image_mask"],
                 "state": next_data["state"].astype(np.float32, copy=False),
             }
+            # Copy tokenized prompt fields so that get_prefix_rep can include
+            # language tokens when computing the next-obs prefix embedding.
+            # The prompt is the same for current and next obs within an episode.
+            for tok_key in (
+                "tokenized_prompt",
+                "tokenized_prompt_mask",
+                "token_ar_mask",
+                "token_loss_mask",
+            ):
+                if tok_key in data:
+                    transition_next_observation[tok_key] = data[tok_key]
             if processed_next_prefix is not None:
                 transition_next_observation[PREFIX_EMBEDDING_NAME] = (
                     processed_next_prefix
