@@ -815,7 +815,7 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         if self._config.collect.add_per_step_data:
-            current_obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
+            current_obs = jax.tree_util.tree_map(lambda x: x[:, -1] if x.ndim >= 2 else x, observations)
         else:
             current_obs = observations
 
