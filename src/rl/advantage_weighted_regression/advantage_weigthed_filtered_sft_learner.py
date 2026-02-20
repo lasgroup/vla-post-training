@@ -270,8 +270,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     @at.typecheck
     def update(self) -> dict[str, at.Array]:
         self.training_steps += 1
-        update_critic = self._critic_update_frequency % self.training_steps == 0
-        update_policy = self._policy_update_frequency % self.training_steps == 0
+        update_critic = self.training_steps % self._critic_update_frequency == 0
+        update_policy = self.training_steps % self._policy_update_frequency == 0
         if not update_critic and not update_policy:
             return {
                 "online_buffer_size": jnp.asarray(
