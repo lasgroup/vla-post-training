@@ -163,6 +163,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         observation_dict: dict[str, Any] = {
             "state": online_observation["state"],
         }
+        print(f"Type of online observation: {type(online_observation)}")
         curr_prefix_embedding = self._recompute_prefix_embedding(
             model=policy_model,
             observation=online_observation,
@@ -172,6 +173,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
+        print(f"Type of next observation: {type(next_observation)}")
         next_prefix_embedding = self._recompute_prefix_embedding(
             model=policy_model,
             observation=(
@@ -218,6 +220,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         critic_observation: dict[str, Any] = {
             "state": policy_obs_dict["state"],
         }
+        print(f"Type of policy observation: {type(policy_observation)}")
         prefix_embedding = self._recompute_prefix_embedding(
             model=policy_model,
             observation=policy_observation,
