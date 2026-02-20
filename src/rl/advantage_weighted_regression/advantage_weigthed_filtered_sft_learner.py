@@ -124,8 +124,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     ) -> at.Float[at.Array, "batch embed"] | None:
         if observation is None:
             return None
+        processed_obs = self._process_obs_for_pi0(observation)
         prefix = self._policy.get_prefix_rep_with_model(
-            model, obs=observation
+            model, obs=processed_obs
         )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
