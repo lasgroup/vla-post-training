@@ -170,8 +170,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _online_batch_to_critic_batch(
         self,
         online_batch: dict[str, Any],
-        *,
-        policy_model: _model.BaseModel,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -179,6 +177,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         at.Float[at.Array, " b"],
         at.Float[at.Array, " b"],
     ]:
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        policy_model = nnx.merge(self._train_state.model_def, params)
         online_observation = online_batch["observation"]
         observation_dict: dict[str, Any] = {
             "state": online_observation["state"],
@@ -212,9 +216,13 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _sft_batch_to_actor_batch(
         self,
         sft_batch: tuple[_model.Observation, _model.Actions],
-        *,
-        policy_model: _model.BaseModel,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        policy_model = nnx.merge(self._train_state.model_def, params)
         policy_observation, actions = sft_batch
         if isinstance(policy_observation, _model.Observation):
             pass
@@ -293,19 +301,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
         critic_info, actor_info = {}, {}
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
             if update_critic:
                 critic_batch = self._online_batch_to_critic_batch(
                     online_batch_raw,
-                    policy_model=policy_model,
                 )
                 critic_info = self._update_critics(critic_batch)
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
@@ -321,7 +322,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         if update_policy:
             actor_batch = self._sft_batch_to_actor_batch(
                 batch,
-                policy_model=policy_model,
             )
             actor_info = self._update_policy(actor_batch)
         return actor_info | critic_info | {'online_buffer_size': jnp.asarray(
