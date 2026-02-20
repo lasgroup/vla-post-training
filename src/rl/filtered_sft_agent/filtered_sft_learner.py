@@ -2,6 +2,7 @@ import functools
 import gc
 import logging
 import os
+import shutil
 import weakref
 from typing import Any, Dict
 
@@ -12,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import mesh_utils
+import lerobot.datasets.lerobot_dataset as lerobot_dataset
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -25,7 +27,7 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.agent import Agent
-from rl.filtered_sft_agent.update import train_step
+from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -299,6 +301,30 @@ class FilteredSFTLearner(Agent):
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
+
+        if self._config.collect.save_buffer:
+            self._setup_lerobot_dataset()
+
+    def _setup_lerobot_dataset(self):
+        allowed_keys = {"image", "wrist_image", "state", "actions"}
+        new_data_path = self._checkpoint_manager._directory / "data"
+        if new_data_path.exists():
+            shutil.rmtree(new_data_path)
+        self._lerobot_dataset = lerobot_dataset.LeRobotDataset.create(
+            repo_id=self._config.data.repo_id,
+            root=new_data_path,
+            robot_type="panda",
+            fps=10,
+            features={
+                k: v
+                for k, v in lerobot_dataset.LeRobotDatasetMetadata(
+                    self._config.data.repo_id
+                ).features.items()
+                if k in allowed_keys
+            },
+            image_writer_threads=10,
+            image_writer_processes=5,
+        )
 
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
@@ -777,6 +803,9 @@ class FilteredSFTLearner(Agent):
         obs_prefix = self._config.collect.obs_prefix_key
         discount_gamma = float(self._config.discount)
 
+        if self._config.collect.save_buffer:
+            self._dump_to_lerobot_dataset(episode_data, task_description)
+
         def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
             extracted = {}
             for key, val in obs.items():
@@ -959,6 +988,46 @@ class FilteredSFTLearner(Agent):
             episode_batch["prompt"] = str(task_description)
         self._online_data_buffer.insert(episode_batch)
         self._collection_success_episodes += 1
+
+
+    def _dump_to_lerobot_dataset(self, episode_data: list[Dict[str, Any]], task_description: str):
+
+        def process_frame(ob):
+            frame = {}
+            # Extract actions and observations from total_obs
+            obs, action = ob["observation"], ob["action"]
+            for key, val in obs.items():
+                if self._config.collect.obs_prefix_key in key:
+                    obs_key = key.split(self._config.collect.obs_prefix_key + "/")[-1]
+                    frame[obs_key] = val
+            frame["actions"] = action
+            return frame
+
+        if self._config.collect.add_per_step_data:
+            # Add all the per time-step transitions one by one.
+            total_frames = len(episode_data)
+            for n_frame, ep in enumerate(episode_data):
+                ep_obs, terminate, truncate = (
+                    ep["observation"],
+                    ep["terminate"],
+                    ep["truncate"],
+                )
+                total_chunks = self._config.collect.replan_steps
+                # For the last frame where termination occurred check at which step this was observed.
+                if n_frame == total_frames - 1:
+                    done = np.logical_or(terminate, truncate)
+                    done_indices = np.where(done)[0]
+                    if len(done_indices) > 0:
+                        total_chunks = done_indices[0]
+                for step in range(total_chunks):
+                    obs = jax.tree.map(lambda x: x[step], ep_obs)
+                    self._lerobot_dataset.add_frame(
+                        process_frame(obs), task=str(task_description)
+                    )
+        else:
+            for ep in episode_data:
+                self._lerobot_dataset.add_frame(process_frame(ep["observation"]))
+        self._lerobot_dataset.save_episode()
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
