@@ -128,14 +128,26 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         if observation is None:
             return None
         if isinstance(observation, _model.Observation):
-            # Already-processed Observation: bypass _process_obs_for_pi0 and
-            # _input_transform (which expect raw env observations) and compute
-            # the prefix representation directly.
+            # Already-processed Observation: bypass _input_transform (which
+            # expects raw env observations) and compute the prefix
+            # representation directly.
             prefix = self._policy._get_prefix_rep_with_model(
                 model, observation=observation
             )
         else:
-            processed_obs = self._process_obs_for_pi0(observation)
+            # Online buffer observations have stripped keys ("state", "image",
+            # etc.).  Reformat them to the "observation/<key>" layout that
+            # _input_transform expects.
+            processed_obs: dict[str, Any] = {}
+            for key, val in observation.items():
+                if key == "prompt":
+                    processed_obs["prompt"] = val
+                elif key == PREFIX_EMBEDDING_NAME:
+                    continue
+                else:
+                    processed_obs[f"observation/{key}"] = val
+            if "prompt" not in processed_obs:
+                processed_obs["prompt"] = self.task_description
             prefix = self._policy.get_prefix_rep_with_model(
                 model, obs=processed_obs
             )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
