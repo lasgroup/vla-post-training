@@ -582,7 +582,10 @@ class FilteredSFTLearner(Agent):
             if isinstance(next_obs, dict):
                 normalized_next_obs = dict(next_obs)
                 for source, target in aliases:
-                    if target not in normalized_next_obs and source in normalized_next_obs:
+                    if (
+                        target not in normalized_next_obs
+                        and source in normalized_next_obs
+                    ):
                         normalized_next_obs[target] = normalized_next_obs[source]
                 raw["next_observation"] = normalized_next_obs
             return raw
@@ -618,9 +621,7 @@ class FilteredSFTLearner(Agent):
             if isinstance(next_observation, dict):
                 next_state_source = next_observation.get("state", next_state_source)
                 if store_prefix_embedding:
-                    next_prefix_embedding = next_observation.get(
-                        PREFIX_EMBEDDING_NAME
-                    )
+                    next_prefix_embedding = next_observation.get(PREFIX_EMBEDDING_NAME)
 
             obs_transform_input = {
                 "image": raw.get("image"),
@@ -646,10 +647,14 @@ class FilteredSFTLearner(Agent):
             )
             data["actions"] = actions
 
-            next_observation = next_observation if isinstance(next_observation, dict) else {}
+            next_observation = (
+                next_observation if isinstance(next_observation, dict) else {}
+            )
             next_obs_transform_input = {
                 "image": next_observation.get("image", raw.get("image")),
-                "wrist_image": next_observation.get("wrist_image", raw.get("wrist_image")),
+                "wrist_image": next_observation.get(
+                    "wrist_image", raw.get("wrist_image")
+                ),
                 "state": next_state_source,
                 "prompt": prompt,
             }
@@ -739,7 +744,9 @@ class FilteredSFTLearner(Agent):
 
             processed_next_prefix = None
             if next_prefix_embedding is not None:
-                next_prefix_embedding = np.asarray(next_prefix_embedding, dtype=np.float32)
+                next_prefix_embedding = np.asarray(
+                    next_prefix_embedding, dtype=np.float32
+                )
                 if next_prefix_embedding.ndim == 2:
                     next_prefix_embedding = next_prefix_embedding[None, ...]
                 if next_prefix_embedding.shape[0] != insert_batch_size:
@@ -780,7 +787,9 @@ class FilteredSFTLearner(Agent):
                 "state": next_data["state"].astype(np.float32, copy=False),
             }
             if processed_next_prefix is not None:
-                transition_next_observation[PREFIX_EMBEDDING_NAME] = processed_next_prefix
+                transition_next_observation[PREFIX_EMBEDDING_NAME] = (
+                    processed_next_prefix
+                )
 
             return {
                 "observation": data,
@@ -815,7 +824,9 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         if self._config.collect.add_per_step_data:
-            current_obs = jax.tree_util.tree_map(lambda x: x[:, -1] if x.ndim >= 2 else x, observations)
+            current_obs = jax.tree_util.tree_map(
+                lambda x: x[:, -1] if x.ndim >= 2 else x, observations
+            )
         else:
             current_obs = observations
 
@@ -842,8 +853,10 @@ class FilteredSFTLearner(Agent):
                     processed_obs[obs_key] = val
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
-            assert task_description is not None, "No task description is provided"
-            processed_obs["prompt"] = task_description
+            if task_description is None:
+                # TODO: How should we process task description? Probably correct way is to save it in the data?
+                # assert task_description is not None, "No task description is provided"
+                processed_obs["prompt"] = self.task_description
         return processed_obs
 
     def _infer_policy_batch_size(self, observations: Dict[str, Any]) -> int:
@@ -1232,9 +1245,7 @@ class FilteredSFTLearner(Agent):
                 if PREFIX_EMBEDDING_NAME in next_obs:
                     next_prefix_embedding = next_obs[PREFIX_EMBEDDING_NAME]
             frame["next_observation"] = {
-                k: v
-                for k, v in next_frame.items()
-                if v is not None
+                k: v for k, v in next_frame.items() if v is not None
             }
             if next_prefix_embedding is not None:
                 frame["next_observation"][PREFIX_EMBEDDING_NAME] = np.asarray(
