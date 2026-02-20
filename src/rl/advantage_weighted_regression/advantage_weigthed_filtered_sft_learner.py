@@ -116,53 +116,17 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         updates = int(getattr(rl_config, "policy_update_frequency", 1))
         return max(1, updates)
 
-    def _build_model_observation(
-        self, observation: dict[str, Any]
-    ) -> _model.Observation | None:
-        if not isinstance(observation, dict):
-            return None
-        if "image" not in observation or "image_mask" not in observation:
-            return None
-        if "state" not in observation:
-            return None
-
-        model_observation: dict[str, Any] = {
-            "image": dict(observation["image"]),
-            "image_mask": dict(observation["image_mask"]),
-            "state": observation["state"],
-        }
-        for key in (
-            "tokenized_prompt",
-            "tokenized_prompt_mask",
-            "token_ar_mask",
-            "token_loss_mask",
-        ):
-            if key in observation:
-                model_observation[key] = observation[key]
-
-        return _model.Observation.from_dict(model_observation)
-
     def _recompute_prefix_embedding(
         self,
         *,
         model: _model.BaseModel,
         observation: dict[str, Any] | None,
-    ) -> jax.Array | None:
+    ) -> at.Float[at.Array, "batch embed"] | None:
         if observation is None:
             return None
-        model_observation = self._build_model_observation(observation)
-        if model_observation is None:
-            return None
-        prefix = self._get_prefix_rep_with_model(
-            m=model,
-            observation=model_observation,
-        )
-        prefix = jnp.asarray(prefix, dtype=jnp.float32)
-        if prefix.ndim == 1:
-            return prefix[jnp.newaxis, :]
-        if prefix.ndim == 2:
-            return prefix
-        # Prefix reps are usually [B, S, E]; pool token axis to [B, E].
+        prefix = self._policy.get_prefix_rep_with_model(
+            model, obs=observation
+        )  # return type is at.Float[at.Array, "batch prefix_seq embed"]
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
 
@@ -269,9 +233,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             )
         self._state_action_critic_state = q_state
         self._value_state = value_state
-        current_info = {
-                f"critic/q_{key}": value for key, value in q_info.items()
-            } | {f"critic/value_{key}": value for key, value in value_info.items()}
+        current_info = {f"critic/q_{key}": value for key, value in q_info.items()} | {
+            f"critic/value_{key}": value for key, value in value_info.items()
+        }
         return current_info
 
     def _update_policy(self, batch: tuple[_model.Observation, ObsType, _model.Actions]):
@@ -294,8 +258,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         update_critic = self._critic_update_frequency % self.training_steps == 0
         update_policy = self._policy_update_frequency % self.training_steps == 0
         if not update_critic and not update_policy:
-            return {'online_buffer_size': jnp.asarray(
-                    float(self._online_data_buffer.size), dtype=jnp.float32)}
+            return {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
 
         batch = next(self._data_iter)
         use_online = (
@@ -324,6 +291,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 batch,
             )
             actor_info = self._update_policy(actor_batch)
-        return actor_info | critic_info | {'online_buffer_size': jnp.asarray(
+        return (
+            actor_info
+            | critic_info
+            | {
+                "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )}
+                )
+            }
+        )

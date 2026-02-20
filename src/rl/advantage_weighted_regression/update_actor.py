@@ -47,13 +47,15 @@ def train_step(
 
     # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
     critic_actions = flatten_action_horizon(actions)
-    value = summarize_critic_values(value_critic(critic_observation))
-    q_value = summarize_critic_values(state_action_critic(critic_observation, critic_actions))
-    advantage = q_value - value
+    value = summarize_critic_values(value_critic(critic_observation))  # (B,)
+    q_value = summarize_critic_values(
+        state_action_critic(critic_observation, critic_actions)
+    )  # (B,)
+    advantage = q_value - value  # (B, )
 
     score = advantage / _awr_beta(config)
     score = jnp.minimum(score, 20.0)  # Clipping
-    score = jax.nn.softmax(score, axis=0)
+    score = jax.nn.softmax(score, axis=0)  # (B, )
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
     @at.typecheck
@@ -66,6 +68,8 @@ def train_step(
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
+        # TODO: Replce nasty while loop with assert on the dimension of the arrays
+        # assert chunked_loss.shape == (B, 1)
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]
         aux_data = {
@@ -74,35 +78,44 @@ def train_step(
         }
         return jnp.sum(score * chunked_loss), aux_data
 
-
     train_rng = jax.random.fold_in(rng, policy_state.step)
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, aux_data), grads = nnx.value_and_grad(loss_fn, has_aux=True, argnums=diff_state)(
+    (loss, aux_data), grads = nnx.value_and_grad(
+        loss_fn, has_aux=True, argnums=diff_state
+    )(
         policy,
         train_rng,
         policy_observation,
         actions,
         score,
-      )
+    )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
-    updates, new_opt_state = policy_state.tx.update(grads, policy_state.opt_state, params)
+    updates, new_opt_state = policy_state.tx.update(
+        grads, policy_state.opt_state, params
+    )
     new_params = optax.apply_updates(params, updates)
 
     # Update the model in place and return the new full state.
     nnx.update(policy, new_params)
     new_params = nnx.state(policy)
 
-    new_state = dataclasses.replace(policy_state, step=policy_state.step + 1, params=new_params,
-                                    opt_state=new_opt_state)
+    new_state = dataclasses.replace(
+        policy_state,
+        step=policy_state.step + 1,
+        params=new_params,
+        opt_state=new_opt_state,
+    )
     if policy_state.ema_decay is not None:
         new_state = dataclasses.replace(
             new_state,
             ema_params=jax.tree.map(
-                lambda old, new: policy_state.ema_decay * old + (1 - policy_state.ema_decay) * new,
-                policy_state.ema_params, new_params
+                lambda old, new: policy_state.ema_decay * old
+                + (1 - policy_state.ema_decay) * new,
+                policy_state.ema_params,
+                new_params,
             ),
         )
 
@@ -111,7 +124,9 @@ def train_step(
         policy,
         nnx.All(
             nnx.Param,
-            nnx.Not(nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")),
+            nnx.Not(
+                nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")
+            ),
             lambda _, x: x.value.ndim > 1,
         ),
     )
