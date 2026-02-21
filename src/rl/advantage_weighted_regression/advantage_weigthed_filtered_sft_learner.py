@@ -368,6 +368,10 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                     batch,
                     online_batch,
                 )
+                # The online batch may be replicated (PartitionSpec()) while
+                # the SFT batch is sharded. Re-shard the mixed result to
+                # match the data sharding expected by _train_step.
+                batch = jax.device_put(batch, self._data_sharding)
         if update_policy:
             if first_online:
                 _log_device_memory("before_actor_batch")
