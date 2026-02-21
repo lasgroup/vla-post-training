@@ -38,6 +38,25 @@ def _pytree_size_mb(tree) -> float:
     return total_bytes / (1024 * 1024)
 
 
+def _pytree_size_gb(tree) -> float:
+    return _pytree_size_mb(tree) / 1024
+
+
+def _pytree_per_device_size_gb(tree) -> float:
+    """Return total per-device size of all arrays in a pytree, in GiB."""
+    leaves = jax.tree.leaves(tree)
+    total_bytes = 0
+    for leaf in leaves:
+        if not hasattr(leaf, "size"):
+            continue
+        if hasattr(leaf, "addressable_shards") and leaf.addressable_shards:
+            shard = leaf.addressable_shards[0]
+            total_bytes += shard.data.size * shard.data.dtype.itemsize
+        else:
+            total_bytes += leaf.size * leaf.dtype.itemsize
+    return total_bytes / (1024**3)
+
+
 def _log_device_memory(tag: str) -> None:
     """Log live GPU memory for device 0 and count of live arrays."""
     jax.effects_barrier()  # wait for async dispatch to finish
@@ -325,6 +344,22 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         first_online = use_online and self.training_steps <= 2
         if first_online:
             _log_device_memory("before_get_policy_model")
+            logging.info(
+                f"[SIZE-DEBUG] train_state total (global): "
+                f"params={_pytree_size_gb(self._train_state.params):.2f} GiB, "
+                f"ema_params={_pytree_size_gb(self._train_state.ema_params):.2f} GiB, "
+                f"opt_state={_pytree_size_gb(self._train_state.opt_state):.2f} GiB"
+            )
+            logging.info(
+                f"[SIZE-DEBUG] train_state per-device: "
+                f"params={_pytree_per_device_size_gb(self._train_state.params):.2f} GiB, "
+                f"ema_params={_pytree_per_device_size_gb(self._train_state.ema_params):.2f} GiB, "
+                f"opt_state={_pytree_per_device_size_gb(self._train_state.opt_state):.2f} GiB"
+            )
+            logging.info(
+                f"[SIZE-DEBUG] SFT batch: global={_pytree_size_gb(batch):.2f} GiB, "
+                f"per-device={_pytree_per_device_size_gb(batch):.2f} GiB"
+            )
 
         # Create the policy model at most once per update() call.
         needs_model = (use_online and update_critic) or update_policy
@@ -333,6 +368,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         critic_info, actor_info = {}, {}
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
+            if first_online:
+                logging.info(
+                    f"[SIZE-DEBUG] online_batch_raw: global={_pytree_size_gb(online_batch_raw):.2f} GiB, "
+                    f"per-device={_pytree_per_device_size_gb(online_batch_raw):.2f} GiB"
+                )
             if update_critic:
                 if first_online:
                     _log_device_memory("before_critic_batch")
@@ -381,6 +421,19 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 batch,
                 policy_model,
             )
+            if first_online:
+                logging.info(
+                    f"[SIZE-DEBUG] actor_batch (global): "
+                    f"policy_obs={_pytree_size_gb(actor_batch[0]):.2f} GiB, "
+                    f"critic_obs={_pytree_size_gb(actor_batch[1]):.2f} GiB, "
+                    f"actions={_pytree_size_gb(actor_batch[2]):.2f} GiB"
+                )
+                logging.info(
+                    f"[SIZE-DEBUG] actor_batch (per-device): "
+                    f"policy_obs={_pytree_per_device_size_gb(actor_batch[0]):.2f} GiB, "
+                    f"critic_obs={_pytree_per_device_size_gb(actor_batch[1]):.2f} GiB, "
+                    f"actions={_pytree_per_device_size_gb(actor_batch[2]):.2f} GiB"
+                )
         # Free batch and model copy BEFORE the heavy jitted train step so JAX
         # can reclaim memory and donate the train_state buffers.
         del batch, policy_model
