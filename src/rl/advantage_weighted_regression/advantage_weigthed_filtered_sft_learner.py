@@ -74,6 +74,13 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
+        logging.info(
+            f"[OOM-DEBUG init] "
+            f"train_state: {_pytree_size_mb(self._train_state):.2f} MB, "
+            f"state_action_critic_state: {_pytree_size_mb(self._state_action_critic_state):.2f} MB, "
+            f"value_state: {_pytree_size_mb(self._value_state):.2f} MB"
+        )
+
         self._q_train_step = jax.jit(
             functools.partial(train_q_step, self._config),
             in_shardings=(
