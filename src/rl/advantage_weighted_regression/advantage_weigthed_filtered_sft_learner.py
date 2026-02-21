@@ -38,6 +38,23 @@ def _pytree_size_mb(tree) -> float:
     return total_bytes / (1024 * 1024)
 
 
+def _log_device_memory(tag: str) -> None:
+    """Log live GPU memory for device 0 and count of live arrays."""
+    jax.effects_barrier()  # wait for async dispatch to finish
+    stats = jax.local_devices()[0].memory_stats()
+    if stats is None:
+        logging.info(f"[MEM {tag}] memory_stats unavailable")
+        return
+    live_gb = stats.get("bytes_in_use", 0) / (1024**3)
+    peak_gb = stats.get("peak_bytes_in_use", 0) / (1024**3)
+    limit_gb = stats.get("bytes_limit", 0) / (1024**3)
+    num_live = len(jax.live_arrays())
+    logging.info(
+        f"[MEM {tag}] live={live_gb:.2f} GiB, peak={peak_gb:.2f} GiB, "
+        f"limit={limit_gb:.2f} GiB, num_live_arrays={num_live}"
+    )
+
+
 class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def __init__(
         self,
@@ -305,6 +322,10 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
+        first_online = use_online and self.training_steps <= 2
+        if first_online:
+            _log_device_memory("before_get_policy_model")
+
         # Create the policy model at most once per update() call.
         needs_model = (use_online and update_critic) or update_policy
         policy_model = self._get_policy_model() if needs_model else None
@@ -313,12 +334,20 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
             if update_critic:
+                if first_online:
+                    _log_device_memory("before_critic_batch")
                 critic_batch = self._online_batch_to_critic_batch(
                     online_batch_raw,
                     policy_model,
                 )
+                if first_online:
+                    _log_device_memory("after_critic_batch")
                 critic_info = self._update_critics(critic_batch)
+                if first_online:
+                    _log_device_memory("after_update_critics")
+                del critic_batch
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
+            del online_batch_raw
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
@@ -329,6 +358,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                     online_batch,
                 )
         if update_policy:
+            if first_online:
+                _log_device_memory("before_actor_batch")
             actor_batch = self._sft_batch_to_actor_batch(
                 batch,
                 policy_model,
@@ -337,6 +368,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         # can actually donate the train_state buffers.
         del policy_model
         if update_policy:
+            if first_online:
+                _log_device_memory("before_update_policy (after del policy_model)")
             actor_info = self._update_policy(actor_batch)
         return (
             actor_info
