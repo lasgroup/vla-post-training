@@ -32,7 +32,9 @@ from src.training.config import OnlineTrainConfig
 def _pytree_size_mb(tree) -> float:
     """Return total size of all arrays in a pytree, in megabytes."""
     leaves = jax.tree.leaves(tree)
-    total_bytes = sum(leaf.size * leaf.dtype.itemsize for leaf in leaves if hasattr(leaf, 'size'))
+    total_bytes = sum(
+        leaf.size * leaf.dtype.itemsize for leaf in leaves if hasattr(leaf, "size")
+    )
     return total_bytes / (1024 * 1024)
 
 
@@ -49,7 +51,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         self.task_description = task_description
 
         super().__init__(config)
-        self._critic_update_frequency = 10_000  # DEBUG: override to reduce OOM risk
+        self._critic_update_frequency = self._get_critic_update_frequency()
         self._policy_update_frequency = self._get_policy_update_frequency()
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
@@ -151,9 +153,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             obs = observation
         else:
             obs = _model.Observation.from_dict(observation)
-        prefix = self._policy._get_prefix_rep_with_model(
-            model, observation=obs
-        )
+        prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
 
