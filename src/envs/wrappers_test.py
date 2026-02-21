@@ -11,7 +11,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 # Add the repo root to sys.path so 'jaxrl2' can be found
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-from wrappers import QueryFrequencyWrapper
+from src.envs.wrappers import QueryFrequencyWrapper
 
 
 # Assuming your class is in the namespace or imported here

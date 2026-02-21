@@ -24,6 +24,7 @@ import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
+from src.rl.agent import Agent
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData

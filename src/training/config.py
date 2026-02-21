@@ -26,7 +26,6 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
-    seed: int = 42
     obs_prefix_key: str = "pi0"
 
 
@@ -76,6 +75,9 @@ _CONFIGS.extend(
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
             num_train_steps=10_000,
             num_workers=4,  # override default num_workers
+            exp_name="test",
+            resume=True,
+            checkpoint_base_dir="/capstor/scratch/cscs/chenhli/checkpoints",
         ),
     ]
 )
