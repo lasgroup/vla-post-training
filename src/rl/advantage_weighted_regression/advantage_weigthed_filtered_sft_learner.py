@@ -333,9 +333,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 batch,
                 policy_model,
             )
-            actor_info = self._update_policy(actor_batch)
-        # Free the model copy as soon as we're done with it.
+        # Free the model copy BEFORE the heavy jitted train step so JAX
+        # can actually donate the train_state buffers.
         del policy_model
+        if update_policy:
+            actor_info = self._update_policy(actor_batch)
         return (
             actor_info
             | critic_info
