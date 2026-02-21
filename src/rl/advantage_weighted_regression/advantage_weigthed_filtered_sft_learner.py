@@ -372,6 +372,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 # the SFT batch is sharded. Re-shard the mixed result to
                 # match the data sharding expected by _train_step.
                 batch = jax.device_put(batch, self._data_sharding)
+                # online_batch is replicated (~11 GiB/device of images); free it now.
+                del online_batch
         if update_policy:
             if first_online:
                 _log_device_memory("before_actor_batch")
@@ -379,12 +381,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 batch,
                 policy_model,
             )
-        # Free the model copy BEFORE the heavy jitted train step so JAX
-        # can actually donate the train_state buffers.
-        del policy_model
+        # Free batch and model copy BEFORE the heavy jitted train step so JAX
+        # can reclaim memory and donate the train_state buffers.
+        del batch, policy_model
         if update_policy:
             if first_online:
-                _log_device_memory("before_update_policy (after del policy_model)")
+                _log_device_memory("before_update_policy (after del batch+policy_model)")
             actor_info = self._update_policy(actor_batch)
         return (
             actor_info
