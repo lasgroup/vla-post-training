@@ -1,5 +1,6 @@
 # ruff: noqa: F722
 import functools
+import logging
 from typing import Any
 import gc
 
@@ -28,6 +29,13 @@ from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig
 
 
+def _pytree_size_mb(tree) -> float:
+    """Return total size of all arrays in a pytree, in megabytes."""
+    leaves = jax.tree.leaves(tree)
+    total_bytes = sum(leaf.size * leaf.dtype.itemsize for leaf in leaves if hasattr(leaf, 'size'))
+    return total_bytes / (1024 * 1024)
+
+
 class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def __init__(
         self,
@@ -41,7 +49,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         self.task_description = task_description
 
         super().__init__(config)
-        self._critic_update_frequency = self._get_critic_update_frequency()
+        self._critic_update_frequency = 10_000  # DEBUG: override to reduce OOM risk
         self._policy_update_frequency = self._get_policy_update_frequency()
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
@@ -142,10 +150,20 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         return jnp.mean(prefix, axis=1)
 
+    def _get_policy_model(self) -> _model.BaseModel:
+        """Merge policy params into a model. Call once per update() to avoid duplicates."""
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        return nnx.merge(self._train_state.model_def, params)
+
     @at.typecheck
     def _online_batch_to_critic_batch(
         self,
         online_batch: dict[str, Any],
+        policy_model: _model.BaseModel,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -153,12 +171,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         at.Float[at.Array, " b"],
         at.Float[at.Array, " b"],
     ]:
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
         online_observation = online_batch["observation"]
         observation_dict: dict[str, Any] = {
             "state": online_observation["state"],
@@ -194,13 +206,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _sft_batch_to_actor_batch(
         self,
         sft_batch: tuple[_model.Observation, _model.Actions],
+        policy_model: _model.BaseModel,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
         policy_observation, actions = sft_batch
         if isinstance(policy_observation, _model.Observation):
             pass
@@ -270,6 +277,14 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     @at.typecheck
     def update(self) -> dict[str, at.Array]:
         self.training_steps += 1
+        if self.training_steps % 100 == 1:
+            q_size = _pytree_size_mb(self._state_action_critic_state)
+            v_size = _pytree_size_mb(self._value_state)
+            logging.info(
+                f"[OOM-DEBUG step={self.training_steps}] "
+                f"state_action_critic_state: {q_size:.2f} MB, "
+                f"value_state: {v_size:.2f} MB"
+            )
         update_critic = self.training_steps % self._critic_update_frequency == 0
         update_policy = self.training_steps % self._policy_update_frequency == 0
         if not update_critic and not update_policy:
@@ -283,12 +298,17 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
+        # Create the policy model at most once per update() call.
+        needs_model = (use_online and update_critic) or update_policy
+        policy_model = self._get_policy_model() if needs_model else None
+
         critic_info, actor_info = {}, {}
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
             if update_critic:
                 critic_batch = self._online_batch_to_critic_batch(
                     online_batch_raw,
+                    policy_model,
                 )
                 critic_info = self._update_critics(critic_batch)
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
@@ -304,8 +324,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         if update_policy:
             actor_batch = self._sft_batch_to_actor_batch(
                 batch,
+                policy_model,
             )
             actor_info = self._update_policy(actor_batch)
+        # Free the model copy as soon as we're done with it.
+        del policy_model
         return (
             actor_info
             | critic_info
