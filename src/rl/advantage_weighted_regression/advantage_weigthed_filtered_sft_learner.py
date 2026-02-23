@@ -383,6 +383,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 if first_online:
                     _log_device_memory("after_critic_batch")
                 critic_info = self._update_critics(critic_batch)
+                jax.block_until_ready(
+                    (self._state_action_critic_state, self._value_state, critic_info)
+                )
                 if first_online:
                     _log_device_memory("after_update_critics")
                 del critic_batch
@@ -402,9 +405,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 )
                 n_offline = batch_size - n_online
                 batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate(
-                        [x[:n_offline], y[:n_online]], axis=0
-                    ),
+                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
                     batch,
                     online_batch,
                 )
@@ -439,8 +440,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         del batch, policy_model
         if update_policy:
             if first_online:
-                _log_device_memory("before_update_policy (after del batch+policy_model)")
+                _log_device_memory(
+                    "before_update_policy (after del batch+policy_model)"
+                )
             actor_info = self._update_policy(actor_batch)
+            jax.block_until_ready((self._train_state, actor_info))
         return (
             actor_info
             | critic_info
