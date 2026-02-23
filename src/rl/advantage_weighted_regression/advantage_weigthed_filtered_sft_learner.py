@@ -247,6 +247,225 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             online_batch["discount"],
         )
 
+    def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
+        if env_index < 0 or env_index >= len(self._episode_storage):
+            raise IndexError(
+                f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
+            )
+
+        # Extract episode data from storage
+        episode_data = self._episode_storage[env_index]
+        # Empty the storage now for the next episode
+        self._episode_storage[env_index] = []
+        task_description = kwargs.get("task_description")
+        obs_prefix = self._config.collect.obs_prefix_key
+        discount_gamma = float(self._config.discount)
+        if bool(getattr(self._config, "return_prefix_rep", False)):
+            self._attach_prefix_embeddings_to_episode_data(
+                episode_data,
+                task_description=task_description,
+            )
+
+        def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
+            extracted = {}
+            for key, val in obs.items():
+                if key == PREFIX_EMBEDDING_NAME:
+                    extracted[key] = np.asarray(val, dtype=np.float32)
+                    continue
+                if obs_prefix not in key:
+                    continue
+                obs_key = key.split(f"{obs_prefix}/")[-1]
+                if obs_key == "prompt":
+                    continue
+                extracted[obs_key] = val
+            return extracted
+
+        def process_frame(
+            obs: Dict[str, Any],
+            *,
+            actions: Any,
+            next_obs: Dict[str, Any] | None,
+            reward: float,
+            done: bool,
+            discount: float,
+        ) -> Dict[str, Any]:
+            # Extract actions and observations from total_obs.
+            frame = _extract_policy_obs(obs)
+            if "state" not in frame:
+                raise KeyError(
+                    "Cannot construct transitions: current observation is missing state."
+                )
+
+            frame["actions"] = self.post_step_action_filter(
+                np.asarray(actions, dtype=np.float32)
+            )
+            next_frame = {
+                "image": frame.get("image"),
+                "wrist_image": frame.get("wrist_image"),
+                "state": frame["state"],
+            }
+            next_prefix_embedding = frame.get(PREFIX_EMBEDDING_NAME)
+            if next_obs is not None:
+                next_obs = _extract_policy_obs(next_obs)
+                if "image" in next_obs:
+                    next_frame["image"] = next_obs["image"]
+                if "wrist_image" in next_obs:
+                    next_frame["wrist_image"] = next_obs["wrist_image"]
+                if "state" in next_obs:
+                    next_frame["state"] = next_obs["state"]
+                if PREFIX_EMBEDDING_NAME in next_obs:
+                    next_prefix_embedding = next_obs[PREFIX_EMBEDDING_NAME]
+            frame["next_observation"] = {
+                k: v for k, v in next_frame.items() if v is not None
+            }
+            if next_prefix_embedding is not None:
+                frame["next_observation"][PREFIX_EMBEDDING_NAME] = np.asarray(
+                    next_prefix_embedding, dtype=np.float32
+                )
+            frame["reward"] = np.float32(reward)
+            frame["done"] = np.bool_(done)
+            frame["discount"] = np.float32(discount)
+            return frame
+
+        def _stack_transitions(frames):
+            return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *frames)
+
+        transitions = []
+        if self._config.collect.add_per_step_data:
+            # Build one-step transitions first, then convert to H-step sliding windows.
+            for ep in episode_data:
+                ep_actions = np.asarray(ep["action"], dtype=np.float32)
+                ep_obs, ep_next_obs, ep_rewards, terminate, truncate = (
+                    ep["observation"],
+                    ep.get("next_observation"),
+                    ep.get("reward"),
+                    ep["terminate"],
+                    ep["truncate"],
+                )
+                done_mask = np.asarray(
+                    np.logical_or(terminate, truncate), dtype=np.bool_
+                )
+                valid_steps = int(done_mask.shape[0])
+                done_indices = np.where(done_mask)[0]
+                if done_indices.size > 0:
+                    # Keep the terminal step, drop only wrapper-introduced padding after termination.
+                    valid_steps = int(done_indices[0]) + 1
+
+                for step in range(valid_steps):
+                    step_obs = jax.tree.map(lambda x: x[step], ep_obs)
+                    step_next_obs = (
+                        jax.tree.map(lambda x: x[step], ep_next_obs)
+                        if ep_next_obs is not None
+                        else None
+                    )
+                    step_reward = (
+                        float(np.asarray(ep_rewards, dtype=np.float32)[step])
+                        if ep_rewards is not None
+                        else 0.0
+                    )
+                    step_done = bool(done_mask[step])
+                    transitions.append(
+                        process_frame(
+                            step_obs,
+                            actions=ep_actions[step],
+                            next_obs=step_next_obs,
+                            reward=step_reward,
+                            done=step_done,
+                            discount=0.0 if step_done else discount_gamma,
+                        )
+                    )
+            if not transitions:
+                return
+            episode_batch = _stack_transitions(transitions)
+            action_horizon = int(self._config.model.action_horizon)
+            actions = np.asarray(episode_batch["actions"], dtype=np.float32)
+            rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
+            dones = np.asarray(episode_batch["done"], dtype=np.bool_)
+            num_steps = int(actions.shape[0])
+            num_windows = num_steps - action_horizon + 1
+            if num_windows <= 0:
+                return
+
+            windowed_batch = {
+                key: np.asarray(value)[:num_windows]
+                for key, value in episode_batch.items()
+                if key
+                not in {
+                    "actions",
+                    "next_observation",
+                    "reward",
+                    "done",
+                    "discount",
+                }
+            }
+            windowed_batch["actions"] = np.stack(
+                [
+                    actions[start : start + action_horizon]
+                    for start in range(num_windows)
+                ],
+                axis=0,
+            )
+            windowed_batch["reward"] = np.asarray(
+                [
+                    rewards[start : start + action_horizon].sum()
+                    for start in range(num_windows)
+                ],
+                dtype=np.float32,
+            )
+            windowed_batch["discount"] = np.asarray(
+                [
+                    (
+                        0.0
+                        if np.any(dones[start : start + action_horizon])
+                        else float(discount_gamma**action_horizon)
+                    )
+                    for start in range(num_windows)
+                ],
+                dtype=np.float32,
+            )
+            windowed_batch["next_observation"] = jax.tree_util.tree_map(
+                lambda x: np.asarray(x)[
+                    action_horizon - 1 : action_horizon - 1 + num_windows
+                ],
+                episode_batch["next_observation"],
+            )
+            episode_batch = windowed_batch
+        else:
+            for ep in episode_data:
+                ep_actions = np.asarray(ep["action"], dtype=np.float32)
+                reward = ep.get("reward")
+                terminate = ep.get("terminate", False)
+                truncate = ep.get("truncate", False)
+                done = bool(
+                    np.asarray(terminate).reshape(-1)[-1]
+                    or np.asarray(truncate).reshape(-1)[-1]
+                )
+                reward_value = (
+                    float(np.asarray(reward).reshape(-1)[0])
+                    if reward is not None
+                    else 0.0
+                )
+                chunk_horizon = int(self._config.collect.replan_steps)
+                discount_value = 0.0 if done else float(discount_gamma**chunk_horizon)
+                transitions.append(
+                    process_frame(
+                        ep["observation"],
+                        actions=ep_actions,
+                        next_obs=ep.get("next_observation"),
+                        reward=reward_value,
+                        done=done,
+                        discount=discount_value,
+                    )
+                )
+            if not transitions:
+                return
+            episode_batch = _stack_transitions(transitions)
+            episode_batch.pop("done", None)
+            if task_description is not None:
+                episode_batch["prompt"] = str(task_description)
+        self._online_data_buffer.insert(episode_batch)
+        self._collection_success_episodes += 1
+
     def _sft_batch_to_actor_batch(
         self,
         sft_batch: tuple[_model.Observation, _model.Actions],
