@@ -1,7 +1,7 @@
 # ruff: noqa: F722
 import functools
 import logging
-from typing import Any
+from typing import Any, Dict
 import gc
 
 import flax.nnx as nnx
