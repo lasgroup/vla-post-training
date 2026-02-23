@@ -176,11 +176,11 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _recompute_prefix_embedding(
         self,
         *,
-        model: _model.BaseModel,
         observation: dict[str, Any] | _model.Observation | None,
     ) -> at.Float[at.Array, "batch embed"] | None:
         if observation is None:
             return None
+        model = self._get_policy_model()
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert, so we must NOT re-apply
@@ -207,7 +207,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _online_batch_to_critic_batch(
         self,
         online_batch: dict[str, Any],
-        policy_model: _model.BaseModel,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -221,7 +220,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         }
         print(f"Type of online observation: {type(online_observation)}")
         curr_prefix_embedding = self._recompute_prefix_embedding(
-            model=policy_model,
             observation=online_observation,
         )
         if curr_prefix_embedding is not None:
@@ -231,7 +229,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
         print(f"Type of next observation: {type(next_observation)}")
         next_prefix_embedding = self._recompute_prefix_embedding(
-            model=policy_model,
             observation=(
                 next_observation if isinstance(next_observation, dict) else None
             ),
@@ -250,7 +247,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def _sft_batch_to_actor_batch(
         self,
         sft_batch: tuple[_model.Observation, _model.Actions],
-        policy_model: _model.BaseModel,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
         if isinstance(policy_observation, _model.Observation):
@@ -273,7 +269,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         }
         print(f"Type of policy observation: {type(policy_observation)}")
         prefix_embedding = self._recompute_prefix_embedding(
-            model=policy_model,
             observation=policy_observation,
         )
         if prefix_embedding is not None:
@@ -375,8 +370,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             )
 
         # Create the policy model at most once per update() call.
-        needs_model = (use_online and update_critic) or update_policy
-        policy_model = self._get_policy_model() if needs_model else None
+        # needs_model = (use_online and update_critic) or update_policy
 
         critic_info, actor_info = {}, {}
         if use_online:
@@ -391,7 +385,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                     _log_device_memory("before_critic_batch")
                 critic_batch = self._online_batch_to_critic_batch(
                     online_batch_raw,
-                    policy_model,
                 )
                 if first_online:
                     _log_device_memory("after_critic_batch")
@@ -401,9 +394,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 )
                 if first_online:
                     _log_device_memory("after_update_critics")
-                del critic_batch
+                # del critic_batch
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
-            del online_batch_raw
+            # del online_batch_raw
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
@@ -427,13 +420,12 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 # match the data sharding expected by _train_step.
                 batch = jax.device_put(batch, self._data_sharding)
                 # online_batch is replicated (~11 GiB/device of images); free it now.
-                del online_batch
+                # del online_batch
         if update_policy:
             if first_online:
                 _log_device_memory("before_actor_batch")
             actor_batch = self._sft_batch_to_actor_batch(
                 batch,
-                policy_model,
             )
             if first_online:
                 logging.info(
@@ -450,7 +442,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 )
         # Free batch and model copy BEFORE the heavy jitted train step so JAX
         # can reclaim memory and donate the train_state buffers.
-        del batch, policy_model
         if update_policy:
             if first_online:
                 _log_device_memory(
