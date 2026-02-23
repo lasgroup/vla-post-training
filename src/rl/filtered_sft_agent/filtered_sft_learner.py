@@ -948,6 +948,7 @@ class FilteredSFTLearner(Agent):
             else train_state.params
         )
         model = nnx.merge(train_state.model_def, params)
+        model.eval()
         batch_size = self._infer_policy_batch_size(observations)
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
@@ -1131,6 +1132,7 @@ class FilteredSFTLearner(Agent):
             else self._train_state.params
         )
         model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
         prefix_rep = self._compute_prefix_rep_with_model(
             model=model,
             observations=processed_obs,
