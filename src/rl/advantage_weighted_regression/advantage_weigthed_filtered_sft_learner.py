@@ -201,7 +201,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             if self._train_state.ema_params is not None
             else self._train_state.params
         )
-        return nnx.merge(self._train_state.model_def, params)
+        model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
+        return model
 
     @at.typecheck
     def _online_batch_to_critic_batch(
@@ -289,12 +291,14 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 self._value_state,
                 batch,
             )
+            jax.block_until_ready((q_state, q_info))
             value_state, value_info = self._value_train_step(
                 v_rng,
                 self._value_state,
                 q_state,
                 batch,
             )
+            jax.block_until_ready((value_state, value_info))
         self._state_action_critic_state = q_state
         self._value_state = value_state
         current_info = {f"critic/q_{key}": value for key, value in q_info.items()} | {
