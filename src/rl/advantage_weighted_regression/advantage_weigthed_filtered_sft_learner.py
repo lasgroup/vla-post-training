@@ -170,7 +170,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
     def _get_policy_update_frequency(self) -> int:
         rl_config = getattr(self._config, "rl", None)
-        updates = int(getattr(rl_config, "policy_update_frequency", 1000))
+        updates = int(getattr(rl_config, "policy_update_frequency", 1))
         return max(1, updates)
 
     def _recompute_prefix_embedding(
@@ -323,6 +323,15 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
+        live_arrays = jax.live_arrays()
+        # 3. Calculate total size
+        total_bytes = sum(arr.nbytes for arr in live_arrays)
+        total_gb = total_bytes / (1024**3)
+
+        print(f"Step {self.training_steps + 1} Memory Check")
+        print(f"Total live arrays on device: {len(live_arrays)}")
+        print(f"Total tracked memory: {total_gb:.2f} GB")
+
         self.training_steps += 1
         if self.training_steps % 100 == 1:
             q_size = _pytree_size_mb(self._state_action_critic_state)
