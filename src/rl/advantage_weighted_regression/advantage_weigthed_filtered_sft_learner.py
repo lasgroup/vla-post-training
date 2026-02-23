@@ -319,7 +319,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         return info
 
     @at.typecheck
-    def update(self) -> dict[str, at.Array]:
+    def update(self) -> dict:
         self.training_steps += 1
         if self.training_steps % 100 == 1:
             q_size = _pytree_size_mb(self._state_action_critic_state)
