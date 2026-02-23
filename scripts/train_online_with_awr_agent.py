@@ -36,8 +36,8 @@ if mp.current_process().name != "MainProcess":
 
 # Avoid aggressive JAX GPU preallocation in the trainer process.
 # os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ["JAX_LOG_COMPILES"] = "1"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
-
 
 import gc
 import platform
