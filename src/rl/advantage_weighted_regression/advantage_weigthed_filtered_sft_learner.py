@@ -385,8 +385,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                     _log_device_memory("after_critic_batch")
                 critic_info = self._update_critics(critic_batch)
                 jax.block_until_ready(
-                (self._state_action_critic_state, self._value_state, critic_info)
-                # )
+                    (self._state_action_critic_state, self._value_state, critic_info)
+                )
                 if first_online:
                     _log_device_memory("after_update_critics")
                 del critic_batch
