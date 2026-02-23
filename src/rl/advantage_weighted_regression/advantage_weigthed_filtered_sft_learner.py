@@ -192,7 +192,9 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             obs = _model.Observation.from_dict(observation)
         prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        return jnp.mean(prefix, axis=1)
+        prefix = jnp.mean(prefix, axis=1)
+        jax.block_until_ready(prefix)
+        return prefix
 
     def _get_policy_model(self) -> _model.BaseModel:
         """Merge policy params into a model. Call once per update() to avoid duplicates."""
@@ -393,9 +395,6 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 if first_online:
                     _log_device_memory("after_critic_batch")
                 critic_info = self._update_critics(critic_batch)
-                jax.block_until_ready(
-                    (self._state_action_critic_state, self._value_state, critic_info)
-                )
                 if first_online:
                     _log_device_memory("after_update_critics")
                 # del critic_batch
