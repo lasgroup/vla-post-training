@@ -7,6 +7,7 @@ import gc
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -445,7 +446,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 )
             actor_info = self._update_policy(actor_batch)
             jax.block_until_ready((self._train_state, actor_info))
-        return (
+        info = (
             actor_info
             | critic_info
             | {
@@ -454,3 +455,5 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 )
             }
         )
+        info = jax.tree.map(np.asarray, info)
+        return info
