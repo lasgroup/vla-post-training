@@ -456,4 +456,5 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             }
         )
         info = jax.tree.map(np.asarray, info)
+        print(f"Tree size: {_pytree_size_mb(info):.2f} MB")
         return info
