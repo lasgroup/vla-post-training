@@ -239,14 +239,14 @@ def train_q_step(
         discount: at.Float[at.ArrayLike, " b"],
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-
-        q_values = summarize_critic_values(
-            critic_model(observation, actions),
-        )
+        q_values = critic_model(observation, actions)
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
+        if q_values.ndim > 1:
+            td_targets = td_targets[jnp.newaxis]
+
         td_errors = q_values - td_targets
         loss = jnp.mean(jnp.square(td_errors))
         return loss, {
@@ -300,13 +300,13 @@ def train_value_step(
         actions: _model.Actions,
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        values = summarize_critic_values(
-            critic_model(observation),
-        )
+        values = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
         )
         q_targets = jax.lax.stop_gradient(q_values)
+        if values.ndim > 1:
+            q_targets = q_targets[jnp.newaxis]
         errors = values - q_targets
         loss = jnp.mean(jnp.square(errors))
         return loss, {
