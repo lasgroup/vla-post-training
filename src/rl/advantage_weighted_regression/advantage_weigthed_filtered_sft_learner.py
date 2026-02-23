@@ -170,7 +170,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
     def _get_policy_update_frequency(self) -> int:
         rl_config = getattr(self._config, "rl", None)
-        updates = int(getattr(rl_config, "policy_update_frequency", 1))
+        updates = int(getattr(rl_config, "policy_update_frequency", 1000))
         return max(1, updates)
 
     def _recompute_prefix_embedding(
