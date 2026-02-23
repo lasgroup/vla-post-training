@@ -41,7 +41,7 @@ if mp.current_process().name != "MainProcess":
 os.environ["JAX_LOG_COMPILES"] = "1"
 # optional: also shows dispatch
 os.environ["JAX_LOG_COMPILATION_CACHE"] = "1"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "false"
 
 import gc
 import platform
