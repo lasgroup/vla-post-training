@@ -1,7 +1,7 @@
 # ruff: noqa: F722
 import functools
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 import gc
 
 import flax.nnx as nnx
@@ -12,6 +12,7 @@ import numpy as np
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
+import openpi.training.utils as training_utils
 from src.rl.advantage_weighted_regression.update_actor import (
     train_step as train_actor_step,
 )
@@ -22,7 +23,6 @@ from src.rl.advantage_weighted_regression.update_critic import (
     train_value_step,
     StateActionCriticDef,
     StateValueDef,
-    CriticBatch,
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
@@ -55,7 +55,7 @@ def _pytree_per_device_size_gb(tree) -> float:
             total_bytes += shard.data.size * shard.data.dtype.itemsize
         else:
             total_bytes += leaf.size * leaf.dtype.itemsize
-    return total_bytes / (1024**3)
+    return total_bytes / (1024 ** 3)
 
 
 def _log_device_memory(tag: str) -> None:
@@ -65,9 +65,9 @@ def _log_device_memory(tag: str) -> None:
     if stats is None:
         logging.info(f"[MEM {tag}] memory_stats unavailable")
         return
-    live_gb = stats.get("bytes_in_use", 0) / (1024**3)
-    peak_gb = stats.get("peak_bytes_in_use", 0) / (1024**3)
-    limit_gb = stats.get("bytes_limit", 0) / (1024**3)
+    live_gb = stats.get("bytes_in_use", 0) / (1024 ** 3)
+    peak_gb = stats.get("peak_bytes_in_use", 0) / (1024 ** 3)
+    limit_gb = stats.get("bytes_limit", 0) / (1024 ** 3)
     num_live = len(jax.live_arrays())
     logging.info(
         f"[MEM {tag}] live={live_gb:.2f} GiB, peak={peak_gb:.2f} GiB, "
@@ -77,13 +77,13 @@ def _log_device_memory(tag: str) -> None:
 
 class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
     def __init__(
-        self,
-        config: OnlineTrainConfig,
-        dummy_obs: ObsType,
-        dummy_act: ActionType,
-        state_action_critic_def: StateActionCriticDef,
-        state_value_def: StateValueDef,
-        task_description: str,
+            self,
+            config: OnlineTrainConfig,
+            dummy_obs: ObsType,
+            dummy_act: ActionType,
+            state_action_critic_def: StateActionCriticDef,
+            state_value_def: StateValueDef,
+            task_description: str,
     ):
         self.task_description = task_description
 
@@ -120,47 +120,62 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
             f"value_state: {_pytree_size_mb(self._value_state):.2f} MB"
         )
 
-        self._q_train_step = jax.jit(
-            functools.partial(train_q_step, self._config),
-            in_shardings=(
-                self._replicated_sharding,
-                self._state_action_critic_state_sharding,
-                self._value_state_sharding,
-                self._data_sharding,
-            ),
-            out_shardings=(
-                self._state_action_critic_state_sharding,
-                self._replicated_sharding,
-            ),
-            donate_argnums=(1,),
-        )
-        self._value_train_step = jax.jit(
-            functools.partial(train_value_step, self._config),
-            in_shardings=(
-                self._replicated_sharding,
-                self._value_state_sharding,
-                self._state_action_critic_state_sharding,
-                self._data_sharding,
-            ),
-            out_shardings=(self._value_state_sharding, self._replicated_sharding),
-            donate_argnums=(1,),
-        )
-        del self._train_step
+        del self._train_step  # if you were deleting an old reference earlier, keep this logic
         gc.collect()
-        self._train_step = jax.jit(
-            functools.partial(train_actor_step, self._config),
+
+        # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
+        self._q_train_step = functools.partial(train_q_step, self._config)
+        self._value_train_step = functools.partial(train_value_step, self._config)
+        self._train_step = functools.partial(train_actor_step, self._config)
+
+        # 2. Create closures to drop 'self' from the JIT signature
+        def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
+            return self._update_critics(batch=batch,
+                                        q_state=q_state,
+                                        value_state=value_state,
+                                        policy_state=policy_state,
+                                        rng=rng)
+
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
+            return self._update_policy(batch=batch,
+                                       policy_state=policy_state,
+                                       q_state=q_state,
+                                       value_state=value_state,
+                                       rng=rng)
+
+        # 3. JIT the wrappers with your distributed shardings
+        self._update_critics_jitted = jax.jit(
+            _critics_wrapper,
             in_shardings=(
-                self._replicated_sharding,
-                self._train_state_sharding,
-                self._state_action_critic_state_sharding,
-                self._value_state_sharding,
-                self._data_sharding,
+                self._data_sharding,  # batch
+                self._state_action_critic_state_sharding,  # q_state
+                self._value_state_sharding,  # value_state
+                self._train_state_sharding,  # policy_state
+                self._replicated_sharding,  # rng
             ),
             out_shardings=(
-                self._train_state_sharding,
-                self._replicated_sharding,
+                self._state_action_critic_state_sharding,  # q_state
+                self._value_state_sharding,  # value_state
+                self._replicated_sharding,  # q_info
+                self._replicated_sharding,  # value_info
             ),
-            donate_argnums=(1,),
+            donate_argnums=(1, 2),  # Donates q_state (arg 1) and value_state (arg 2)
+        )
+
+        self._update_policy_jitted = jax.jit(
+            _policy_wrapper,
+            in_shardings=(
+                self._data_sharding,  # batch
+                self._train_state_sharding,  # policy_state
+                self._state_action_critic_state_sharding,  # q_state
+                self._value_state_sharding,  # value_state
+                self._replicated_sharding,  # rng
+            ),
+            out_shardings=(
+                self._train_state_sharding,  # policy_state
+                self._replicated_sharding,  # info
+            ),
+            donate_argnums=(1,),  # Donates policy_state (arg 1)
         )
 
     def _get_critic_update_frequency(self) -> int:
@@ -174,43 +189,43 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         return max(1, updates)
 
     def _recompute_prefix_embedding(
-        self,
-        *,
-        observation: dict[str, Any] | _model.Observation | None,
+            self,
+            *,
+            observation: dict[str, Any],
+            policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
-        if observation is None:
-            return None
-        model = self._get_policy_model()
+        model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert, so we must NOT re-apply
         # _input_transform.  Convert to Observation if needed and go straight
         # to the model.
-        if isinstance(observation, _model.Observation):
-            obs = observation
-        else:
-            obs = _model.Observation.from_dict(observation)
+        # if isinstance(observation, _model.Observation):
+        #    obs = observation
+        # else:
+        obs = _model.Observation.from_dict(observation)
         prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
         prefix = jnp.mean(prefix, axis=1)
-        jax.block_until_ready(prefix)
         return prefix
 
-    def _get_policy_model(self) -> _model.BaseModel:
+    @staticmethod
+    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
         """Merge policy params into a model. Call once per update() to avoid duplicates."""
         params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
+            policy_state.ema_params
+            if policy_state.ema_params is not None
+            else policy_state.params
         )
-        model = nnx.merge(self._train_state.model_def, params)
+        model = nnx.merge(policy_state.model_def, params)
         model.eval()
         return model
 
     @at.typecheck
     def _online_batch_to_critic_batch(
-        self,
-        online_batch: dict[str, Any],
+            self,
+            online_batch: dict[str, Any],
+            policy_state: training_utils.TrainState,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -222,23 +237,23 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         observation_dict: dict[str, Any] = {
             "state": online_observation["state"],
         }
-        print(f"Type of online observation: {type(online_observation)}")
+
         curr_prefix_embedding = self._recompute_prefix_embedding(
             observation=online_observation,
+            policy_state=policy_state,
         )
-        if curr_prefix_embedding is not None:
-            observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
+
+        observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
 
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
-        print(f"Type of next observation: {type(next_observation)}")
+
         next_prefix_embedding = self._recompute_prefix_embedding(
-            observation=(
-                next_observation if isinstance(next_observation, dict) else None
-            ),
+            observation=next_observation,
+            policy_state=policy_state
         )
-        if next_prefix_embedding is not None:
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
+
+        next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
 
         return (
             observation_dict,
@@ -249,99 +264,101 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         )
 
     def _sft_batch_to_actor_batch(
-        self,
-        sft_batch: tuple[_model.Observation, _model.Actions],
+            self,
+            sft_batch: tuple[_model.Observation, _model.Actions],
+            policy_state: training_utils.TrainState,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
-        if isinstance(policy_observation, _model.Observation):
-            pass
-        elif hasattr(policy_observation, "to_dict"):
-            policy_observation = _model.Observation.from_dict(
-                dict(policy_observation.to_dict())
-            )
-        elif isinstance(policy_observation, dict):
-            policy_observation = _model.Observation.from_dict(dict(policy_observation))
-        else:
-            raise TypeError(
-                "Unsupported observation type for actor update: "
-                f"{type(policy_observation)}."
-            )
         policy_obs_dict = policy_observation.to_dict()
 
         critic_observation: dict[str, Any] = {
             "state": policy_obs_dict["state"],
         }
-        print(f"Type of policy observation: {type(policy_observation)}")
+
         prefix_embedding = self._recompute_prefix_embedding(
-            observation=policy_observation,
+            observation=policy_obs_dict,
+            policy_state=policy_state,
+
         )
-        if prefix_embedding is not None:
-            critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
+
+        critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
 
         return policy_observation, critic_observation, actions
 
     def save_episode(self, is_success=False, env_index=0, **kwargs):
+        # TODO: Fix this, we always save episodes irrespective of success. It is not obvious here why we should call
+        #  the super method.
         return super().save_episode(True, env_index, **kwargs)
 
     @at.typecheck
-    def _update_critics(self, batch: CriticBatch) -> dict[str, at.Array]:
-        q_rng, v_rng, self._rng = jax.random.split(self._rng, 3)
-        with sharding.set_mesh(self._mesh):
-            q_state, q_info = self._q_train_step(
-                q_rng,
-                self._state_action_critic_state,
-                self._value_state,
-                batch,
-            )
-            jax.block_until_ready((q_state, q_info))
-            value_state, value_info = self._value_train_step(
-                v_rng,
-                self._value_state,
-                q_state,
-                batch,
-            )
-            jax.block_until_ready((value_state, value_info))
-        self._state_action_critic_state = q_state
-        self._value_state = value_state
-        current_info = {f"critic/q_{key}": value for key, value in q_info.items()} | {
-            f"critic/value_{key}": value for key, value in value_info.items()
-        }
-        return current_info
+    def _update_critics(self,
+                        batch: Dict[str, Any],
+                        q_state: training_utils.TrainState,
+                        value_state: training_utils.TrainState,
+                        policy_state: training_utils.TrainState,
+                        rng: at.KeyArrayLike,
+                        ) -> Tuple[training_utils.TrainState,
+                                   training_utils.TrainState,
+                                   dict[str, at.Array],
+                                   dict[str, at.Array]]:
+        # Add prefix representation to the batch for the critic
+        batch = self._online_batch_to_critic_batch(
+            batch,
+            policy_state,
+        )
+        q_rng, v_rng = jax.random.split(rng, 2)
+        # Update the state action critic state
+        q_state, q_info = self._q_train_step(
+            q_rng,
+            q_state,
+            value_state,
+            batch,
+        )
+        # Update the value state
+        value_state, value_info = self._value_train_step(
+            v_rng,
+            value_state,
+            q_state,
+            batch,
+        )
 
-    def _update_policy(self, batch: tuple[_model.Observation, ObsType, _model.Actions]):
-        train_rng, self._rng = jax.random.split(self._rng)
-        with sharding.set_mesh(self._mesh):
-            train_state, actor_info = self._train_step(
-                train_rng,
-                self._train_state,
-                self._state_action_critic_state,
-                self._value_state,
-                batch,
-            )
-        self._train_state = train_state
-        info = {f"actor/{key}": value for key, value in actor_info.items()}
-        return info
+        return q_state, value_state, q_info, value_info
+
+    def _update_policy(self,
+                       batch: tuple[_model.Observation, _model.Actions],
+                       policy_state: training_utils.TrainState,
+                       q_state: training_utils.TrainState,
+                       value_state: training_utils.TrainState,
+                       rng: at.KeyArrayLike,
+                       ):
+        # Add prefix representation to the batch
+        batch = self._sft_batch_to_actor_batch(
+            batch,
+            policy_state=policy_state,
+        )
+        # Update the policy state
+        policy_state, info = self._train_step(
+            rng,
+            policy_state,
+            q_state,
+            value_state,
+            batch,
+        )
+
+        return policy_state, info
 
     @at.typecheck
     def update(self) -> dict:
         live_arrays = jax.live_arrays()
         # 3. Calculate total size
         total_bytes = sum(arr.nbytes for arr in live_arrays)
-        total_gb = total_bytes / (1024**3)
+        total_gb = total_bytes / (1024 ** 3)
 
         print(f"Step {self.training_steps + 1} Memory Check")
         print(f"Total live arrays on device: {len(live_arrays)}")
         print(f"Total tracked memory: {total_gb:.2f} GB")
 
         self.training_steps += 1
-        if self.training_steps % 100 == 1:
-            q_size = _pytree_size_mb(self._state_action_critic_state)
-            v_size = _pytree_size_mb(self._value_state)
-            logging.info(
-                f"[OOM-DEBUG step={self.training_steps}] "
-                f"state_action_critic_state: {q_size:.2f} MB, "
-                f"value_state: {v_size:.2f} MB"
-            )
         update_critic = self.training_steps % self._critic_update_frequency == 0
         update_policy = self.training_steps % self._policy_update_frequency == 0
         if not update_critic and not update_policy:
@@ -353,7 +370,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
         batch = next(self._data_iter)
         use_online = (
-            self._online_data_buffer.size >= self._online_data_buffer.batch_size
+                self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
         first_online = use_online and self.training_steps <= 2
         if first_online:
@@ -380,26 +397,26 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
 
         critic_info, actor_info = {}, {}
         if use_online:
-            online_batch_raw = self._online_data_buffer.sample()
-            if first_online:
-                logging.info(
-                    f"[SIZE-DEBUG] online_batch_raw: global={_pytree_size_gb(online_batch_raw):.2f} GiB, "
-                    f"per-device={_pytree_per_device_size_gb(online_batch_raw):.2f} GiB"
-                )
+            online_batch = self._online_data_buffer.sample()
             if update_critic:
-                if first_online:
-                    _log_device_memory("before_critic_batch")
-                critic_batch = self._online_batch_to_critic_batch(
-                    online_batch_raw,
-                )
-                if first_online:
-                    _log_device_memory("after_critic_batch")
-                critic_info = self._update_critics(critic_batch)
+                critic_rng, self._rng = jax.random.split(self._rng, 2)
+                with sharding.set_mesh(self._mesh):
+                    q_state, value_state, q_info, value_info = self._update_critics_jitted(
+                        online_batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                self._state_action_critic_state = q_state
+                self._value_state = value_state
+
+                critic_info = {f"critic/q_{key}": value for key, value in q_info.items()} | {
+                    f"critic/value_{key}": value for key, value in value_info.items()
+                }
                 if first_online:
                     _log_device_memory("after_update_critics")
-                # del critic_batch
-            online_batch = self._online_batch_to_sft_batch(online_batch_raw)
-            # del online_batch_raw
+            online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
                 batch = online_batch
@@ -422,27 +439,8 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 # the SFT batch is sharded. Re-shard the mixed result to
                 # match the data sharding expected by _train_step.
                 batch = jax.device_put(batch, self._data_sharding)
-                # online_batch is replicated (~11 GiB/device of images); free it now.
-                # del online_batch
-        if update_policy:
-            if first_online:
-                _log_device_memory("before_actor_batch")
-            actor_batch = self._sft_batch_to_actor_batch(
-                batch,
-            )
-            if first_online:
-                logging.info(
-                    f"[SIZE-DEBUG] actor_batch (global): "
-                    f"policy_obs={_pytree_size_gb(actor_batch[0]):.2f} GiB, "
-                    f"critic_obs={_pytree_size_gb(actor_batch[1]):.2f} GiB, "
-                    f"actions={_pytree_size_gb(actor_batch[2]):.2f} GiB"
-                )
-                logging.info(
-                    f"[SIZE-DEBUG] actor_batch (per-device): "
-                    f"policy_obs={_pytree_per_device_size_gb(actor_batch[0]):.2f} GiB, "
-                    f"critic_obs={_pytree_per_device_size_gb(actor_batch[1]):.2f} GiB, "
-                    f"actions={_pytree_per_device_size_gb(actor_batch[2]):.2f} GiB"
-                )
+                del online_batch
+                gc.collect()
         # Free batch and model copy BEFORE the heavy jitted train step so JAX
         # can reclaim memory and donate the train_state buffers.
         if update_policy:
@@ -450,17 +448,24 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
                 _log_device_memory(
                     "before_update_policy (after del batch+policy_model)"
                 )
-            actor_info = self._update_policy(actor_batch)
-            jax.block_until_ready((self._train_state, actor_info))
-        info = (
-            actor_info
-            | critic_info
-            | {
-                "online_buffer_size": jnp.asarray(
-                    float(self._online_data_buffer.size), dtype=jnp.float32
+            policy_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                policy_state, actor_info = self._update_policy_jitted(batch,
+                                                                      self._train_state,
+                                                                      self._state_action_critic_state,
+                                                                      self._value_state,
+                                                                      policy_rng,
                 )
-            }
+            self._train_state = policy_state
+            actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
+        info = (
+                actor_info
+                | critic_info
+                | {
+                    "online_buffer_size": jnp.asarray(
+                        float(self._online_data_buffer.size), dtype=jnp.float32
+                    )
+                }
         )
         info = jax.tree.map(np.asarray, info)
-        print(f"Tree size: {_pytree_size_mb(info):.2f} MB")
         return info
