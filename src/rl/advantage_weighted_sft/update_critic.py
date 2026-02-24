@@ -14,7 +14,7 @@ import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
-from src.training.config import OnlineTrainConfig
+from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
 from src.rl.networks.rl_networks import (
     ObsType,
     ActionType,
@@ -35,16 +35,13 @@ StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
-    rl_config = getattr(config, "rl", None)
-    return bool(getattr(rl_config, "use_ema_critic", False))
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    return config.rl.use_ema_critic
 
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
-    rl_config = getattr(config, "rl", None)
-    if rl_config is not None and hasattr(rl_config, "critic_ema_decay"):
-        critic_ema_decay = getattr(rl_config, "critic_ema_decay")
-        return None if critic_ema_decay is None else float(critic_ema_decay)
-    return config.ema_decay
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    return config.rl.critic_ema_decay
 
 
 def create_critic(
@@ -98,8 +95,9 @@ def init_state_action_critic_train_state(
     dummy_obs: ObsType,
     dummy_act: ActionType,
 ) -> tuple[training_utils.TrainState, Any]:
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.optimizer, config.lr_schedule, weight_decay_mask=None
+        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
     # flatten the array across the array dim
@@ -138,8 +136,9 @@ def init_state_value_train_state(
     critic_def: StateValueDef,
     dummy_obs: ObsType,
 ) -> tuple[training_utils.TrainState, Any]:
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.optimizer, config.lr_schedule, weight_decay_mask=None
+        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
 

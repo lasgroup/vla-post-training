@@ -1,5 +1,5 @@
 # ruff: noqa: F722
-from src.training.config import OnlineTrainConfig
+from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
     flatten_action_horizon,
@@ -15,13 +15,13 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
-from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
+from src.rl.networks.rl_networks import ObsType
 
 
 @at.typecheck
 def _awr_beta(config: OnlineTrainConfig) -> float:
-    rl_config = getattr(config, "rl", None)
-    beta = float(getattr(rl_config, "beta", 1.0))
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    beta = config.rl.beta
     return max(beta, 1e-6)
 
 
@@ -54,7 +54,8 @@ def train_step(
     advantage = q_value - value  # (B, )
 
     score = advantage / _awr_beta(config)
-    score = jnp.minimum(score, 20.0)  # Clipping
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
     score = jax.nn.softmax(score, axis=0)  # (B, )
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
