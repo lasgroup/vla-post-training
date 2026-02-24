@@ -1,6 +1,5 @@
 # ruff: noqa: F722
 import functools
-import logging
 from typing import Any, Dict, Tuple
 import gc
 
@@ -26,12 +25,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
-from src.rl.advantage_weighted_sft.memory_logging import (
-    _pytree_size_mb,
-    _pytree_size_gb,
-    _pytree_per_device_size_gb,
-    _log_device_memory,
-)
+from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig
 
@@ -45,8 +39,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         state_action_critic_def: StateActionCriticDef,
         state_value_def: StateValueDef,
         task_description: str,
+        debug: bool = False,
     ):
         self.task_description = task_description
+        self.debug = debug
 
         super().__init__(config)
 
@@ -72,16 +68,15 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
-        logging.info(
-            f"[OOM-DEBUG init] "
-            f"train_state: {_pytree_size_mb(self._train_state):.2f} MB, "
-            f"state_action_critic_state: {_pytree_size_mb(self._state_action_critic_state):.2f} MB, "
-            f"value_state: {_pytree_size_mb(self._value_state):.2f} MB"
-        )
+        if self.debug:
+            log_memory_debug(
+                "init",
+                train_state=self._train_state,
+                state_action_critic_state=self._state_action_critic_state,
+                value_state=self._value_state,
+            )
 
-        del (
-            self._train_step
-        )  # if you were deleting an old reference earlier, keep this logic
+        del self._train_step
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
@@ -299,14 +294,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        live_arrays = jax.live_arrays()
-        # 3. Calculate total size
-        total_bytes = sum(arr.nbytes for arr in live_arrays)
-        total_gb = total_bytes / (1024**3)
-
-        print(f"Step {self.training_steps + 1} Memory Check")
-        print(f"Total live arrays on device: {len(live_arrays)}")
-        print(f"Total tracked memory: {total_gb:.2f} GB")
+        if self.debug:
+            log_memory_debug("step_start", training_steps=self.training_steps)
 
         self.training_steps += 1
         update_critic = (
@@ -328,33 +317,15 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
-        first_online = use_online and self.training_steps <= 2
-        if first_online:
-            _log_device_memory("before_get_policy_model")
-            logging.info(
-                f"[SIZE-DEBUG] train_state total (global): "
-                f"params={_pytree_size_gb(self._train_state.params):.2f} GiB, "
-                f"ema_params={_pytree_size_gb(self._train_state.ema_params):.2f} GiB, "
-                f"opt_state={_pytree_size_gb(self._train_state.opt_state):.2f} GiB"
-            )
-            logging.info(
-                f"[SIZE-DEBUG] train_state per-device: "
-                f"params={_pytree_per_device_size_gb(self._train_state.params):.2f} GiB, "
-                f"ema_params={_pytree_per_device_size_gb(self._train_state.ema_params):.2f} GiB, "
-                f"opt_state={_pytree_per_device_size_gb(self._train_state.opt_state):.2f} GiB"
-            )
-            logging.info(
-                f"[SIZE-DEBUG] SFT batch: global={_pytree_size_gb(batch):.2f} GiB, "
-                f"per-device={_pytree_per_device_size_gb(batch):.2f} GiB"
-            )
-
-        # Create the policy model at most once per update() call.
-        # needs_model = (use_online and update_critic) or update_policy
 
         critic_info, actor_info = {}, {}
         if use_online:
             online_batch = self._online_data_buffer.sample()
             if update_critic:
+                if self.debug:
+                    log_memory_debug(
+                        "before_critics", train_state=self._train_state, batch=batch
+                    )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
                     q_state, value_state, q_info, value_info = (
@@ -372,8 +343,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
-                if first_online:
-                    _log_device_memory("after_update_critics")
+                if self.debug:
+                    log_memory_debug("after_update_critics")
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = float(getattr(self._config.collect, "online_ratio", 0.5))
             if online_ratio >= 1.0:
@@ -399,13 +370,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 batch = jax.device_put(batch, self._data_sharding)
                 del online_batch
                 gc.collect()
-        # Free batch and model copy BEFORE the heavy jitted train step so JAX
-        # can reclaim memory and donate the train_state buffers.
         if update_policy:
-            if first_online:
-                _log_device_memory(
-                    "before_update_policy (after del batch+policy_model)"
-                )
+            if self.debug:
+                log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
