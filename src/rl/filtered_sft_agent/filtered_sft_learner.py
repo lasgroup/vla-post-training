@@ -336,145 +336,39 @@ class FilteredSFTLearner(Agent):
             self._config.online_buffer_size,
         )
         token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        action_horizon = int(self._config.model.action_horizon)
-        transition_gamma = float(self._config.discount)
 
         def _preprocess_insert(episode_data: Dict[str, Any]):
-            # TODO: deduplicate raw, episode_data
-            raw = episode_data
-            # TODO: check if raw contains these keys, or whether it can already return a nested dict
-            raw["observation"] = {k: raw[k] for k in ("image", "wrist_image", "state")}
-            # TODO: read prompt later
-            prompt = raw["prompt"]
-            # TODO: remove if redundant
-            raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+            obs = pre_token_transform(episode_data)
+            # ensure batched image masks
+            batch_shape = obs["state"].shape[:-1]
+            obs["image_mask"] = {k: np.full(batch_shape, bool(v)) for k, v in obs["image_mask"].items()}
+            obs["state"] = obs["state"].astype(np.float32)
+            actions = obs.pop("actions").astype(np.float32)
+            prompt = obs.pop("prompt")
 
-            def _pad_feature_dim(values: Any, target_dim: int, *, name: str) -> np.ndarray:
-                # TODO: remove first 7 lines (redundant)
-                arr = np.asarray(values, dtype=np.float32)
-                if arr.ndim == 1:
-                    arr = arr[None, :]
-                if arr.ndim < 2:
-                    raise ValueError(
-                        f"{name} must be at least 2-D with shape [batch, features], got {arr.shape}."
-                    )
-                feature_dim = int(arr.shape[-1])
-                if feature_dim < target_dim:
-                    pad_shape = [(0, 0)] * arr.ndim
-                    pad_shape[-1] = (0, target_dim - feature_dim)
-                    arr = np.pad(arr, pad_shape, mode="constant", constant_values=0.0)
-                elif feature_dim > target_dim:
-                    # TODO: raise exception instead
-                    arr = arr[..., :target_dim]
-                return arr
-
-            transition_state = _pad_feature_dim(
-                raw["state"], transition_state_dim, name="state"
-            )
-            data = pre_token_transform(raw)
-
-            def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
-                """Pad or truncate actions to match the policy action horizon."""
-                actions = np.asarray(actions)
-                if actions.ndim == 2:
-                    actions = actions[None, ...]
-                if actions.shape[1] < action_horizon:
-                    pad = action_horizon - actions.shape[1]
-                    last = actions[:, -1:, :]
-                    # TODO: why pad?
-                    actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
-                elif actions.shape[1] > action_horizon:
-                    actions = actions[:, :action_horizon, :]
-                return actions
-
-            data["actions"] = _pad_actions_to_horizon(
-                data["actions"], action_horizon
-            )
-
-            # Ensure batched image masks.
-            batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
-            for k, v in data["image_mask"].items():
-                v = np.asarray(v)
-                # TODO: check if
-                if v.ndim == 0:
-                    data["image_mask"][k] = np.full(
-                        batch_shape, bool(v), dtype=np.bool_
-                    )
-
-            # TODO: check default
-            data.pop("prompt", None)
-            # TODO: move to fn
             if isinstance(token_transform, _transforms.TokenizePrompt):
                 if prompt not in token_cache:
                     tok = token_transform({"prompt": prompt})
                     token_cache[prompt] = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
                 tokens, token_masks = token_cache[prompt]
-                data["tokenized_prompt"] = np.broadcast_to(
+                obs["tokenized_prompt"] = np.broadcast_to(
                     tokens, batch_shape + tokens.shape
                 ).copy()
-                data["tokenized_prompt_mask"] = np.broadcast_to(
+                obs["tokenized_prompt_mask"] = np.broadcast_to(
                     token_masks, batch_shape + token_masks.shape
                 ).copy()
-            elif isinstance(token_transform, _transforms.TokenizeFASTInputs):
-                state = np.asarray(data["state"])
-                actions = np.asarray(data["actions"])
-                t = int(state.shape[0])
-                keys = ["tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"]
-                buff = {k: [] for k in keys}
-                for i in range(t):
-                    out = token_transform(
-                        {"prompt": prompt, "state": state[i], "actions": actions[i]}
-                    )
-                    buff = {k: buff[k] + [out[k]] for k in keys}
-                data =  {**data, **{k: np.stack(v, axis=0) for k, v in buff.items()}}
             else:
                 raise TypeError(f"Unsupported token transform: {type(token_transform)}")
 
-            # TODO: why pop and cast?
-            actions = np.asarray(data.pop("actions"), dtype=np.float32)
-            # TODO: remove cast
-            data["state"] = np.asarray(data["state"], dtype=np.float32)
-            insert_batch_size = int(actions.shape[0])
-            if transition_state.shape[0] != insert_batch_size:
-                raise ValueError(
-                    f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
-                )
-
-            # TODO: streamline
-            def _ensure_batch_scalar(
-                values: Any | None, *, batch_size: int, default: float
-            ) -> np.ndarray:
-                if values is None:
-                    return np.full((batch_size,), default, dtype=np.float32)
-
-                arr = np.asarray(values, dtype=np.float32)
-                if arr.ndim == 0:
-                    return np.full((batch_size,), float(arr), dtype=np.float32)
-                if arr.shape[0] != batch_size:
-                    raise ValueError(
-                        f"Scalar batch has mismatched size: expected {batch_size}, got {arr.shape[0]}."
-                    )
-                if arr.ndim > 1:
-                    arr = arr.reshape(batch_size, -1)[:, 0]
-                return arr.astype(np.float32, copy=False)
-
-            transition_reward = _ensure_batch_scalar(
-                episode_data.get("reward"), batch_size=insert_batch_size, default=0.0
-            )
-            transition_discount = _ensure_batch_scalar(
-                episode_data.get("discount"),
-                batch_size=insert_batch_size,
-                default=transition_gamma,
-            )
-
             return {
-                "observation": data,
+                "observation": obs,
                 "actions": actions,
                 "next_observation": {
-                    "state": transition_state.astype(np.float32, copy=False)
+                    # TODO: assign  proper next obs here
+                    "state": obs["state"]
                 },
-                "reward": transition_reward,
-                "discount": transition_discount,
+                "reward": episode_data["reward"],
+                "discount": episode_data["discount"],
             }
 
         return ShardedReplayBuffer(
@@ -589,15 +483,8 @@ class FilteredSFTLearner(Agent):
             return
         discount_gamma = float(self._config.discount)
 
-        # TODO: this should be a one-liner
         def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
-            extracted = {}
-            for key, val in obs.items():
-                if not key.startswith("observation/"):
-                    continue
-                obs_key = key[len("observation/"):]
-                extracted[obs_key] = val
-            return extracted
+            return {key[len("observation/") :]: val for key, val in obs.items() if key.startswith("observation/")}
 
         # TODO: this can be simplified
         def process_frame(
