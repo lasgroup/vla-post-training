@@ -55,8 +55,8 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.training.utils as training_utils
-from src.rl.advantage_weighted_regression import AdvantageWeightedFilteredSFTLearner
-from src.rl.advantage_weighted_regression.update_critic import (
+from src.rl.advantage_weighted_sft import AdvantageWeightedSFTLearner
+from src.rl.advantage_weighted_sft.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
@@ -234,7 +234,7 @@ def main(config: _config.OnlineTrainConfig):
     state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
         config, prefix_embedding_shape=prefix_embedding_shape
     )
-    agent = AdvantageWeightedFilteredSFTLearner(
+    agent = AdvantageWeightedSFTLearner(
         config=config,
         dummy_obs=dummy_obs,
         dummy_act=dummy_act,

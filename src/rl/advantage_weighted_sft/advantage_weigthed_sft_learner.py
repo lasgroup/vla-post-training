@@ -13,10 +13,10 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
-from src.rl.advantage_weighted_regression.update_actor import (
+from src.rl.advantage_weighted_sft.update_actor import (
     train_step as train_actor_step,
 )
-from src.rl.advantage_weighted_regression.update_critic import (
+from src.rl.advantage_weighted_sft.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
     train_q_step,
@@ -75,7 +75,7 @@ def _log_device_memory(tag: str) -> None:
     )
 
 
-class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
+class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(
             self,
             config: OnlineTrainConfig,

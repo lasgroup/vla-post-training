@@ -1,6 +1,6 @@
 # ruff: noqa: F722
 from src.training.config import OnlineTrainConfig
-from src.rl.advantage_weighted_regression.update_critic import (
+from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
     flatten_action_horizon,
     summarize_critic_values,
