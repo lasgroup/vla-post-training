@@ -113,7 +113,7 @@ def train_step(
 
         info = {
             "loss": loss,
-            "q_mean": jnp.mean(q),
+            "q_mean": jnp.mean(q_value),
             "adv_mean": jnp.mean(adv),
             "log_prob_mean": jnp.mean(log_probs),
         }

@@ -64,7 +64,7 @@ class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
-    noise_level: float = 0.7
+    noise_level: float = 0.3
     normalize_adv: bool = True
 
 
