@@ -9,6 +9,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 WANDB_PROJECT="$1"
+LOG_INTERVAL="${LOG_INTERVAL:-25}"
 NUM_SEEDS="${NUM_SEEDS:-5}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-pi05_libero_online_aw_sft}"
 
@@ -29,10 +30,10 @@ fi
 total_jobs=0
 for seed in "${seed_values[@]}"; do
   exp_name="${WANDB_PROJECT}_seed${seed}"
-  echo "Submitting ${exp_name} (project=${WANDB_PROJECT}, seed=${seed}, config=${TRAIN_CONFIG})"
+  echo "Submitting ${exp_name} (project=${WANDB_PROJECT}, seed=${seed}, config=${TRAIN_CONFIG}, log_interval=${LOG_INTERVAL})"
   sbatch \
     --job-name="${exp_name}" \
-    --export=ALL,EXP_NAME="${exp_name}",TRAIN_SEED="${seed}",WANDB_PROJECT="${WANDB_PROJECT}",TRAIN_CONFIG="${TRAIN_CONFIG}" \
+    --export=ALL,EXP_NAME="${exp_name}", LOG_INTERVAL="${LOG_INTERVAL}",TRAIN_SEED="${seed}",WANDB_PROJECT="${WANDB_PROJECT}",TRAIN_CONFIG="${TRAIN_CONFIG}" \
     "${TRAIN_SCRIPT}"
   ((total_jobs += 1))
 done
