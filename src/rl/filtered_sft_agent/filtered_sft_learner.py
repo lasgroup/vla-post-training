@@ -296,25 +296,14 @@ class FilteredSFTLearner(Agent):
     def _get_online_replay_buffer(
         self,
     ) -> ShardedReplayBuffer:
-        train_config = self._config
+
+        # prepare transforms for preprocessing episode data into model input format
         data_config = self._data_loader.data_config()
-
-        token_transform: (
-            _transforms.TokenizePrompt | _transforms.TokenizeFASTInputs | None
-        ) = None
-        non_token_model_transforms = []
-        for t in data_config.model_transforms.inputs:
-            if isinstance(
-                t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
-            ):
-                token_transform = t
-            else:
-                non_token_model_transforms.append(t)
-        if token_transform is None:
-            raise ValueError(
-                "Model transforms must include a prompt tokenization transform."
-            )
-
+        tt_types = (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
+        token_transforms = [t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)]
+        non_token_transforms = [t for t in data_config.model_transforms.inputs if not isinstance(t, tt_types)]
+        assert len(token_transforms) == 1, f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
+        token_transform = token_transforms[0]
         pre_token_transform = _transforms.compose(
             [
                 *data_config.repack_transforms.inputs,
@@ -322,92 +311,63 @@ class FilteredSFTLearner(Agent):
                 _transforms.Normalize(
                     data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
                 ),
-                *non_token_model_transforms,
+                *non_token_transforms,
             ]
         )
 
-        obs_spec, act_spec = train_config.model.inputs_spec(batch_size=1)
+        # prepare dummy data for initializing the replay buffer
+        obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
         obs_spec_dict = obs_spec.to_dict()
-
-        def _zeros_like_spec(spec, *, override_dtype=None):
-            dtype = override_dtype if override_dtype is not None else spec.dtype
-            return np.zeros(spec.shape, dtype=dtype)
-
-        dummy_obs_dict = {
-            "image": {
-                k: _zeros_like_spec(v, override_dtype=np.uint8)
-                for k, v in obs_spec_dict["image"].items()
-            },
-            "image_mask": {
-                k: _zeros_like_spec(v) for k, v in obs_spec_dict["image_mask"].items()
-            },
-            "state": _zeros_like_spec(obs_spec_dict["state"]),
-        }
-        for k in (
-            "tokenized_prompt",
-            "tokenized_prompt_mask",
-            "token_ar_mask",
-            "token_loss_mask",
-        ):
-            if k in obs_spec_dict and obs_spec_dict[k] is not None:
-                dummy_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
-
-        dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
+        dummy_obs_dict = jax.tree.map(lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict)
+        dummy_obs_dict = {k: v for k, v in dummy_obs_dict.items() if v is not None}
+        dummy_obs_dict["image"] = jax.tree.map(lambda v: v.astype(np.uint8), dummy_obs_dict["image"])
         transition_state_dim = int(obs_spec_dict["state"].shape[-1])
-        dummy_next_obs_dict = {
-            "state": np.zeros((1, transition_state_dim), dtype=np.float32)
-        }
-        dummy_rewards = np.zeros((1,), dtype=np.float32)
-        dummy_discounts = np.zeros((1,), dtype=np.float32)
-        # Keep enough online data for stable sampling when mixing with offline batches.
-        max_capacity = self._config.online_buffer_size
+        dummy_data = {
+                "observation": dummy_obs_dict,
+                "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
+                "next_observation": {
+                    "state": np.zeros((1, transition_state_dim), dtype=np.float32)
+                },
+                "reward": np.zeros((1,), dtype=np.float32),
+                "discount": np.zeros((1,), dtype=np.float32),
+            }
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
-            max_capacity,
+            self._config.online_buffer_size,
         )
         token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        action_horizon = int(train_config.model.action_horizon)
-        transition_gamma = float(train_config.discount)
-
-        def _pad_feature_dim(values: Any, target_dim: int, *, name: str) -> np.ndarray:
-            arr = np.asarray(values, dtype=np.float32)
-            if arr.ndim == 1:
-                arr = arr[None, :]
-            if arr.ndim < 2:
-                raise ValueError(
-                    f"{name} must be at least 2-D with shape [batch, features], got {arr.shape}."
-                )
-            feature_dim = int(arr.shape[-1])
-            if feature_dim < target_dim:
-                pad_shape = [(0, 0)] * arr.ndim
-                pad_shape[-1] = (0, target_dim - feature_dim)
-                arr = np.pad(arr, pad_shape, mode="constant", constant_values=0.0)
-            elif feature_dim > target_dim:
-                arr = arr[..., :target_dim]
-            return arr
-
-        def _ensure_batch_scalar(
-            values: Any | None, *, batch_size: int, default: float
-        ) -> np.ndarray:
-            if values is None:
-                return np.full((batch_size,), default, dtype=np.float32)
-
-            arr = np.asarray(values, dtype=np.float32)
-            if arr.ndim == 0:
-                return np.full((batch_size,), float(arr), dtype=np.float32)
-            if arr.shape[0] != batch_size:
-                raise ValueError(
-                    f"Scalar batch has mismatched size: expected {batch_size}, got {arr.shape[0]}."
-                )
-            if arr.ndim > 1:
-                arr = arr.reshape(batch_size, -1)[:, 0]
-            return arr.astype(np.float32, copy=False)
+        action_horizon = int(self._config.model.action_horizon)
+        transition_gamma = float(self._config.discount)
 
         def _preprocess_insert(episode_data: Dict[str, Any]):
+            # TODO: deduplicate raw, episode_data
             raw = episode_data
+            # TODO: check if raw contains these keys, or whether it can already return a nested dict
             raw["observation"] = {k: raw[k] for k in ("image", "wrist_image", "state")}
+            # TODO: read prompt later
             prompt = raw["prompt"]
+            # TODO: remove if redundant
             raw = {k: (np.asarray(v) if k != "prompt" else v) for k, v in raw.items()}
+
+            def _pad_feature_dim(values: Any, target_dim: int, *, name: str) -> np.ndarray:
+                # TODO: remove first 7 lines (redundant)
+                arr = np.asarray(values, dtype=np.float32)
+                if arr.ndim == 1:
+                    arr = arr[None, :]
+                if arr.ndim < 2:
+                    raise ValueError(
+                        f"{name} must be at least 2-D with shape [batch, features], got {arr.shape}."
+                    )
+                feature_dim = int(arr.shape[-1])
+                if feature_dim < target_dim:
+                    pad_shape = [(0, 0)] * arr.ndim
+                    pad_shape[-1] = (0, target_dim - feature_dim)
+                    arr = np.pad(arr, pad_shape, mode="constant", constant_values=0.0)
+                elif feature_dim > target_dim:
+                    # TODO: raise exception instead
+                    arr = arr[..., :target_dim]
+                return arr
+
             transition_state = _pad_feature_dim(
                 raw["state"], transition_state_dim, name="state"
             )
@@ -421,6 +381,7 @@ class FilteredSFTLearner(Agent):
                 if actions.shape[1] < action_horizon:
                     pad = action_horizon - actions.shape[1]
                     last = actions[:, -1:, :]
+                    # TODO: why pad?
                     actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
                 elif actions.shape[1] > action_horizon:
                     actions = actions[:, :action_horizon, :]
@@ -434,12 +395,15 @@ class FilteredSFTLearner(Agent):
             batch_shape = tuple(np.asarray(data["state"]).shape[:-1])
             for k, v in data["image_mask"].items():
                 v = np.asarray(v)
+                # TODO: check if
                 if v.ndim == 0:
                     data["image_mask"][k] = np.full(
                         batch_shape, bool(v), dtype=np.bool_
                     )
 
+            # TODO: check default
             data.pop("prompt", None)
+            # TODO: move to fn
             if isinstance(token_transform, _transforms.TokenizePrompt):
                 if prompt not in token_cache:
                     tok = token_transform({"prompt": prompt})
@@ -466,18 +430,39 @@ class FilteredSFTLearner(Agent):
             else:
                 raise TypeError(f"Unsupported token transform: {type(token_transform)}")
 
+            # TODO: why pop and cast?
             actions = np.asarray(data.pop("actions"), dtype=np.float32)
+            # TODO: remove cast
             data["state"] = np.asarray(data["state"], dtype=np.float32)
             insert_batch_size = int(actions.shape[0])
             if transition_state.shape[0] != insert_batch_size:
                 raise ValueError(
                     f"Transition state batch mismatch: {transition_state.shape[0]} vs {insert_batch_size}."
                 )
+
+            # TODO: streamline
+            def _ensure_batch_scalar(
+                values: Any | None, *, batch_size: int, default: float
+            ) -> np.ndarray:
+                if values is None:
+                    return np.full((batch_size,), default, dtype=np.float32)
+
+                arr = np.asarray(values, dtype=np.float32)
+                if arr.ndim == 0:
+                    return np.full((batch_size,), float(arr), dtype=np.float32)
+                if arr.shape[0] != batch_size:
+                    raise ValueError(
+                        f"Scalar batch has mismatched size: expected {batch_size}, got {arr.shape[0]}."
+                    )
+                if arr.ndim > 1:
+                    arr = arr.reshape(batch_size, -1)[:, 0]
+                return arr.astype(np.float32, copy=False)
+
             transition_reward = _ensure_batch_scalar(
-                raw.get("reward"), batch_size=insert_batch_size, default=0.0
+                episode_data.get("reward"), batch_size=insert_batch_size, default=0.0
             )
             transition_discount = _ensure_batch_scalar(
-                raw.get("discount"),
+                episode_data.get("discount"),
                 batch_size=insert_batch_size,
                 default=transition_gamma,
             )
@@ -493,16 +478,10 @@ class FilteredSFTLearner(Agent):
             }
 
         return ShardedReplayBuffer(
-            dummy_data={
-                "observation": dummy_obs_dict,
-                "actions": dummy_actions,
-                "next_observation": dummy_next_obs_dict,
-                "reward": dummy_rewards,
-                "discount": dummy_discounts,
-            },
-            max_capacity=max_capacity,
+            dummy_data=dummy_data,
+            max_capacity=self._config.online_buffer_size,
             data_sharding=self._data_sharding,
-            seed=train_config.seed,
+            seed=self._config.seed,
             preprocess_fn=_preprocess_insert,
             postprocess_fn=None,
             freeze_dict=False,
@@ -610,6 +589,7 @@ class FilteredSFTLearner(Agent):
             return
         discount_gamma = float(self._config.discount)
 
+        # TODO: this should be a one-liner
         def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
             extracted = {}
             for key, val in obs.items():
@@ -619,6 +599,7 @@ class FilteredSFTLearner(Agent):
                 extracted[obs_key] = val
             return extracted
 
+        # TODO: this can be simplified
         def process_frame(
             ob: Dict[str, Any],
             *,
@@ -652,6 +633,7 @@ class FilteredSFTLearner(Agent):
             return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *frames)
 
         transitions = []
+        # TODO: only one of these options is relevant to filtered SFT
         if self._config.collect.add_per_step_data:
             # Build one-step transitions first, then convert to H-step sliding windows.
             for ep in episode_data:
