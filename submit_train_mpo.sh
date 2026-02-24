@@ -10,6 +10,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-openpi}"
 TRAIN_SEED="${TRAIN_SEED:-0}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-pi05_libero_online_mpo_sft}"
 CHECKPOINT_BASE_DIR="${CHECKPOINT_BASE_DIR:-/capstor/scratch/cscs/${USER}/checkpoints}"
+BUFFER_CAPACITY="${BUFFER_CAPACITY:-250000}"
 LOG_INTERVAL="${LOG_INTERVAL:-50}"
 
 # Added --account=a143 to srun as well to ensure the container inherits it.
@@ -21,4 +22,5 @@ uv run scripts/train_online_with_mpo_agent.py "${TRAIN_CONFIG}" \
 --project_name "${WANDB_PROJECT}" \
 --seed "${TRAIN_SEED}" \
 --collect.seed "${TRAIN_SEED}" \
---log_interval "${LOG_INTERVAL}"
+--log_interval "${LOG_INTERVAL}" \
+--rl.buffer_capacity "${BUFFER_CAPACITY}"
