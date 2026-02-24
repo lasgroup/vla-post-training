@@ -19,5 +19,5 @@ uv run scripts/train_online_with_awr_agent.py "${TRAIN_CONFIG}" \
 --exp_name "${EXP_NAME}" \
 --project_name "${WANDB_PROJECT}" \
 --seed "${TRAIN_SEED}" \
---collect.seed "${TRAIN_SEED}"
+--collect.seed "${TRAIN_SEED}" \
 --log_interval "${LOG_INTERVAL}"
