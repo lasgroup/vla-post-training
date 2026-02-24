@@ -42,7 +42,6 @@ def collect_data(
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=task_description,
-                batch_actions=True,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 

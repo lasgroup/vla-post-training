@@ -89,20 +89,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
     return env
 
 
-def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
-    """Pad or truncate actions to match the policy action horizon."""
-    actions = np.asarray(actions)
-    if actions.ndim == 2:
-        actions = actions[None, ...]
-    if actions.shape[1] < action_horizon:
-        pad = action_horizon - actions.shape[1]
-        last = actions[:, -1:, :]
-        actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
-    elif actions.shape[1] > action_horizon:
-        actions = actions[:, :action_horizon, :]
-    return actions
-
-
 def _load_weights_and_validate(
     loader: _weight_loaders.WeightLoader, params_shape: at.Params
 ) -> at.Params:
@@ -237,7 +223,7 @@ class FilteredSFTLearner(Agent):
             config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
         self._data_iter = iter(self._data_loader)
-        self._online_data_buffer = self._get_online_replay_buffer(self._data_sharding)
+        self._online_data_buffer = self._get_online_replay_buffer()
         self._collection_success_episodes = 0
 
         # Initialize train state.
@@ -308,7 +294,7 @@ class FilteredSFTLearner(Agent):
             )
 
     def _get_online_replay_buffer(
-        self, data_sharding: jax.sharding.NamedSharding
+        self,
     ) -> ShardedReplayBuffer:
         train_config = self._config
         data_config = self._data_loader.data_config()
@@ -426,6 +412,20 @@ class FilteredSFTLearner(Agent):
                 raw["state"], transition_state_dim, name="state"
             )
             data = pre_token_transform(raw)
+
+            def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
+                """Pad or truncate actions to match the policy action horizon."""
+                actions = np.asarray(actions)
+                if actions.ndim == 2:
+                    actions = actions[None, ...]
+                if actions.shape[1] < action_horizon:
+                    pad = action_horizon - actions.shape[1]
+                    last = actions[:, -1:, :]
+                    actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
+                elif actions.shape[1] > action_horizon:
+                    actions = actions[:, :action_horizon, :]
+                return actions
+
             data["actions"] = _pad_actions_to_horizon(
                 data["actions"], action_horizon
             )
@@ -501,7 +501,7 @@ class FilteredSFTLearner(Agent):
                 "discount": dummy_discounts,
             },
             max_capacity=max_capacity,
-            data_sharding=data_sharding,
+            data_sharding=self._data_sharding,
             seed=train_config.seed,
             preprocess_fn=_preprocess_insert,
             postprocess_fn=None,
@@ -511,65 +511,25 @@ class FilteredSFTLearner(Agent):
     def _process_obs_for_pi0(
         self,
         observations: Dict,
-        task_description: str | None = None,
+        task_description: str,
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
+        obs = observations["observation"]
         if self._config.collect.add_per_step_data:
-            current_obs = jax.tree_util.tree_map(
-                lambda x: x[:, -1], observations["observation"]
-            )
-        else:
-            current_obs = observations["observation"]
-
-        processed_obs = {}
-        prompt_in_obs = False
-        for key, val in current_obs.items():
-            if key == "prompt":
-                prompt_in_obs = True
-                processed_obs[key] = val
-            elif key.startswith("observation/"):
-                if "image" in key and self._config.collect.resize_image > 0:
-                    val = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(
-                            val,
-                            self._config.collect.resize_image,
-                            self._config.collect.resize_image,
-                        )
-                    )
-                processed_obs[key] = val
-        # If prompt is not stored in obs, we add the default prompt here.
-        if not prompt_in_obs:
-            assert task_description is not None, "No task description is provided"
-            processed_obs["prompt"] = task_description
-        return processed_obs
-
-    def _infer_policy_batch_size(self, observations: Dict[str, Any]) -> int:
-        """Infer policy batch size from processed observation tensors."""
-        state = observations.get("observation/state")
-        if state is not None:
-            state_arr = np.asarray(state)
-            return int(state_arr.shape[0]) if state_arr.ndim > 1 else 1
-
-        for image_key in ("observation/image", "observation/wrist_image"):
-            image = observations.get(image_key)
-            if image is None:
-                continue
-            image_arr = np.asarray(image)
-            return int(image_arr.shape[0]) if image_arr.ndim >= 4 else 1
-
-        obs_leaves = jax.tree_util.tree_leaves(observations)
-        if not obs_leaves:
-            raise ValueError("No observation leaves found for policy inference.")
-        first_leaf = np.asarray(obs_leaves[0])
-        return int(first_leaf.shape[0]) if first_leaf.ndim > 1 else 1
+            obs = jax.tree_util.tree_map(lambda x: x[:, -1], obs)
+        size = int(self._config.collect.resize_image)
+        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
+        obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
+        obs["prompt"] = task_description
+        # TODO: return prompt and resized image from the environment
+        return obs
 
     def _sample_action(
         self,
         observations: Dict,
         rng: jax.random.PRNGKey,
         train_state: training_utils.TrainState,
-        batch_actions: bool = True,
     ) -> np.ndarray:
         params = (
             train_state.ema_params
@@ -577,7 +537,8 @@ class FilteredSFTLearner(Agent):
             else train_state.params
         )
         model = nnx.merge(train_state.model_def, params)
-        batch_size = self._infer_policy_batch_size(observations)
+        assert "observation/state" in observations, "Observation must contain 'observation/state' key to infer batch size."
+        batch_size = observations["observation/state"].shape[0] if observations["observation/state"].ndim > 1 else 1
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
@@ -589,17 +550,14 @@ class FilteredSFTLearner(Agent):
             noise=noise,
             sharding_spec=self._policy_sharding_spec,
         )["actions"]
-        if batch_actions and actions.ndim == 2:
+        if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
         return actions
 
     def _generate_actions(
-        self, observations: np.ndarray | Dict, **kwargs
+        self, observations: np.ndarray | Dict,
+        task_description: str,
     ) -> np.ndarray:
-        task_description = kwargs.get("task_description")
-        batch_actions = kwargs.get("batch_actions")
-        if batch_actions is None:
-            batch_actions = False
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
             observations, task_description=task_description
@@ -608,7 +566,6 @@ class FilteredSFTLearner(Agent):
             observations=processed_obs,
             rng=rng,
             train_state=self._train_state,
-            batch_actions=batch_actions,
         )
         return np.asarray(actions, dtype=np.float32)
 
@@ -635,13 +592,10 @@ class FilteredSFTLearner(Agent):
         self._checkpoint_manager.wait_until_finished()
 
     def add_data(self, step_data: StepData):
-        def get_env_value(vec, env_id):
-            return jax.tree.map(lambda x: x[env_id], vec)
-
         for i in range(self._config.collect.env_num):
-            self._episode_storage[i].append(get_env_value(step_data, i))
+            self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
-    def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
+    def save_episode(self, is_success: bool = False, env_index: int = 0, task_description: str | None = None):
         if env_index < 0 or env_index >= len(self._episode_storage):
             raise IndexError(
                 f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
@@ -654,7 +608,6 @@ class FilteredSFTLearner(Agent):
         if not is_success:
             # Filtered SFT keeps only successful episodes.
             return
-        task_description = kwargs.get("task_description")
         discount_gamma = float(self._config.discount)
 
         def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -854,8 +807,9 @@ class FilteredSFTLearner(Agent):
         self.training_steps += 1
         if self._online_data_buffer.size == 0:
             return {}
-        batch = next(self._data_iter)
         online_ratio = self._config.online_ratio
+        if online_ratio < 1.0:
+            batch = next(self._data_iter)
         if online_ratio > 0.0:
             online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
             online_batch_raw = self._online_data_buffer.sample(batch_size=online_batch_size)
@@ -867,8 +821,6 @@ class FilteredSFTLearner(Agent):
             )
 
         train_rng, self._rng = jax.random.split(self._rng)
-        train_state = self._train_state
         with sharding.set_mesh(self._mesh):
-            train_state, info = self._train_step(train_rng, train_state, batch)
-        self._train_state = train_state
+            self._train_state, info = self._train_step(train_rng, self._train_state, batch)
         return info
