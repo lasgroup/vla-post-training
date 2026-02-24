@@ -44,6 +44,8 @@ class OnlineTrainConfig(TrainConfig):
     return_prefix_rep = False
     critic_update_interval: int = 1
     policy_update_interval: int = 1
+    critic_training_start_step: int = 0
+    policy_training_start_step: int = 0
 
 
 # Use `get_config` if you need to get a config by name in your code.

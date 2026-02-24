@@ -38,13 +38,13 @@ from src.training.config import OnlineTrainConfig
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(
-            self,
-            config: OnlineTrainConfig,
-            dummy_obs: ObsType,
-            dummy_act: ActionType,
-            state_action_critic_def: StateActionCriticDef,
-            state_value_def: StateValueDef,
-            task_description: str,
+        self,
+        config: OnlineTrainConfig,
+        dummy_obs: ObsType,
+        dummy_act: ActionType,
+        state_action_critic_def: StateActionCriticDef,
+        state_value_def: StateValueDef,
+        task_description: str,
     ):
         self.task_description = task_description
 
@@ -79,7 +79,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             f"value_state: {_pytree_size_mb(self._value_state):.2f} MB"
         )
 
-        del self._train_step  # if you were deleting an old reference earlier, keep this logic
+        del (
+            self._train_step
+        )  # if you were deleting an old reference earlier, keep this logic
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
@@ -89,18 +91,22 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         # 2. Create closures to drop 'self' from the JIT signature
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
-            return self._update_critics(batch=batch,
-                                        q_state=q_state,
-                                        value_state=value_state,
-                                        policy_state=policy_state,
-                                        rng=rng)
+            return self._update_critics(
+                batch=batch,
+                q_state=q_state,
+                value_state=value_state,
+                policy_state=policy_state,
+                rng=rng,
+            )
 
         def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
-            return self._update_policy(batch=batch,
-                                       policy_state=policy_state,
-                                       q_state=q_state,
-                                       value_state=value_state,
-                                       rng=rng)
+            return self._update_policy(
+                batch=batch,
+                policy_state=policy_state,
+                q_state=q_state,
+                value_state=value_state,
+                rng=rng,
+            )
 
         # 3. JIT the wrappers with your distributed shardings
         self._update_critics_jitted = jax.jit(
@@ -138,20 +144,15 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _recompute_prefix_embedding(
-            self,
-            *,
-            observation: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        *,
+        observation: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
-        # by the data pipeline / _preprocess_insert, so we must NOT re-apply
-        # _input_transform.  Convert to Observation if needed and go straight
-        # to the model.
-        # if isinstance(observation, _model.Observation):
-        #    obs = observation
-        # else:
+        # by the data pipeline / _preprocess_insert
         obs = _model.Observation.from_dict(observation)
         prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
@@ -172,9 +173,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def _online_batch_to_critic_batch(
-            self,
-            online_batch: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        online_batch: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -198,8 +199,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
 
         next_prefix_embedding = self._recompute_prefix_embedding(
-            observation=next_observation,
-            policy_state=policy_state
+            observation=next_observation, policy_state=policy_state
         )
 
         next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
@@ -213,9 +213,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _sft_batch_to_actor_batch(
-            self,
-            sft_batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
+        self,
+        sft_batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
         policy_obs_dict = policy_observation.to_dict()
@@ -227,7 +227,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         prefix_embedding = self._recompute_prefix_embedding(
             observation=policy_obs_dict,
             policy_state=policy_state,
-
         )
 
         critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
@@ -238,16 +237,19 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return self._save_episode(env_index=env_index, **kwargs)
 
     @at.typecheck
-    def _update_critics(self,
-                        batch: Dict[str, Any],
-                        q_state: training_utils.TrainState,
-                        value_state: training_utils.TrainState,
-                        policy_state: training_utils.TrainState,
-                        rng: at.KeyArrayLike,
-                        ) -> Tuple[training_utils.TrainState,
-                                   training_utils.TrainState,
-                                   dict[str, at.Array],
-                                   dict[str, at.Array]]:
+    def _update_critics(
+        self,
+        batch: Dict[str, Any],
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ) -> Tuple[
+        training_utils.TrainState,
+        training_utils.TrainState,
+        dict[str, at.Array],
+        dict[str, at.Array],
+    ]:
         # Add prefix representation to the batch for the critic
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -271,13 +273,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return q_state, value_state, q_info, value_info
 
-    def _update_policy(self,
-                       batch: tuple[_model.Observation, _model.Actions],
-                       policy_state: training_utils.TrainState,
-                       q_state: training_utils.TrainState,
-                       value_state: training_utils.TrainState,
-                       rng: at.KeyArrayLike,
-                       ):
+    def _update_policy(
+        self,
+        batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
             batch,
@@ -299,15 +302,21 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         live_arrays = jax.live_arrays()
         # 3. Calculate total size
         total_bytes = sum(arr.nbytes for arr in live_arrays)
-        total_gb = total_bytes / (1024 ** 3)
+        total_gb = total_bytes / (1024**3)
 
         print(f"Step {self.training_steps + 1} Memory Check")
         print(f"Total live arrays on device: {len(live_arrays)}")
         print(f"Total tracked memory: {total_gb:.2f} GB")
 
         self.training_steps += 1
-        update_critic = self.training_steps % self._config.critic_update_interval == 0
-        update_policy = self.training_steps % self._config.policy_update_interval == 0
+        update_critic = (
+            self.training_steps >= self._config.critic_training_start_step
+            and self.training_steps % self._config.critic_update_interval == 0
+        )
+        update_policy = (
+            self.training_steps >= self._config.policy_training_start_step
+            and self.training_steps % self._config.policy_update_interval == 0
+        )
         if not update_critic and not update_policy:
             return {
                 "online_buffer_size": jnp.asarray(
@@ -317,7 +326,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         batch = next(self._data_iter)
         use_online = (
-                self._online_data_buffer.size >= self._online_data_buffer.batch_size
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
         first_online = use_online and self.training_steps <= 2
         if first_online:
@@ -348,19 +357,21 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if update_critic:
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
-                    q_state, value_state, q_info, value_info = self._update_critics_jitted(
-                        online_batch,
-                        self._state_action_critic_state,
-                        self._value_state,
-                        self._train_state,
-                        critic_rng,
+                    q_state, value_state, q_info, value_info = (
+                        self._update_critics_jitted(
+                            online_batch,
+                            self._state_action_critic_state,
+                            self._value_state,
+                            self._train_state,
+                            critic_rng,
+                        )
                     )
                 self._state_action_critic_state = q_state
                 self._value_state = value_state
 
-                critic_info = {f"critic/q_{key}": value for key, value in q_info.items()} | {
-                    f"critic/value_{key}": value for key, value in value_info.items()
-                }
+                critic_info = {
+                    f"critic/q_{key}": value for key, value in q_info.items()
+                } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if first_online:
                     _log_device_memory("after_update_critics")
             online_batch = self._online_batch_to_sft_batch(online_batch)
@@ -397,22 +408,23 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
-                policy_state, actor_info = self._update_policy_jitted(batch,
-                                                                      self._train_state,
-                                                                      self._state_action_critic_state,
-                                                                      self._value_state,
-                                                                      policy_rng,
+                policy_state, actor_info = self._update_policy_jitted(
+                    batch,
+                    self._train_state,
+                    self._state_action_critic_state,
+                    self._value_state,
+                    policy_rng,
                 )
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
         info = (
-                actor_info
-                | critic_info
-                | {
-                    "online_buffer_size": jnp.asarray(
-                        float(self._online_data_buffer.size), dtype=jnp.float32
-                    )
-                }
+            actor_info
+            | critic_info
+            | {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
         )
         info = jax.tree.map(np.asarray, info)
         return info
