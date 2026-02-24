@@ -28,6 +28,7 @@ class ConstantSchedule(_optimizer.LRScheduleConfig):
 @dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
     discount: float = 0.99
+    buffer_capacity: int = 256 * 8
 
 
 # Define hyperparameter structures for your algorithms
