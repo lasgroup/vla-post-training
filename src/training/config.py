@@ -42,6 +42,8 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     discount: float = 0.99
     return_prefix_rep = False
+    critic_update_interval: int = 1
+    policy_update_interval: int = 1
 
 
 # Use `get_config` if you need to get a config by name in your code.

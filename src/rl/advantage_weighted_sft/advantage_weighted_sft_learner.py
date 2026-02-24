@@ -26,53 +26,14 @@ from src.rl.advantage_weighted_sft.update_critic import (
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
+from src.rl.advantage_weighted_sft.memory_logging import (
+    _pytree_size_mb,
+    _pytree_size_gb,
+    _pytree_per_device_size_gb,
+    _log_device_memory,
+)
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig
-
-
-def _pytree_size_mb(tree) -> float:
-    """Return total size of all arrays in a pytree, in megabytes."""
-    leaves = jax.tree.leaves(tree)
-    total_bytes = sum(
-        leaf.size * leaf.dtype.itemsize for leaf in leaves if hasattr(leaf, "size")
-    )
-    return total_bytes / (1024 * 1024)
-
-
-def _pytree_size_gb(tree) -> float:
-    return _pytree_size_mb(tree) / 1024
-
-
-def _pytree_per_device_size_gb(tree) -> float:
-    """Return total per-device size of all arrays in a pytree, in GiB."""
-    leaves = jax.tree.leaves(tree)
-    total_bytes = 0
-    for leaf in leaves:
-        if not hasattr(leaf, "size"):
-            continue
-        if hasattr(leaf, "addressable_shards") and leaf.addressable_shards:
-            shard = leaf.addressable_shards[0]
-            total_bytes += shard.data.size * shard.data.dtype.itemsize
-        else:
-            total_bytes += leaf.size * leaf.dtype.itemsize
-    return total_bytes / (1024 ** 3)
-
-
-def _log_device_memory(tag: str) -> None:
-    """Log live GPU memory for device 0 and count of live arrays."""
-    jax.effects_barrier()  # wait for async dispatch to finish
-    stats = jax.local_devices()[0].memory_stats()
-    if stats is None:
-        logging.info(f"[MEM {tag}] memory_stats unavailable")
-        return
-    live_gb = stats.get("bytes_in_use", 0) / (1024 ** 3)
-    peak_gb = stats.get("peak_bytes_in_use", 0) / (1024 ** 3)
-    limit_gb = stats.get("bytes_limit", 0) / (1024 ** 3)
-    num_live = len(jax.live_arrays())
-    logging.info(
-        f"[MEM {tag}] live={live_gb:.2f} GiB, peak={peak_gb:.2f} GiB, "
-        f"limit={limit_gb:.2f} GiB, num_live_arrays={num_live}"
-    )
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
@@ -88,8 +49,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self.task_description = task_description
 
         super().__init__(config)
-        self._critic_update_frequency = self._get_critic_update_frequency()
-        self._policy_update_frequency = self._get_policy_update_frequency()
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -177,16 +136,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             ),
             donate_argnums=(1,),  # Donates policy_state (arg 1)
         )
-
-    def _get_critic_update_frequency(self) -> int:
-        rl_config = getattr(self._config, "rl", None)
-        updates = int(getattr(rl_config, "critic_update_frequency", 1))
-        return max(1, updates)
-
-    def _get_policy_update_frequency(self) -> int:
-        rl_config = getattr(self._config, "rl", None)
-        updates = int(getattr(rl_config, "policy_update_frequency", 1))
-        return max(1, updates)
 
     def _recompute_prefix_embedding(
             self,
@@ -357,8 +306,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         print(f"Total tracked memory: {total_gb:.2f} GB")
 
         self.training_steps += 1
-        update_critic = self.training_steps % self._critic_update_frequency == 0
-        update_policy = self.training_steps % self._policy_update_frequency == 0
+        update_critic = self.training_steps % self._config.critic_update_interval == 0
+        update_policy = self.training_steps % self._config.policy_update_interval == 0
         if not update_critic and not update_policy:
             return {
                 "online_buffer_size": jnp.asarray(
