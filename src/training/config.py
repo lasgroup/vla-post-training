@@ -8,7 +8,7 @@ from openpi.training.config import (
     pi0_config,
     LeRobotLiberoDataConfig,
 )
-from typing import Sequence, Tuple
+from typing import Sequence
 
 import openpi.training.optimizer as _optimizer
 import optax
@@ -49,8 +49,8 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_reduction: str = "min"
     critic_lr_schedule = ConstantSchedule(value=1e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
-    critic_encoder_hidden_dims: Tuple = (512, 512)
-    critic_decoder_hidden_dims: Tuple = (256, 256)
+    critic_encoder_hidden_dims: Sequence[int] = (512, 512)
+    critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     critic_num_qs: int = 2
     critic_num_vs: int = 2
 
