@@ -56,7 +56,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
     seed = config.seed
-    discount = config.discount
+    discount = config.rl.discount
     add_per_step_data = config.collect.add_per_step_data
     return_prefix_rep = config.collect.store_prefix_rep
     env_factories = []
@@ -1213,7 +1213,7 @@ class FilteredSFTLearner(Agent):
 
         task_description = kwargs.get("task_description")
         obs_prefix = self._config.collect.obs_prefix_key
-        discount_gamma = float(self._config.discount)
+        discount_gamma = float(self._config.rl.discount)
         return_prefix_rep = self._config.collect.store_prefix_rep
         if return_prefix_rep:
             self._attach_prefix_embeddings_to_episode_data(
