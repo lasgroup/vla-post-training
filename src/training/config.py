@@ -44,20 +44,28 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_training_start_step: int = 0
     use_ema_critic: bool = True
     critic_ema_decay: float = 0.995
-    beta: float = 1.0
+    beta: float = 0.05
     weight_clip: float = 20.0
-    critic_lr_schedule = ConstantSchedule(value=1e-4),
-    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0),
+    critic_reduction: str = "min"
+    critic_lr_schedule = ConstantSchedule(value=1e-4)
+    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Tuple = (512, 512)
     critic_decoder_hidden_dims: Tuple = (256, 256)
     critic_num_qs: int = 2
     critic_num_vs: int = 2
-    # Add other hyperparameters here
 
 
 @dataclasses.dataclass(frozen=True)
 class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
-    train_actor_with_buffer_actions: bool = False
+    store_buffer_actions_in_batch: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    group_size: int = 8
+    num_steps: int = 10
+    noise_level: float = 0.7
+    normalize_adv: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,40 +100,40 @@ class OnlineTrainConfig(TrainConfig):
 
 
 def make_base_online_config(
-    name: str,
-    rl_config: RLAlgorithmConfig
+    name: str, rl_config: RLAlgorithmConfig
 ) -> OnlineTrainConfig:
     """
     Factory function to generate a base OnlineTrainConfig.
     Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
     """
     return OnlineTrainConfig(
-            name=name,
-            model=pi0_config.Pi0Config(
-                pi05=True, action_horizon=10, discrete_state_input=False
-            ),
-            data=LeRobotLiberoDataConfig(
-                repo_id="physical-intelligence/libero",
-                base_config=OnlineDataConfig(prompt_from_task=True),
-                extra_delta_transform=False,
-            ),
-            batch_size=256,
-            lr_schedule=_optimizer.CosineDecaySchedule(
-                warmup_steps=100,  # override default warmup steps
-                peak_lr=5e-5,
-                decay_steps=1_000_000,
-                decay_lr=5e-5,
-            ),
-            optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-            ema_decay=0.999,
-            weight_loader=weight_loaders.CheckpointWeightLoader(
-                "gs://openpi-assets/checkpoints/pi05_libero/params"
-            ),
-            pytorch_weight_path="/path/to/your/pytorch_weight_path",
-            num_train_steps=10_000,
-            num_workers=4,  # override default num_workers
-            rl=rl_config,
-        )
+        name=name,
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=10, discrete_state_input=False
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=OnlineDataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,  # override default warmup steps
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_libero/params"
+        ),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=10_000,
+        num_workers=4,  # override default num_workers
+        rl=rl_config,
+    )
+
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS.extend(
@@ -142,7 +150,6 @@ _CONFIGS.extend(
                 policy_training_start_step=0,
             ),
         ),
-
         # 2. Advantage Weighted SFT (AWSFT)
         make_base_online_config(
             name="pi05_libero_online_aw_sft",
@@ -151,12 +158,19 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
-
         # 3. MPO Weighted SFT
         make_base_online_config(
             name="pi05_libero_online_mpo_sft",
             rl_config=MPOWeightedSFTLearnerConfig(
-                train_actor_with_buffer_actions=True,
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        make_base_online_config(
+            name="pi05_libero_online_flow_grpo_sft",
+            rl_config=FlowGRPOSFTLearnerConfig(
+                store_buffer_actions_in_batch=True,
                 policy_update_interval=20,
                 policy_training_start_step=100,
             ),

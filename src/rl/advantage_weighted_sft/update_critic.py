@@ -65,13 +65,21 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 
 
 @at.typecheck
-def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, " b"]:
+def summarize_critic_values(
+    critic_values: at.ArrayLike, critic_reduction: str = "min"
+) -> at.Float[at.Array, " b"]:
     critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
     # using an ensemble of critics
     if critic_values.ndim > 1:
         # Take min across the ensemble members
-        # TODO: Add different summarization options such as sampling or mean
-        critic_values = jnp.min(critic_values, axis=0)
+        if critic_reduction == "min":
+            critic_values = jnp.min(critic_values, axis=0)
+        elif critic_reduction == "mean":
+            critic_values = jnp.mean(critic_values, axis=0)
+        else:
+            raise NotImplementedError(
+                f"Critic reduction {critic_reduction} is not implemented."
+            )
     return _as_scalar_batch(critic_values)
 
 
@@ -241,6 +249,7 @@ def train_q_step(
         q_values = critic_model(observation, actions)
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
+            critic_reduction=config.rl.critic_reduction,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         if q_values.ndim > 1:
@@ -302,6 +311,7 @@ def train_value_step(
         values = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
+            critic_reduction=config.rl.critic_reduction,
         )
         q_targets = jax.lax.stop_gradient(q_values)
         if values.ndim > 1:

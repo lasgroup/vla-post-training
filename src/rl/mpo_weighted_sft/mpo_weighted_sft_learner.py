@@ -1,6 +1,8 @@
 import gc
 from typing import Dict, Any, Tuple
-from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import (
+    AdvantageWeightedSFTLearner,
+)
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
@@ -18,18 +20,22 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
 
         # 2. Create closures to drop 'self' from the JIT signature
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
-            return self._update_critics(batch=batch,
-                                        q_state=q_state,
-                                        value_state=value_state,
-                                        policy_state=policy_state,
-                                        rng=rng)
+            return self._update_critics(
+                batch=batch,
+                q_state=q_state,
+                value_state=value_state,
+                policy_state=policy_state,
+                rng=rng,
+            )
 
         def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
-            return self._update_policy(batch=batch,
-                                       policy_state=policy_state,
-                                       q_state=q_state,
-                                       value_state=value_state,
-                                       rng=rng)
+            return self._update_policy(
+                batch=batch,
+                policy_state=policy_state,
+                q_state=q_state,
+                value_state=value_state,
+                rng=rng,
+            )
 
         # 3. JIT the wrappers with your distributed shardings
         self._update_critics_jitted = jax.jit(
@@ -67,30 +73,35 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         )
 
     @at.typecheck
-    def _get_on_policy_action(self,
-                              online_observation: _model.Observation,
-                              policy_state: training_utils.TrainState,
-                              rng: at.KeyArrayLike, ) -> _model.Actions:
+    def _get_on_policy_action(
+        self,
+        online_observation: _model.Observation,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ) -> _model.Actions:
         model = self._get_policy_model(policy_state)
         sampled_actions = model.sample_actions(
-                observation=online_observation,
-                rng=rng,
-                return_info_dict=False,
-                return_prefix_rep=False,
-            )
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
+        )
         return sampled_actions
 
     @at.typecheck
-    def _update_critics(self,
-                        batch: Dict[str, Any],
-                        q_state: training_utils.TrainState,
-                        value_state: training_utils.TrainState,
-                        policy_state: training_utils.TrainState,
-                        rng: at.KeyArrayLike,
-                        ) -> Tuple[training_utils.TrainState,
-    training_utils.TrainState,
-    dict[str, at.Array],
-    dict[str, at.Array]]:
+    def _update_critics(
+        self,
+        batch: Dict[str, Any],
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ) -> Tuple[
+        training_utils.TrainState,
+        training_utils.TrainState,
+        dict[str, at.Array],
+        dict[str, at.Array],
+    ]:
         # Add prefix representation to the batch for the critic
         policy_sample_rng, rng = jax.random.split(rng, 2)
         on_policy_action = self._get_on_policy_action(
@@ -124,15 +135,16 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
 
         return q_state, value_state, q_info, value_info
 
-    def _update_policy(self,
-                       batch: tuple[_model.Observation, _model.Actions],
-                       policy_state: training_utils.TrainState,
-                       q_state: training_utils.TrainState,
-                       value_state: training_utils.TrainState,
-                       rng: at.KeyArrayLike,
-                       ):
+    def _update_policy(
+        self,
+        batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        if not self._config.rl.train_actor_with_buffer_actions:
+        if not self._config.rl.store_buffer_actions_in_batch:
             policy_sample_rng, rng = jax.random.split(rng, 2)
             on_policy_action = self._get_on_policy_action(
                 online_observation=batch[0],
