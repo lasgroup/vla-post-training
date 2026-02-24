@@ -286,9 +286,7 @@ class AdvantageWeightedFilteredSFTLearner(FilteredSFTLearner):
         return policy_observation, critic_observation, actions
 
     def save_episode(self, is_success=False, env_index=0, **kwargs):
-        # TODO: Fix this, we always save episodes irrespective of success. It is not obvious here why we should call
-        #  the super method.
-        return super().save_episode(True, env_index, **kwargs)
+        return self._save_episode(env_index=env_index, **kwargs)
 
     @at.typecheck
     def _update_critics(self,

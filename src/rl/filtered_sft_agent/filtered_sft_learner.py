@@ -1195,6 +1195,12 @@ class FilteredSFTLearner(Agent):
                 )
 
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
+        if not is_success:
+            # Filtered SFT keeps only successful episodes.
+            return
+        self._save_episode(env_index=env_index, **kwargs)
+
+    def _save_episode(self, env_index: int = 0, **kwargs):
         if env_index < 0 or env_index >= len(self._episode_storage):
             raise IndexError(
                 f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
@@ -1204,9 +1210,7 @@ class FilteredSFTLearner(Agent):
         episode_data = self._episode_storage[env_index]
         # Empty the storage now for the next episode
         self._episode_storage[env_index] = []
-        if not is_success:
-            # Filtered SFT keeps only successful episodes.
-            return
+
         task_description = kwargs.get("task_description")
         obs_prefix = self._config.collect.obs_prefix_key
         discount_gamma = float(self._config.discount)
