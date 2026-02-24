@@ -35,21 +35,20 @@ from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 
 
-def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_class):
+def get_env_and_agent_for_filtered_sft(env_fn, config, task_description):
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
-        env_class=env_class,
     )
     agent = FilteredSFTLearner(config)
     return env, agent
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
     env_num = config.collect.env_num
-    obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
+    env_class = config.domain
     seed = config.seed
     discount = config.discount
     add_per_step_data = config.collect.add_per_step_data
@@ -64,7 +63,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
-                pi0_obs_prefix=obs_prefix_key,
             )
             # Add query frequency wrapper to rollout action chunks
             base_env = QueryFrequencyWrapper(
@@ -527,24 +525,19 @@ class FilteredSFTLearner(Agent):
         processed_obs = {}
         prompt_in_obs = False
         for key, val in current_obs.items():
-            # Extract all observations relevant for the policy
-            if self._config.collect.obs_prefix_key in key:
-                obs_key = key.split(f"{self._config.collect.obs_prefix_key}/")[-1]
-                if obs_key == "prompt":
-                    prompt_in_obs = True
-                    processed_obs[obs_key] = val
-                else:
-                    if "image" in obs_key and self._config.collect.resize_image > 0:
-                        # Rescale images
-                        val = image_tools.convert_to_uint8(
-                            image_tools.resize_with_pad(
-                                val,
-                                self._config.collect.resize_image,
-                                self._config.collect.resize_image,
-                            )
+            if key == "prompt":
+                prompt_in_obs = True
+                processed_obs[key] = val
+            elif key.startswith("observation/"):
+                if "image" in key and self._config.collect.resize_image > 0:
+                    val = image_tools.convert_to_uint8(
+                        image_tools.resize_with_pad(
+                            val,
+                            self._config.collect.resize_image,
+                            self._config.collect.resize_image,
                         )
-                    obs_key = f"observation/{obs_key}"
-                    processed_obs[obs_key] = val
+                    )
+                processed_obs[key] = val
         # If prompt is not stored in obs, we add the default prompt here.
         if not prompt_in_obs:
             assert task_description is not None, "No task description is provided"
@@ -662,17 +655,14 @@ class FilteredSFTLearner(Agent):
             # Filtered SFT keeps only successful episodes.
             return
         task_description = kwargs.get("task_description")
-        obs_prefix = self._config.collect.obs_prefix_key
         discount_gamma = float(self._config.discount)
 
         def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
             extracted = {}
             for key, val in obs.items():
-                if obs_prefix not in key:
+                if not key.startswith("observation/"):
                     continue
-                obs_key = key.split(f"{obs_prefix}/")[-1]
-                if obs_key == "prompt":
-                    continue
+                obs_key = key[len("observation/"):]
                 extracted[obs_key] = val
             return extracted
 

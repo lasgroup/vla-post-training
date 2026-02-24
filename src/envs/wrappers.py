@@ -77,25 +77,14 @@ def _quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
-def obs_to_img(obs, env_class: str = "libero"):
-    """Convert raw observation to resized image for DSRL actor/critic"""
-    if env_class == "libero":
-        curr_image = obs["agentview_image"][::-1, ::-1]
-    else:
-        raise NotImplementedError()
-    return curr_image
-
-
 def obs_to_pi_zero_input(
-    obs, env_class: str, task_description: str, *, include_prompt: bool = True
+    obs, env_class: str, task_description: str,
 ):
     if env_class == "libero":
-        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
         obs_pi_zero = {
-            "image": img,
-            "wrist_image": wrist_img,
-            "state": np.concatenate(
+            "observation/image": np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+            "observation/wrist_image": np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]),
+            "observation/state": np.concatenate(
                 (
                     obs["robot0_eef_pos"],
                     _quat2axisangle(obs["robot0_eef_quat"]),
@@ -104,25 +93,9 @@ def obs_to_pi_zero_input(
                 dtype=np.float32,
             ),
         }
-        if include_prompt:
-            obs_pi_zero["prompt"] = np.asarray(str(task_description))
     else:
         raise NotImplementedError()
     return obs_pi_zero
-
-
-def obs_to_qpos(obs, env_class):
-    if env_class == "libero":
-        qpos = np.concatenate(
-            (
-                obs["robot0_eef_pos"],
-                _quat2axisangle(obs["robot0_eef_quat"]),
-                obs["robot0_gripper_qpos"],
-            )
-        )
-    else:
-        raise NotImplementedError()
-    return qpos
 
 
 class QueryFrequencyWrapper(gym.Wrapper):
@@ -282,26 +255,13 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         env: gym.Env,
         env_class: str,
         task_description: str,
-        include_prompt_in_obs: bool = False,
-        pi0_obs_prefix: str = "pi0",
     ):
         super().__init__(env)
         self.task_description = task_description
         self._env_class = env_class
-        self._include_prompt_in_obs = include_prompt_in_obs
-        self._pi0_obs_prefix = pi0_obs_prefix
         logging.info(f"\nTask: {self.task_description}")
 
-        # produced by the helper functions (obs_to_img, etc.)
-        if getattr(env, "observation_space", None) is not None and hasattr(
-            env.observation_space, "sample"
-        ):
-            dummy_obs = env.observation_space.sample()
-        else:
-            reset_out = env.reset()
-            dummy_obs = (
-                reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
-            )
+        dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():
@@ -319,20 +279,11 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(spaces)
 
     def observation(self, observation):
-        curr_image = obs_to_img(observation, env_class=self._env_class)
-        qpos = obs_to_qpos(observation, env_class=self._env_class)
-
-        # Do not inject prompt into env observations; prompt should be provided via default_prompt.
-        obs_pi_zero = obs_to_pi_zero_input(
+        return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
             task_description=self.task_description,
-            include_prompt=self._include_prompt_in_obs,
         )
-        obs_pi_zero = {
-            f"{self._pi0_obs_prefix}/{key}": val for key, val in obs_pi_zero.items()
-        }
-        return obs_pi_zero
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):

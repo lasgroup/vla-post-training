@@ -25,7 +25,6 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
-    obs_prefix_key: str = "pi0"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -38,6 +37,7 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
+    domain: str = "libero"
     online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
     online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99
