@@ -44,6 +44,9 @@ def train_step(
         model: _model.BaseModel,
         rng: at.KeyArrayLike,
         policy_observation: _model.Observation,
+        critic_observation: ObsType,
+        state_action_critic: nnx.Module,
+        value_critic: nnx.Module,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         step_rng, noise_rng = jax.random.split(rng)
 
@@ -65,10 +68,10 @@ def train_step(
         )
         # Sample actions for expanded states [B * G, dim_A]
         actions, outs = model.sample_actions(
-            expanded_policy_obs,
+            rng=step_rng,
+            observation=expanded_policy_obs,
             noise=noise,
             num_steps=config.rl.num_steps,
-            rng=step_rng,
             noise_level=config.rl.noise_level,
             return_info_dict=True,
         )
@@ -130,6 +133,9 @@ def train_step(
         policy_model,
         train_rng,
         policy_observation,
+        critic_observation,
+        state_action_critic,
+        value_critic,
     )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
