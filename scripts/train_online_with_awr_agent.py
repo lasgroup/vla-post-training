@@ -72,10 +72,6 @@ from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
 
 
-def _get_rl_attr(config: _config.OnlineTrainConfig, name: str, default: Any) -> Any:
-    rl_config = getattr(config, "rl", None)
-    return getattr(rl_config, name, default)
-
 
 def _pool_prefix_embedding(prefix_rep: jax.Array) -> jax.Array:
     prefix_rep = jnp.asarray(prefix_rep, dtype=jnp.float32)
@@ -129,14 +125,11 @@ def _build_pi0_backbone_critic_defs(
     *,
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
-    critic_encoder_hidden_dims = tuple(
-        _get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512))
-    )
-    critic_decoder_hidden_dims = tuple(
-        _get_rl_attr(config, "critic_decoder_hidden_dims", ())
-    )
-    critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
-    critic_num_vs = int(_get_rl_attr(config, "critic_num_vs", 2))
+    assert isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig)
+    critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
+    critic_num_qs = config.rl.critic_num_qs
+    critic_num_vs = config.rl.critic_num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
         network_def = lambda o, rg: MLP(
@@ -201,7 +194,7 @@ def _build_pi0_backbone_critic_defs(
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
-    if bool(getattr(config, "return_prefix_rep", False)):
+    if config.collect.store_prefix_rep:
         logging.info(
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."

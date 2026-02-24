@@ -1,10 +1,11 @@
 import gc
 from typing import Dict, Any, Tuple
-from src.rl.advantage_weighted_sft.advantage_weigthed_sft_learner import AdvantageWeightedSFTLearner
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
 import jax
+from src.training.config import MPOWeightedSFTLearnerConfig
 
 
 class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
@@ -130,6 +131,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
                        value_state: training_utils.TrainState,
                        rng: at.KeyArrayLike,
                        ):
+        assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         if not self._config.rl.train_actor_with_buffer_actions:
             policy_sample_rng, rng = jax.random.split(rng, 2)
             on_policy_action = self._get_on_policy_action(
