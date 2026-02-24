@@ -1,7 +1,6 @@
 from typing import Dict, Callable
 
 import numpy as np
-from flax.training.train_state import TrainState
 import jax
 from abc import abstractmethod
 
@@ -21,7 +20,7 @@ def get_batch_stats(actor):
 
 
 class Agent(object):
-    _actor: TrainState | training_utils.TrainState
+    _actor: training_utils.TrainState
     _rng: jax.random.PRNGKey
     training_steps: int = 0
     env_steps: int = 0
