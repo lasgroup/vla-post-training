@@ -8,10 +8,56 @@ from openpi.training.config import (
     pi0_config,
     LeRobotLiberoDataConfig,
 )
-from typing import Sequence
+from typing import Sequence, Tuple
 
 import openpi.training.optimizer as _optimizer
+import optax
 import openpi.training.weight_loaders as weight_loaders
+
+
+@dataclasses.dataclass(frozen=True)
+class ConstantSchedule(_optimizer.LRScheduleConfig):
+    """Constant learning rate schedule."""
+
+    value: float = 5e-5
+
+    def create(self) -> optax.Schedule:
+        return optax.constant_schedule(self.value)
+
+
+@dataclasses.dataclass(frozen=True)
+class RLAlgorithmConfig:
+    discount: float = 0.99
+
+
+# Define hyperparameter structures for your algorithms
+@dataclasses.dataclass(frozen=True)
+class FilteredSFTLearnerConfig(RLAlgorithmConfig):
+    policy_update_interval: int = 1
+    policy_training_start_step: int = 0
+    online_ratio: float = 0.5
+
+
+@dataclasses.dataclass(frozen=True)
+class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
+    critic_update_interval: int = 1
+    critic_training_start_step: int = 0
+    use_ema_critic: bool = True
+    critic_ema_decay: float = 0.995
+    beta: float = 1.0
+    weight_clip: float = 20.0
+    critic_lr_schedule = ConstantSchedule(value=1e-4),
+    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0),
+    critic_encoder_hidden_dims: Tuple = (512, 512)
+    critic_decoder_hidden_dims: Tuple = (256, 256)
+    critic_num_qs: int = 2
+    critic_num_vs: int = 2
+    # Add other hyperparameters here
+
+
+@dataclasses.dataclass(frozen=True)
+class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
+    train_actor_with_buffer_actions: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -28,6 +74,7 @@ class CollectionConfig:
     add_per_step_data: bool = True
     seed: int = 42
     obs_prefix_key: str = "pi0"
+    store_prefix_rep: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -40,23 +87,20 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
-    discount: float = 0.99
-    return_prefix_rep = False
-    critic_update_interval: int = 1
-    policy_update_interval: int = 1
-    critic_training_start_step: int = 0
-    policy_training_start_step: int = 0
+    rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    default_prompt: str | None = None
 
 
-# Use `get_config` if you need to get a config by name in your code.
-_CONFIGS.extend(
-    [
-        #
-        # Online training configs.
-        #
-        # These train configs define the hyperparameters for online data collection and fine-tuning.
-        OnlineTrainConfig(
-            name="pi05_libero_online",
+def make_base_online_config(
+    name: str,
+    rl_config: RLAlgorithmConfig
+) -> OnlineTrainConfig:
+    """
+    Factory function to generate a base OnlineTrainConfig.
+    Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+    """
+    return OnlineTrainConfig(
+            name=name,
             model=pi0_config.Pi0Config(
                 pi05=True, action_horizon=10, discrete_state_input=False
             ),
@@ -80,9 +124,46 @@ _CONFIGS.extend(
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
             num_train_steps=10_000,
             num_workers=4,  # override default num_workers
+            rl=rl_config,
+        )
+
+# Use `get_config` if you need to get a config by name in your code.
+_CONFIGS.extend(
+    [
+        #
+        # Online training configs.
+        #
+        # These train configs define the hyperparameters for online data collection and fine-tuning.
+        # 1. Filtered SFT
+        make_base_online_config(
+            name="pi05_libero_online_filtered_sft",
+            rl_config=FilteredSFTLearnerConfig(
+                policy_update_interval=1,
+                policy_training_start_step=0,
+            ),
+        ),
+
+        # 2. Advantage Weighted SFT (AWSFT)
+        make_base_online_config(
+            name="pi05_libero_online_aw_sft",
+            rl_config=AdvantageWeightedSFTLearnerConfig(
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+
+        # 3. MPO Weighted SFT
+        make_base_online_config(
+            name="pi05_libero_online_mpo_sft",
+            rl_config=MPOWeightedSFTLearnerConfig(
+                train_actor_with_buffer_actions=True,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
         ),
     ]
 )
+
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")
