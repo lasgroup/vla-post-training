@@ -55,7 +55,7 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.training.utils as training_utils
-from src.rl.advantage_weighted_sft import AdvantageWeightedSFTLearner
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
 from src.rl.advantage_weighted_sft.update_critic import (
     StateActionCriticDef,
     StateValueDef,
