@@ -7,13 +7,15 @@
 
 EXP_NAME="${EXP_NAME:-test}"
 COLLECT_SEED="${COLLECT_SEED:-0}"
+WANDB_PROJECT="${WANDB_PROJECT:-openpi}"
 
 # Added --account=a143 to srun as well to ensure the container inherits it.
 srun --account=a143 --environment=vla-post-training \
-uv run scripts/train_online_with_agent.py pi05_libero_online \
+uv run scripts/train_online_with_awr_agent.py pi05_libero_online \
 --overwrite \
 --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints \
 --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params \
 --exp_name "${EXP_NAME}" \
+--project_name "${WANDB_PROJECT}" \
 --collect.seed "${COLLECT_SEED}" \
---batch_size 128
+--batch_size 256
