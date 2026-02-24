@@ -105,7 +105,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         # Add prefix representation to the batch for the critic
         policy_sample_rng, rng = jax.random.split(rng, 2)
         on_policy_action = self._get_on_policy_action(
-            online_observation=batch["observation"],
+            online_observation=_model.Observation.from_dict(batch["observation"]),
             policy_state=policy_state,
             rng=policy_sample_rng,
         )
