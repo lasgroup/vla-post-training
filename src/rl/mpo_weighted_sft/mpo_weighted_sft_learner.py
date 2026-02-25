@@ -114,24 +114,27 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
             batch,
             policy_state,
         )
-        q_rng, v_rng = jax.random.split(rng, 2)
-        # Update the state action critic state
-        q_state, q_info = self._q_train_step(
-            q_rng,
-            q_state,
-            value_state,
-            batch,
-        )
-        # Update the value state
         # We replace the action from the batch with the on policy action
         # This ensures that we train an on policy critic.
-        batch = (batch[0], on_policy_action, batch[2], batch[3], batch[4])
-        value_state, value_info = self._value_train_step(
-            v_rng,
-            value_state,
-            q_state,
-            batch,
-        )
+        value_batch = (batch[0], on_policy_action, batch[2], batch[3], batch[4])
+        # Update the state action critic state
+        assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
+        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        for _ in range(num_updates):
+            q_rng, v_rng, rng = jax.random.split(rng, 3)
+            q_state, q_info = self._q_train_step(
+                q_rng,
+                q_state,
+                value_state,
+                batch,
+            )
+            # Update the value state
+            value_state, value_info = self._value_train_step(
+                v_rng,
+                value_state,
+                q_state,
+                value_batch,
+            )
 
         return q_state, value_state, q_info, value_info
 

@@ -250,21 +250,25 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             batch,
             policy_state,
         )
-        q_rng, v_rng = jax.random.split(rng, 2)
+
         # Update the state action critic state
-        q_state, q_info = self._q_train_step(
-            q_rng,
-            q_state,
-            value_state,
-            batch,
-        )
-        # Update the value state
-        value_state, value_info = self._value_train_step(
-            v_rng,
-            value_state,
-            q_state,
-            batch,
-        )
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
+        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        for _ in range(num_updates):
+            q_rng, v_rng, rng = jax.random.split(rng, 3)
+            q_state, q_info = self._q_train_step(
+                q_rng,
+                q_state,
+                value_state,
+                batch,
+            )
+            # Update the value state
+            value_state, value_info = self._value_train_step(
+                v_rng,
+                value_state,
+                q_state,
+                batch,
+            )
 
         return q_state, value_state, q_info, value_info
 

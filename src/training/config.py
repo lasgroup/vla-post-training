@@ -54,6 +54,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     critic_num_qs: int = 2
     critic_num_vs: int = 2
+    num_critic_updates_per_batch: int = 1
 
 
 @dataclasses.dataclass(frozen=True)

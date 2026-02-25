@@ -27,19 +27,20 @@ PROJECT_NAME = "awr_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
-DEFAULT_POLICY_START_TRAINING = 1000
-DEFAULT_POLICY_UPDATE_INTERVAL = 1
-DEFAULT_NUM_ROLLOUTS = 100
-DEFAULT_COLLECT_INTERVAL = 400
+DEFAULT_POLICY_START_TRAINING = 400
+DEFAULT_POLICY_UPDATE_INTERVAL = 2
+DEFAULT_NUM_ROLLOUTS = 50
+DEFAULT_COLLECT_INTERVAL = 200
+DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
-    # "seed": [0, 1, 2, 3, 4],
+    "seed": [0, 1, 2],
     # "collect.seed": [0, 1, 2, 3, 4],
-    # "log_interval": [25],
-    # "rl.normalize_adv": [True, False],
+    "log_interval": [25],
+    "rl.num_critic_updates_per_batch": [1, 10, 50, 100]
 }
 
 
@@ -86,6 +87,7 @@ def main() -> None:
             "rl.policy_training_start_step": args.policy_start_training,
             "rl.policy_update_interval": args.policy_update_interval,
             "rl.buffer_capacity": args.buffer_capacity,
+            "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
         }
         flags.update(combo)
 
