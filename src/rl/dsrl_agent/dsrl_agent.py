@@ -103,7 +103,7 @@ class DSRLLearner(Agent):
                 dummy_act=dummy_act,
             )
 
-        self._policy_state, self._state_action_critic_state_sharding = init_policy_state(
+        self._policy_state, self._policy_state_sharding = init_policy_state(
             self._config,
             polciy_init_rng,
             self._mesh,
@@ -140,20 +140,12 @@ class DSRLLearner(Agent):
         actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
         return actions
     
-        # obs = _preprocess_dmc_obs(observations)
-        # obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), obs)
-
-        # # Rebuild policy from train state (no gradients, just inference)
+        # obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
         # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
         # policy.eval()
-
-        # # Forward pass -> tfd.Distribution
         # dist = policy(obs)
-
-        # # Sample actions
         # rng, self._rng = jax.random.split(self._rng)
         # actions = dist.sample(seed=rng)
-
         # return np.asarray(actions, dtype=np.float32)
 
     def _generate_actions(

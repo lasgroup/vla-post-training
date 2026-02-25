@@ -52,9 +52,12 @@ import wandb
 
 import openpi.training.utils as training_utils
 from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
-from src.rl.advantage_weighted_regression.update_critic import (
+from src.rl.dsrl_agent.update_critic import (
     StateActionCriticDef,
     StateValueDef,
+)
+from src.rl.dsrl_agent.update_actor import (
+    PolicyDef
 )
 from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
@@ -74,9 +77,10 @@ import functools
 
 def _build_actor_critic_defs(
     config: _config.OnlineTrainConfig,
-) -> tuple[StateActionCriticDef, StateValueDef]:
+) -> tuple[StateActionCriticDef, PolicyDef]:
     critic_encoder_hidden_dims = (1024, 512) #tuple(_get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512)))
     critic_decoder_hidden_dims = () #tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", ()))
+    policy_decoder_hidden_dims = (256,)
     critic_num_qs = 2 #int(_get_rl_attr(config, "critic_num_qs", 2))
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
@@ -113,7 +117,7 @@ def _build_actor_critic_defs(
         return NormalPolicyDecoder(
             observation=embedding,
             action=action,
-            hidden_dims=critic_decoder_hidden_dims,
+            hidden_dims=policy_decoder_hidden_dims,
             rngs=rngs,
         )
 

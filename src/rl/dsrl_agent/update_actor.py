@@ -35,7 +35,7 @@ from src.rl.networks.rl_networks import ObsType, ActionType, Policy
 import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 
-PolicyDef = Callable[[ObsType, nnx.Rngs], Policy]
+PolicyDef = Callable[[ObsType, ActionType, nnx.Rngs], Policy]
 
 
 def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:

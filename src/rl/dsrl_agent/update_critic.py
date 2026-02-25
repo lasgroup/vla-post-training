@@ -29,6 +29,7 @@ CriticBatch = tuple[
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
 ]
+StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 
 # ---------------------------------------------------------------------------
 # Actor protocol – any nnx.Module whose __call__ returns (actions, log_probs)
@@ -100,6 +101,12 @@ def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
         return rng
     return nnx.Rngs(rng)
 
+def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
+    rl_config = getattr(config, "rl", None)
+    if rl_config is not None and hasattr(rl_config, "critic_ema_decay"):
+        critic_ema_decay = getattr(rl_config, "critic_ema_decay")
+        return None if critic_ema_decay is None else float(critic_ema_decay)
+    return config.ema_decay
 
 def init_state_action_critic_train_state(
     config: OnlineTrainConfig,
