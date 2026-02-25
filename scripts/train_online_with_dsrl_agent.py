@@ -228,8 +228,8 @@ def main(config: _config.OnlineTrainConfig):
 
     infos = []
     for step in pbar:
-        #info = agent.update()
-        #infos.append(info)
+        info = agent.update()
+        infos.append(info)
 
         # if step % config.log_interval == 0:
         #     stacked_infos = common_utils.stack_forest(infos)

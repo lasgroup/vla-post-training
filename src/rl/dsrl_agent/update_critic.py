@@ -19,7 +19,6 @@ from src.rl.networks.rl_networks import (
     ObsType,
     ActionType,
     StateActionCritic,
-    StateValue,
 )
 
 CriticBatch = tuple[
@@ -29,14 +28,8 @@ CriticBatch = tuple[
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
 ]
-StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 
-# ---------------------------------------------------------------------------
-# Actor protocol – any nnx.Module whose __call__ returns (actions, log_probs)
-# ---------------------------------------------------------------------------
-# We use nnx.Module as the type hint so beartype is satisfied by any subclass.
-# The contract is:  actor(obs_dict, rng) -> (actions: (B, act_dim), log_prob: (B,))
-ActorModel = nnx.Module
+StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 
 
 @at.typecheck
@@ -174,7 +167,7 @@ def train_q_step(
     config: OnlineTrainConfig,
     rng: at.KeyArrayLike,
     q_state: training_utils.TrainState,
-    actor_model: ActorModel,
+    policy_state: training_utils.TrainState,
     batch: CriticBatch,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     # ── online Q model (will receive gradients) ──────────────────────────
@@ -186,16 +179,26 @@ def train_q_step(
     q_target_model = nnx.merge(q_state.model_def, target_params)
     q_target_model.eval()
 
+    # Use current policy state directly (policy(obs) -> distribution)
+    policy_params = policy_state.ema_params if policy_state.ema_params is not None else policy_state.params
+    policy_model = nnx.merge(policy_state.model_def, policy_params)
+    policy_model.eval()
+
     # ── unpack batch ─────────────────────────────────────────────────────
     observation, actions, next_observation, reward, discount = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
     actions = flatten_action_horizon(actions)
 
-    # ── sample next actions from actor (no gradient through actor here) ──
+    # ── sample next actions from policy distribution (no gradient through actor params here) ──
     actor_rng, rng = jax.random.split(rng)
-    next_actions, next_log_probs = actor_model(next_observation, actor_rng)
-    # flatten action horizon if actor outputs (B, H, D)
+
+    # actor_model is the policy module here: policy(obs) -> tfd.Distribution
+    dist = policy_model(next_observation)
+    next_actions = dist.sample(seed=actor_rng)
+    next_log_probs = dist.log_prob(next_actions)
+
+    # flatten action horizon if policy outputs (B, H, D)
     if next_actions.ndim > 2:
         next_actions = flatten_action_horizon(next_actions)
     next_log_probs = _as_scalar_batch(next_log_probs)

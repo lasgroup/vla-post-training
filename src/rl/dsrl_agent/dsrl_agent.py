@@ -125,40 +125,11 @@ class DSRLLearner(Agent):
         _ = jax.block_until_ready(
             self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
         )
-        # self._train_actor_step = jax.jit(
-        #     functools.partial(train_actor_step, config),
-        #     # in_shardings=(
-        #     #     self._replicated_sharding,
-        #     #     self._train_state_sharding,
-        #     #     self._data_sharding,
-        #     # ),
-        #     #out_shardings=(self._train_state_sharding, self._replicated_sharding),
-        #     donate_argnums=(1,),
-        # )
-        # self._train_critic_step = jax.jit(
-        #     functools.partial(train_q_step, config),
-        #     # in_shardings=(
-        #     #     self._replicated_sharding,
-        #     #     self._train_state_sharding,
-        #     #     self._data_sharding,
-        #     # ),
-        #     #out_shardings=(self._train_state_sharding, self._replicated_sharding),
-        #     donate_argnums=(1,),
-        # )
-        # self._online_data_buffer = self._get_online_replay_buffer(
-        #     self._data_sharding,
-        #     prefix_embedding_template= None, # prefix_embedding_template
-        # )
+        self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
+        self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
 
     def sample_actions(self, observations, **kwargs):
-        #actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
-        #return np.asarray(self._dummy_act, dtype=np.float32)
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
-        # policy.eval()
-        # dist = policy(obs)
-        # rng, self._rng = jax.random.split(self._rng)
-        # actions = dist.sample(seed=rng)
         rng, self._rng = jax.random.split(self._rng)
         actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
         actions = np.asarray(actions, dtype=np.float32)
@@ -179,33 +150,73 @@ class DSRLLearner(Agent):
         for i in range(self._config.collect.env_num): #self._config.collect.env_num
             self._episode_storage[i].append(get_env_value(step_data, i))
 
+    def _get_critic_update_frequency(self) -> int:
+        rl = getattr(self._config, "rl", None)
+        return int(getattr(rl, "critic_update_frequency", 1))
+
+    def _get_actor_update_frequency(self) -> int:
+        rl = getattr(self._config, "rl", None)
+        return int(getattr(rl, "actor_update_frequency", 1))
+
     def update(self):
-        return {}
-        # if self.replay.size < 128:
-        #     return {}
-        # # self.training_steps += 1
-        # # #use_online = True
-        # # #if use_online:
-        # # #    online_batch_raw
-        
-        # #batch = self.replay.sample()
-        # batch = self.replay.sample(batch_size=128) # self._config.batch_size
-        
-        # train_rng, self._rng = jax.random.split(self._rng)
+        self.training_steps += 1
 
-        # train_state = self._train_state
-        # with sharding.set_mesh(self._mesh):
-        #     #train_state, info = self._train_actor_step(train_rng, train_state, batch)
-        #     #train_state, info = self._train_critic_step(train_rng, train_state, batch)
-        #     self._q_state, info = self._train_critic_step(train_rng, self._q_state, self.actor_model_for_training, batch)
-        # self._train_state = train_state
-        # return info
-        #return {}
-    
+        batch_size = int(getattr(self._config, "batch_size", 128))
+        if self.replay.size < batch_size:
+            return {}
+
+        info = {}
+
+        # ---- critic update (AWR-style: always/periodically) ----
+        if self.training_steps % self._get_critic_update_frequency() == 0:
+            batch = self.replay.sample(batch_size=batch_size)
+
+            observation = jax.tree.map(
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+            )
+            actions = jnp.asarray(batch.action, dtype=jnp.float32)
+            next_observation = jax.tree.map(
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.next_observation
+            )
+            reward = jnp.asarray(batch.reward, dtype=jnp.float32)
+
+            done = jnp.asarray(batch.done, dtype=jnp.float32)
+            discount = jnp.asarray(
+                float(self._config.discount) * (1.0 - done), dtype=jnp.float32
+            )
+
+            critic_batch = (observation, actions, next_observation, reward, discount)
+
+            train_rng, self._rng = jax.random.split(self._rng)
+            self._state_action_critic_state, critic_info = self._train_critic_step(
+                train_rng,
+                self._state_action_critic_state,
+                self._policy_state,
+                critic_batch,
+            )
+            info.update({f"critic/{k}": v for k, v in critic_info.items()})
+
+        # ---- actor update (AWR-style: periodic separate step) ----
+        if self.training_steps % self._get_actor_update_frequency() == 0:
+            batch = self.replay.sample(batch_size=batch_size)
+
+            observation = jax.tree.map(
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+            )
+
+            train_rng, self._rng = jax.random.split(self._rng)
+            self._policy_state, actor_info = self._train_actor_step(
+                train_rng,
+                self._policy_state,
+                self._state_action_critic_state,
+                observation,
+            )
+            info.update({f"actor/{k}": v for k, v in actor_info.items()})
+
+        return info
+
+        
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
-        # For now, store *all* episodes. If you want success-only, uncomment:
-        # if not is_success: self._episode_storage[env_index] = []; return
-
         episode = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
 

@@ -28,7 +28,6 @@ from src.training.config import OnlineTrainConfig
 from src.rl.dsrl_agent.update_critic import (
     flatten_action_horizon,
     summarize_critic_values,
-    ActorModel,
 )
 from collections.abc import Callable
 from src.rl.networks.rl_networks import ObsType, ActionType, Policy
@@ -58,7 +57,6 @@ def init_policy_state(
     )
     ema_decay = None  # or pull from config if you want EMA on the actor
 
-    # Normalize dummy inputs for shape inference / init.
     dummy_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
     dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)
     if dummy_act.ndim == 1:
@@ -80,7 +78,6 @@ def init_policy_state(
     train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
 
     if not use_sharding:
-        # Local init without OpenPI fsdp sharding / mesh assumptions.
         train_state = init(dummy_obs, dummy_act, init_rng)
         return train_state, None
 
@@ -141,58 +138,37 @@ def train_actor_step(
     q_state: training_utils.TrainState,
     batch: ObsType,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    """Single SAC actor update.
-
-    Parameters
-    ----------
-    config : OnlineTrainConfig
-        Must expose ``config.rl.entropy_alpha`` (default 0.2).
-    rng : PRNGKey
-        Used for action sampling inside the loss.
-    actor_state : TrainState
-        Current actor parameters / optimiser state.
-    q_state : TrainState
-        Frozen Q-function (no gradients flow here).
-    batch : ObsType
-        Dictionary of observations, e.g. ``{"state": (B, obs_dim)}``.
-
-    Returns
-    -------
-    (new_actor_state, info_dict)
-    """
     alpha = 0.2
 
     # ── rebuild models ───────────────────────────────────────────────────
-    actor: ActorModel = nnx.merge(actor_state.model_def, actor_state.params)
+    actor = nnx.merge(actor_state.model_def, actor_state.params)
     actor.train()
-
-    # Q is frozen — use EMA (target) params when available.
     q_params = q_state.ema_params if q_state.ema_params is not None else q_state.params
-    q_model: StateActionCritic = nnx.merge(q_state.model_def, q_params)
-    q_model.eval()
+    q_model_def = q_state.model_def
 
     # ── loss: E_{a~π}[ α log π(a|s) − Q(s,a) ] ─────────────────────────
     @at.typecheck
     def loss_fn(
-        actor_model: ActorModel,
+        actor_model: nnx.Module,
         observation: ObsType,
         rng: at.KeyArrayLike,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        actions, log_probs = actor_model(observation, rng)  # (B, act_dim), (B,)
+        dist = actor_model(observation)              # policy(obs) -> distribution
+        actions = dist.sample(seed=rng)
+        log_probs = dist.log_prob(actions)
 
+        # If log_prob is per-dimension, reduce over action dim.
+        if jnp.asarray(log_probs).ndim > 1:
+            log_probs = jnp.sum(log_probs, axis=-1)
         # Flatten if actor outputs (B, H, D) to match critic input
         flat_actions = actions
         if actions.ndim > 2:
             flat_actions = flatten_action_horizon(actions)
-
-        q_values = summarize_critic_values(
-            q_model(observation, jax.lax.stop_gradient(flat_actions))
-        )
-        # Actually: we need gradients through actions (reparam trick) but NOT through Q params.
-        # Q params are already frozen (separate merge), so we just need grad through flat_actions.
+            
+        q_model = nnx.merge(q_model_def, q_params)
+        q_model.eval()
         q_values = summarize_critic_values(q_model(observation, flat_actions))
 
-        # SAC actor loss:  α log π(a|s) − Q(s, a)
         entropy_term = alpha * log_probs        # (B,)
         actor_loss = jnp.mean(entropy_term - q_values)
 
