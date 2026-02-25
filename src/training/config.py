@@ -12,6 +12,9 @@ from typing import Sequence
 
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
+import os 
+
+USER = os.getenv("USER")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -77,7 +80,7 @@ _CONFIGS.extend(
             num_workers=4,  # override default num_workers
             exp_name="test",
             resume=True,
-            checkpoint_base_dir="/capstor/scratch/cscs/chenhli/checkpoints",
+            checkpoint_base_dir=f"/capstor/scratch/cscs/{USER}/checkpoints",
         ),
     ]
 )

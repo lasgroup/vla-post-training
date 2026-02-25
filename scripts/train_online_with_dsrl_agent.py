@@ -35,7 +35,6 @@ if mp.current_process().name != "MainProcess":
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 # Avoid aggressive JAX GPU preallocation in the trainer process.
-# os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 
@@ -63,6 +62,7 @@ from src.rl.networks.decoders.values.state_action_value import StateActionEnsemb
 from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 
+from src.envs.dmc_env import DMCEnv
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 
@@ -70,7 +70,6 @@ from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
 from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
-from src.rl.dsrl_agent.dmc_env import DMCEnv
 import functools
 
 def _build_actor_critic_defs(
@@ -150,15 +149,6 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
-    # Make Environment
-    #from src.envs.libero import make_env_libero
-    # env_fn, task_description = make_env_libero(config)
-    # env = filtered_sft_wrap_env(
-    #     env_fn=env_fn,
-    #     config=config,
-    #     task_description=task_description,
-    #     env_class="libero",
-    # )={"random": 42},
     def make_env(seed):
         return DMCEnv(domain_name="cartpole", task_name="swingup", task_kwargs={"random": seed}) #, seed=seed
 
@@ -167,8 +157,8 @@ def main(config: _config.OnlineTrainConfig):
     env = SubprocVectorEnv(env_fns) if env_num > 1 else DummyVectorEnv(env_fns)
     task_description = ""
     
-    dummy_obs = env.observation_space[0].sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)
-    dummy_act = env.action_space[0].sample()       #config.model.fake_act(batch_size=1)
+    dummy_obs = env.observation_space[0].sample()
+    dummy_act = env.action_space[0].sample()       
     dummy_obs = jax.tree.map(
         lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
         dummy_obs,
@@ -176,48 +166,15 @@ def main(config: _config.OnlineTrainConfig):
     dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)[None, ...]
     state_action_critic_def, policy_def = _build_actor_critic_defs(config)
 
-    # Create dummy observations and model definitions
-    # prefix_embedding_shape = _infer_prefix_embedding_shape(config)
-    # if prefix_embedding_shape is None:
-    #     logging.warning(
-    #         "Could not infer Pi0 prefix embedding shape; critic encoder will use state only."
-    #     )
-    # else:
-    #     logging.info(
-    #         "Using Pi0 prefix embeddings for critic observations with shape %s.",
-    #         prefix_embedding_shape,
-    #     )
-    # dummy_obs = _make_dummy_critic_observation(
-    #     config, prefix_embedding_shape=prefix_embedding_shape
-    # )
-    # dummy_act = config.model.fake_act(batch_size=1)
-    # state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
-    #     config, prefix_embedding_shape=prefix_embedding_shape
-    # )
-    # agent = AdvantageWeightedFilteredSFTLearner(
-    #     config=config,
-    #     dummy_obs=dummy_obs,
-    #     dummy_act=dummy_act,
-    #     state_action_critic_def=state_action_critic_def,
-    #     state_value_def=state_value_def,
-    #     task_description=task_description,
-    # )
     agent = DSRLLearner(config=config, 
                         dummy_obs=dummy_obs,
                         dummy_act=dummy_act,
                         state_action_critic_def=state_action_critic_def,
                         policy_def=policy_def,
                         task_description=task_description)
-    #init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
+    init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 
-    # batch = next(iter(agent._data_loader))
-    # logging.info(
-    #     f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}"
-    # )
-    # log_images(batch)
-
-    #start_step = int(jax.device_get(agent._train_state.step))
-    start_step = 0
+    start_step = int(jax.device_get(agent._state_action_critic_state.step))
     agent.training_steps = start_step
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
@@ -231,13 +188,13 @@ def main(config: _config.OnlineTrainConfig):
         info = agent.update()
         infos.append(info)
 
-        # if step % config.log_interval == 0:
-        #     stacked_infos = common_utils.stack_forest(infos)
-        #     reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-        #     info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-        #     pbar.write(f"Step {step}: {info_str}")
-        #     wandb.log(reduced_info, step=step)
-        #     infos = []
+        if step % config.log_interval == 0:
+            stacked_infos = common_utils.stack_forest(infos)
+            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            pbar.write(f"Step {step}: {info_str}")
+            wandb.log(reduced_info, step=step)
+            infos = []
 
         if step % config.collect.collect_interval == 0:
             #agent.save_checkpoint(step=step)
@@ -248,49 +205,11 @@ def main(config: _config.OnlineTrainConfig):
                 config=config,
                 step=step,
             )
-
-            # --- DEBUG: print one sampled batch from replay buffer ---
-            # if hasattr(agent, "replay") and agent.replay.size > 0:
-            #     batch = agent.replay.sample(batch_size=4)
-
-            #     def _shape(x):
-            #         x = jnp.asarray(x)
-            #         return x.shape, x.dtype
-
-            #     # observation might be a dict or array
-            #     obs = batch.observation
-            #     next_obs = batch.next_observation
-
-            #     print("\n=== Replay buffer debug ===")
-            #     print("replay.size:", agent.replay.size)
-            #     print("action:", _shape(batch.action))
-            #     print("reward:", _shape(batch.reward), "sample:", batch.reward[:4])
-            #     print("done:", _shape(batch.done), "sample:", batch.done[:4])
-
-            #     if isinstance(obs, dict):
-            #         print("observation keys:", list(obs.keys()))
-            #         # print a few leaf shapes
-            #         for k in list(obs.keys())[:5]:
-            #             print(f"obs[{k}]:", _shape(obs[k]))
-            #     else:
-            #         print("observation:", _shape(obs))
-
-            #     if isinstance(next_obs, dict):
-            #         print("next_observation keys:", list(next_obs.keys()))
-            #         for k in list(next_obs.keys())[:5]:
-            #             print(f"next_obs[{k}]:", _shape(next_obs[k]))
-            #     else:
-            #         print("next_observation:", _shape(next_obs))
-
-            #     print("action[0]:", batch.action[0])
-            #     print("================================\n")
-            # --- end debug ---
-            
-                        # wandb.log(collect_info, step=step)
-            # if n_collected_episodes > 0:
-            #     logging.info(
-            #         f"Collected {n_collected_episodes} successful episodes at step {step}."
-            #     )
+            wandb.log(collect_info, step=step)
+            if n_collected_episodes > 0:
+                logging.info(
+                    f"Collected {n_collected_episodes} successful episodes at step {step}."
+                )
 
         #if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
         #    agent.save_checkpoint(step=step)
@@ -303,5 +222,3 @@ if __name__ == "__main__":
     main(_config.cli())
 
 # uv run /users/$USER/vla-post-training/scripts/train_online_with_dsrl_agent.py pi05_libero_online --exp-name=my_experiment 
-# --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params --num_train_steps 2000
-
