@@ -28,6 +28,13 @@ def collect_data(
     total_episodes = 0
     total_successes = 0
     num_rollouts = config.collect.num_rollouts
+    env_num = int(config.collect.env_num)
+    running_episode_returns = np.zeros(env_num, dtype=np.float32)
+    running_episode_lengths = np.zeros(env_num, dtype=np.int32)
+    completed_episode_returns: list[float] = []
+    completed_episode_lengths: list[int] = []
+    reward_sum = 0.0
+    reward_count = 0
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
         obs, _ = env.reset()
@@ -61,6 +68,20 @@ def collect_data(
             else:
                 current_terminate, current_truncate = terminate, truncate
 
+            if config.collect.add_per_step_data and np.asarray(reward).ndim > 1:
+                current_reward = np.asarray(reward)[:, -1]
+            else:
+                current_reward = np.asarray(reward)
+            current_reward = np.asarray(current_reward, dtype=np.float32).reshape(-1)
+            if current_reward.shape[0] != env_num:
+                # Single-env fallback if a scalar slips through.
+                current_reward = np.broadcast_to(current_reward, (env_num,))
+
+            reward_sum += float(np.sum(current_reward))
+            reward_count += int(current_reward.size)
+            running_episode_returns += current_reward
+            running_episode_lengths += 1
+
             done = np.logical_or(current_terminate, current_truncate)
             done_indices = np.where(done)[0]
             if len(done_indices) > 0:
@@ -70,6 +91,10 @@ def collect_data(
             for env_index in done_indices:
                 success = bool(current_terminate[env_index])
                 total_successes += int(success)
+                completed_episode_returns.append(float(running_episode_returns[env_index]))
+                completed_episode_lengths.append(int(running_episode_lengths[env_index]))
+                running_episode_returns[env_index] = 0.0
+                running_episode_lengths[env_index] = 0
                 agent.save_episode(
                     is_success=success,
                     env_index=int(env_index),
@@ -96,4 +121,22 @@ def collect_data(
     success_rate = (
         float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
     )
-    return {"success_rate": success_rate}, collected_episodes
+    collect_info = {
+        "success_rate": success_rate,
+        "reward_step_mean": (reward_sum / reward_count) if reward_count > 0 else 0.0,
+        "reward_step_sum": reward_sum,
+        "reward_steps": reward_count,
+    }
+    if completed_episode_returns:
+        returns = np.asarray(completed_episode_returns, dtype=np.float32)
+        lengths = np.asarray(completed_episode_lengths, dtype=np.float32)
+        collect_info.update(
+            {
+                "episode_return_mean": float(np.mean(returns)),
+                "episode_return_std": float(np.std(returns)),
+                "episode_return_min": float(np.min(returns)),
+                "episode_return_max": float(np.max(returns)),
+                "episode_length_mean": float(np.mean(lengths)),
+            }
+        )
+    return collect_info, collected_episodes

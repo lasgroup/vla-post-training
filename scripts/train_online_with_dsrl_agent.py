@@ -149,8 +149,8 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
-    def make_env(seed):
-        return DMCEnv(domain_name="cartpole", task_name="swingup", task_kwargs={"random": seed}) #, seed=seed
+    def make_env(seed): # cartpole, swingup
+        return DMCEnv(domain_name="walker", task_name="walk", task_kwargs={"random": seed}) #, seed=seed
 
     env_num = int(config.collect.env_num)
     env_fns = [functools.partial(make_env, seed=int(config.seed) + i) for i in range(env_num)]
@@ -206,6 +206,19 @@ def main(config: _config.OnlineTrainConfig):
                 step=step,
             )
             wandb.log(collect_info, step=step)
+            collect_msg = (
+                f"Collect step {step}: "
+                f"episodes={config.collect.num_rollouts}, "
+                f"success_rate={collect_info.get('success_rate', 0.0):.3f}, "
+                f"step_reward_mean={collect_info.get('reward_step_mean', 0.0):.4f}"
+            )
+            if "episode_return_mean" in collect_info:
+                collect_msg += (
+                    f", ep_return_mean={collect_info['episode_return_mean']:.3f}, "
+                    f"ep_return_max={collect_info['episode_return_max']:.3f}, "
+                    f"ep_len_mean={collect_info['episode_length_mean']:.1f}"
+                )
+            pbar.write(collect_msg)
             if n_collected_episodes > 0:
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
