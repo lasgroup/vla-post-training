@@ -59,7 +59,9 @@ from src.rl.dsrl_agent.update_actor import (
 )
 from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
-from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
+from src.rl.networks.decoders.policies.learned_std_normal_policy import (
+    LearnedStdTanhNormalPolicyDecoder,
+)
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 
 from src.envs.dmc_env import DMCEnv
@@ -74,6 +76,8 @@ import functools
 
 def _build_actor_critic_defs(
     config: _config.OnlineTrainConfig,
+    action_low: jax.Array,
+    action_high: jax.Array,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
     critic_encoder_hidden_dims = (1024, 512) #tuple(_get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512)))
     critic_decoder_hidden_dims = () #tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", ()))
@@ -110,11 +114,13 @@ def _build_actor_critic_defs(
 
     def policy_decoder_def(
         embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
-    ) -> NormalPolicyDecoder:
-        return NormalPolicyDecoder(
+    ) -> LearnedStdTanhNormalPolicyDecoder:
+        return LearnedStdTanhNormalPolicyDecoder(
             observation=embedding,
             action=action,
             hidden_dims=policy_decoder_hidden_dims,
+            low=action_low,
+            high=action_high,
             rngs=rngs,
         )
 
@@ -158,13 +164,18 @@ def main(config: _config.OnlineTrainConfig):
     task_description = ""
     
     dummy_obs = env.observation_space[0].sample()
-    dummy_act = env.action_space[0].sample()       
+    action_space = env.action_space[0]
+    dummy_act = action_space.sample()
+    action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
+    action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
     dummy_obs = jax.tree.map(
         lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
         dummy_obs,
     )
     dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)[None, ...]
-    state_action_critic_def, policy_def = _build_actor_critic_defs(config)
+    state_action_critic_def, policy_def = _build_actor_critic_defs(
+        config, action_low=action_low, action_high=action_high
+    )
 
     agent = DSRLLearner(config=config, 
                         dummy_obs=dummy_obs,

@@ -227,6 +227,7 @@ class DSRLLearner(Agent):
             grads, self._alpha_state.opt_state, self._alpha_state.log_alpha
         )
         new_log_alpha = optax.apply_updates(self._alpha_state.log_alpha, updates)
+        new_log_alpha = jnp.clip(new_log_alpha, -20.0, 2.0)
         self._alpha_state = AlphaState(
             log_alpha=new_log_alpha,
             opt_state=new_opt_state,

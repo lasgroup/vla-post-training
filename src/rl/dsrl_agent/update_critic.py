@@ -202,6 +202,11 @@ def train_q_step(
     # flatten action horizon if policy outputs (B, H, D)
     if next_actions.ndim > 2:
         next_actions = flatten_action_horizon(next_actions)
+    # SAC uses the joint log-probability. If the distribution returns per-dim
+    # log-probs, reduce across the action dimension instead of dropping dims.
+    next_log_probs = jnp.asarray(next_log_probs, dtype=jnp.float32)
+    if next_log_probs.ndim > 1:
+        next_log_probs = jnp.sum(next_log_probs, axis=-1)
     next_log_probs = _as_scalar_batch(next_log_probs)
 
     # ── entropy coefficient ──────────────────────────────────────────────
