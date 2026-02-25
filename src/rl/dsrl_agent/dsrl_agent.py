@@ -101,6 +101,7 @@ class DSRLLearner(Agent):
                 critic_def=state_action_critic_def,
                 dummy_obs=dummy_obs,
                 dummy_act=dummy_act,
+                use_sharding=False
             )
 
         self._policy_state, self._policy_state_sharding = init_policy_state(
@@ -110,6 +111,7 @@ class DSRLLearner(Agent):
             policy_def=policy_def,
             dummy_obs=dummy_obs,
             dummy_act=dummy_act,
+            use_sharding=False
         )
         # self._train_actor_step = jax.jit(
         #     functools.partial(train_actor_step, config),
@@ -137,8 +139,8 @@ class DSRLLearner(Agent):
         # )
 
     def sample_actions(self, observations, **kwargs):
-        actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
-        return actions
+        #actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
+        return np.asarray(self._dummy_act, dtype=np.float32)
     
         # obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
         # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)

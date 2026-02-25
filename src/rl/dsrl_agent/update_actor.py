@@ -46,16 +46,23 @@ def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
 def init_policy_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
-    mesh: jax.sharding.Mesh,
+    mesh: jax.sharding.Mesh | None,
     *,
     policy_def: PolicyDef,
     dummy_obs: ObsType,
     dummy_act: ActionType,
+    use_sharding: bool = True,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
     )
     ema_decay = None  # or pull from config if you want EMA on the actor
+
+    # Normalize dummy inputs for shape inference / init.
+    dummy_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
+    dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)
+    if dummy_act.ndim == 1:
+        dummy_act = dummy_act[None, ...]
 
     def init(obs, act, rng) -> training_utils.TrainState:
         policy = policy_def(obs, act, _ensure_rngs(rng))
@@ -71,6 +78,15 @@ def init_policy_state(
         )
 
     train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
+
+    if not use_sharding:
+        # Local init without OpenPI fsdp sharding / mesh assumptions.
+        train_state = init(dummy_obs, dummy_act, init_rng)
+        return train_state, None
+
+    if mesh is None:
+        raise ValueError("mesh must be provided when use_sharding=True")
+
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
     replicated_sharding = jax.sharding.NamedSharding(
         mesh, jax.sharding.PartitionSpec()
@@ -81,6 +97,7 @@ def init_policy_state(
         out_shardings=state_sharding,
     )(dummy_obs, dummy_act, init_rng)
     return train_state, state_sharding
+
 
 def _update_actor_state(
     state: training_utils.TrainState,

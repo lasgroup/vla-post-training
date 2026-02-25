@@ -111,17 +111,25 @@ def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
 def init_state_action_critic_train_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
-    mesh: jax.sharding.Mesh,
+    mesh: jax.sharding.Mesh | None,
     *,
     critic_def: StateActionCriticDef,
     dummy_obs: ObsType,
     dummy_act: ActionType,
+    use_sharding: bool = True,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
-    # flatten the array across the array dim
+
+    # Normalize dummy inputs for shape inference / init.
+    dummy_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
+    dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)
+    if dummy_act.ndim == 1:
+        dummy_act = dummy_act[None, ...]
+
+    # flatten the array across the action dim
     dummy_act = flatten_action_horizon(dummy_act)
     dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
 
@@ -139,6 +147,15 @@ def init_state_action_critic_train_state(
         )
 
     train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
+
+    if not use_sharding:
+        # Local init without OpenPI fsdp sharding / mesh assumptions.
+        train_state = init(dummy_obs, dummy_act, init_rng)
+        return train_state, None
+
+    if mesh is None:
+        raise ValueError("mesh must be provided when use_sharding=True")
+
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     train_state = jax.jit(
@@ -147,6 +164,7 @@ def init_state_action_critic_train_state(
         out_shardings=state_sharding,
     )(dummy_obs, dummy_act, init_rng)
     return train_state, state_sharding
+
 
 # ---------------------------------------------------------------------------
 # SAC-style Q-function update

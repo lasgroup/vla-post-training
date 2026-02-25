@@ -54,14 +54,12 @@ import openpi.training.utils as training_utils
 from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
 from src.rl.dsrl_agent.update_critic import (
     StateActionCriticDef,
-    StateValueDef,
 )
 from src.rl.dsrl_agent.update_actor import (
     PolicyDef
 )
 from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
-from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 
@@ -170,6 +168,11 @@ def main(config: _config.OnlineTrainConfig):
     
     dummy_obs = env.observation_space[0].sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)
     dummy_act = env.action_space[0].sample()       #config.model.fake_act(batch_size=1)
+    dummy_obs = jax.tree.map(
+        lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
+        dummy_obs,
+    )
+    dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)[None, ...]
     state_action_critic_def, policy_def = _build_actor_critic_defs(config)
 
     # Create dummy observations and model definitions
@@ -298,5 +301,6 @@ def main(config: _config.OnlineTrainConfig):
 if __name__ == "__main__":
     main(_config.cli())
 
-# uv run /users/$USER/vla-post-training/scripts/train_online_with_dsrl_agent.py pi05_libero_online --exp-name=my_experiment --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params --num_train_steps 2000
+# uv run /users/$USER/vla-post-training/scripts/train_online_with_dsrl_agent.py pi05_libero_online --exp-name=my_experiment 
+# --overwrite --checkpoint_base_dir /capstor/scratch/cscs/${USER}/checkpoints --weight-loader.params-path gs://openpi-assets/checkpoints/pi05_libero/params --num_train_steps 2000
 
