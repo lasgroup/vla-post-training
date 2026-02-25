@@ -106,7 +106,7 @@ class DSRLLearner(Agent):
             self._config,
             polciy_init_rng,
             self._mesh,
-            critic_def=policy_def,
+            policy_def=policy_def,
             dummy_obs=dummy_obs,
             dummy_act=dummy_act,
         )

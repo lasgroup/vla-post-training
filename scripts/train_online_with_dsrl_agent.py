@@ -128,13 +128,15 @@ def _build_actor_critic_defs(
             rngs=rngs,
         )
 
-    def policy_def(observation: ObsType, rngs: nnx.Rngs) -> Policy:
+    def policy_def(
+        observation: ObsType, action: ActionType, rngs: nnx.Rngs
+    ) -> Policy:
         return Policy(
-            observation=observation,
+            observation=observation, 
+            action=action, 
             encoder_def=encoder_def,
-            decoder_def=policy_decoder_def,
-            rngs=rngs,
-        )
+            decoder_def=policy_decoder_def, 
+            rngs=rngs)
 
     return state_action_critic_def, policy_def
 

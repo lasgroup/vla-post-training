@@ -30,8 +30,57 @@ from src.rl.dsrl_agent.update_critic import (
     summarize_critic_values,
     ActorModel,
 )
-from src.rl.networks.rl_networks import ObsType, StateActionCritic
+from collections.abc import Callable
+from src.rl.networks.rl_networks import ObsType, ActionType, Policy
+import openpi.training.optimizer as _optimizer
+import openpi.training.sharding as sharding
 
+PolicyDef = Callable[[ObsType, nnx.Rngs], Policy]
+
+
+def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
+    if isinstance(rng, nnx.Rngs):
+        return rng
+    return nnx.Rngs(rng)
+
+def init_policy_state(
+    config: OnlineTrainConfig,
+    init_rng: at.KeyArrayLike,
+    mesh: jax.sharding.Mesh,
+    *,
+    policy_def: PolicyDef,
+    dummy_obs: ObsType,
+    dummy_act: ActionType,
+) -> tuple[training_utils.TrainState, Any]:
+    tx = _optimizer.create_optimizer(
+        config.optimizer, config.lr_schedule, weight_decay_mask=None
+    )
+    ema_decay = None  # or pull from config if you want EMA on the actor
+
+    def init(obs, act, rng) -> training_utils.TrainState:
+        policy = policy_def(obs, act, _ensure_rngs(rng))
+        params = nnx.state(policy)
+        return training_utils.TrainState(
+            step=0,
+            params=params,
+            model_def=nnx.graphdef(policy),
+            tx=tx,
+            opt_state=tx.init(nnx.filter_state(params, nnx.Param)),
+            ema_decay=ema_decay,
+            ema_params=None if ema_decay is None else params,
+        )
+
+    train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
+    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
+    replicated_sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec()
+    )
+    train_state = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
+    )(dummy_obs, dummy_act, init_rng)
+    return train_state, state_sharding
 
 def _update_actor_state(
     state: training_utils.TrainState,
