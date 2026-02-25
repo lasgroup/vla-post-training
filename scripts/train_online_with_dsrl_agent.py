@@ -51,16 +51,19 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.training.utils as training_utils
-from src.rl.dsrl_agent.dsrl_agent_new import DSRLLearner
+from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
 from src.rl.advantage_weighted_regression.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
-from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
+from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
-from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
+from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
+from src.rl.networks.rl_networks import ObsType, StateActionCritic
+
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
+from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
@@ -69,7 +72,71 @@ from src.training.utils import init_logging, init_wandb, log_images
 from src.rl.dsrl_agent.dmc_env import DMCEnv
 import functools
 
+def _build_actor_critic_defs(
+    config: _config.OnlineTrainConfig,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    critic_encoder_hidden_dims = (1024, 512) #tuple(_get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512)))
+    critic_decoder_hidden_dims = () #tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", ()))
+    critic_num_qs = 2 #int(_get_rl_attr(config, "critic_num_qs", 2))
 
+    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
+        network_def = lambda o, rg: MLP(
+            input=o,
+            hidden_dims=critic_encoder_hidden_dims,
+            activate_final=True,
+            rngs=rg,
+        )
+        state_vector_keys = ["state"]
+        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
+            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+        return MLPEncoder(
+            dummy_obs=observation,
+            encoder_def=network_def,
+            state_vector_keys=state_vector_keys,
+            rngs=rngs,
+        )
+
+    def state_action_decoder_def(
+        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionEnsembleDecoder:
+        return StateActionEnsembleDecoder(
+            observation=embedding,
+            action=action,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_qs=critic_num_qs,
+            rngs=rngs,
+        )
+
+    def policy_decoder_def(
+        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
+    ) -> NormalPolicyDecoder:
+        return NormalPolicyDecoder(
+            observation=embedding,
+            action=action,
+            hidden_dims=critic_decoder_hidden_dims,
+            rngs=rngs,
+        )
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionCritic:
+        return StateActionCritic(
+            observation=observation,
+            action=action,
+            encoder_def=encoder_def,
+            decoder_def=state_action_decoder_def,
+            rngs=rngs,
+        )
+
+    def policy_def(observation: ObsType, rngs: nnx.Rngs) -> Policy:
+        return Policy(
+            observation=observation,
+            encoder_def=encoder_def,
+            decoder_def=policy_decoder_def,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, policy_def
 
 def main(config: _config.OnlineTrainConfig):
     init_logging()
@@ -95,6 +162,10 @@ def main(config: _config.OnlineTrainConfig):
     env = DummyVectorEnv(env_fns)
     task_description = ""
     
+    dummy_obs = env.observation_space.sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)
+    dummy_act = env.action_space.sample()       #config.model.fake_act(batch_size=1)
+    state_action_critic_def, policy_def = _build_actor_critic_defs(config)
+
     # Create dummy observations and model definitions
     # prefix_embedding_shape = _infer_prefix_embedding_shape(config)
     # if prefix_embedding_shape is None:
@@ -121,7 +192,12 @@ def main(config: _config.OnlineTrainConfig):
     #     state_value_def=state_value_def,
     #     task_description=task_description,
     # )
-    agent = DSRLLearner(config, env=env)
+    agent = DSRLLearner(config=config, 
+                        dummy_obs=dummy_obs,
+                        dummy_act=dummy_act,
+                        state_action_critic_def=state_action_critic_def,
+                        policy_def=policy_def,
+                        task_description=task_description)
     #init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 
     # batch = next(iter(agent._data_loader))
