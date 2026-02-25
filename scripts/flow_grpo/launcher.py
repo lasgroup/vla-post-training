@@ -1,9 +1,10 @@
+#!/usr/bin/env python3
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    python scripts/flow_grpo/launcher.py              # submit to SLURM with confirmation
-    python scripts/flow_grpo/launcher.py --dry         # print commands without submitting
-    python scripts/flow_grpo/launcher.py --mode local  # run locally instead of SLURM
+    ./scripts/flow_grpo/launcher.py                    # submit to SLURM with confirmation
+    uv run scripts/flow_grpo/launcher.py --dry         # print commands without submitting
+    ./scripts/flow_grpo/launcher.py --mode local       # run locally instead of SLURM
 """
 
 import argparse

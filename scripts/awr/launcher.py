@@ -1,9 +1,10 @@
+#!/usr/bin/env python3
 """Launcher for AWR (Advantage-Weighted SFT) experiments.
 
 Usage:
-    python scripts/awr/launcher.py              # submit to SLURM with confirmation
-    python scripts/awr/launcher.py --dry         # print commands without submitting
-    python scripts/awr/launcher.py --mode local  # run locally instead of SLURM
+    ./scripts/awr/launcher.py                    # submit to SLURM with confirmation
+    uv run scripts/awr/launcher.py --dry         # print commands without submitting
+    ./scripts/awr/launcher.py --mode local       # run locally instead of SLURM
 """
 
 import argparse
