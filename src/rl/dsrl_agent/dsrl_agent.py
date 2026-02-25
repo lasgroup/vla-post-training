@@ -140,15 +140,15 @@ class DSRLLearner(Agent):
 
     def sample_actions(self, observations, **kwargs):
         #actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
-        return np.asarray(self._dummy_act, dtype=np.float32)
-    
-        # obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
-        # policy.eval()
-        # dist = policy(obs)
-        # rng, self._rng = jax.random.split(self._rng)
-        # actions = dist.sample(seed=rng)
-        # return np.asarray(actions, dtype=np.float32)
+        #return np.asarray(self._dummy_act, dtype=np.float32)
+        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
+        policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
+        policy.eval()
+        dist = policy(obs)
+        rng, self._rng = jax.random.split(self._rng)
+        actions = dist.sample(seed=rng)
+        
+        return np.asarray(actions, dtype=np.float32)
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
