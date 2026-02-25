@@ -90,6 +90,57 @@ def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, "
     return _as_scalar_batch(critic_values)
 
 
+@at.typecheck
+def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, "b a"]:
+    return values.reshape((values.shape[0], -1))
+
+
+def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
+    if isinstance(rng, nnx.Rngs):
+        return rng
+    return nnx.Rngs(rng)
+
+
+def init_state_action_critic_train_state(
+    config: OnlineTrainConfig,
+    init_rng: at.KeyArrayLike,
+    mesh: jax.sharding.Mesh,
+    *,
+    critic_def: StateActionCriticDef,
+    dummy_obs: ObsType,
+    dummy_act: ActionType,
+) -> tuple[training_utils.TrainState, Any]:
+    tx = _optimizer.create_optimizer(
+        config.optimizer, config.lr_schedule, weight_decay_mask=None
+    )
+    ema_decay = _critic_ema_decay(config)
+    # flatten the array across the array dim
+    dummy_act = flatten_action_horizon(dummy_act)
+    dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
+
+    def init(obs, act, rng) -> training_utils.TrainState:
+        critic = critic_def(obs, act, _ensure_rngs(rng))
+        params = nnx.state(critic)
+        return training_utils.TrainState(
+            step=0,
+            params=params,
+            model_def=nnx.graphdef(critic),
+            tx=tx,
+            opt_state=tx.init(nnx.filter_state(params, nnx.Param)),
+            ema_decay=ema_decay,
+            ema_params=None if ema_decay is None else params,
+        )
+
+    train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
+    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    train_state = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=state_sharding,
+    )(dummy_obs, dummy_act, init_rng)
+    return train_state, state_sharding
+
 # ---------------------------------------------------------------------------
 # SAC-style Q-function update
 # ---------------------------------------------------------------------------

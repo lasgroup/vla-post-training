@@ -23,7 +23,7 @@ from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig
 from src.rl.dsrl_agent.update_actor import (
-    train_step as train_actor_step, 
+    train_actor_step, 
     init_policy_state,
     PolicyDef
 )
@@ -88,7 +88,8 @@ class DSRLLearner(Agent):
         self._config = config
         self.replay = MinimalReplayBuffer(capacity=100000, seed=int(getattr(self._config, "seed", 0)))
         self._rng = jax.random.key(config.seed)
-
+        devices = mesh_utils.create_device_mesh((jax.device_count(),))
+        self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
 
@@ -136,16 +137,24 @@ class DSRLLearner(Agent):
         # )
 
     def sample_actions(self, observations, **kwargs):
-        actions = np.stack([self.dummy_act for _ in range(1)], axis=0)
+        actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
         return actions
-        #observations = flatten_dmc_obs(observations)
-        #obs_jax = jax.tree_util.tree_map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        #actions, logprob = self._actor_apply(self.actor, obs_jax)
+    
+        # obs = _preprocess_dmc_obs(observations)
+        # obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), obs)
 
-        # Sampling needs a seed; TFP uses `seed=` in .sample
-        #rng, sub = jax.random.split(jax.random.key(0))
-        #actions = dist.sample(seed=sub)   # shape (E, act_dim) for Normal/TanhNormal decoders
-        #return actions #rng, np.asarray(actions, dtype=np.float32)
+        # # Rebuild policy from train state (no gradients, just inference)
+        # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
+        # policy.eval()
+
+        # # Forward pass -> tfd.Distribution
+        # dist = policy(obs)
+
+        # # Sample actions
+        # rng, self._rng = jax.random.split(self._rng)
+        # actions = dist.sample(seed=rng)
+
+        # return np.asarray(actions, dtype=np.float32)
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs

@@ -3,7 +3,8 @@
 # and modified to exclude duplicated code.
 
 import copy
-from typing import Dict, Optional, OrderedDict
+from collections import OrderedDict
+from typing import Dict, Optional
 
 import jax
 import dm_env
@@ -61,9 +62,18 @@ class DMCEnv(core.Env):
 
         self._env = env
         self.action_space = dmc_spec2gym_space(self._env.action_spec())
-
-        self.observation_space = dmc_spec2gym_space(
-            self._env.observation_spec())
+        self._obs_spec = self._env.observation_spec()
+        self._obs_dim = int(sum(np.prod(v.shape) for v in self._obs_spec.values()))
+        self.observation_space = spaces.Dict(
+            {
+                "state": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(self._obs_dim,),
+                    dtype=np.float32,
+                )
+            }
+        )
 
         self.seed(seed=task_kwargs['random'])
         self.render_mode = 'rgb_array'
@@ -74,12 +84,20 @@ class DMCEnv(core.Env):
     def __getattr__(self, name):
         return getattr(self._env, name)
 
+    def _flatten_obs(self, obs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        state = np.concatenate(
+            [np.asarray(v, dtype=np.float32).reshape(-1) for v in obs.values()],
+            axis=0,
+        )
+        return {"state": state}
+
     def step(self, action: np.ndarray):
-        assert self.action_space.contains(action)
+        action = np.asarray(action, dtype=self.action_space.dtype)
+        action = np.clip(action, self.action_space.low, self.action_space.high)
 
         time_step = self._env.step(action)
         reward = time_step.reward or 0
-        obs = time_step.observation
+        obs = self._flatten_obs(time_step.observation)
 
         termination = False  # we never reach a goal
         truncation = time_step.last()
@@ -89,7 +107,7 @@ class DMCEnv(core.Env):
     def reset(self, seed=None, options=None):
         self.seed(seed)
         timestep = self._env.reset()
-        observation = timestep.observation
+        observation = self._flatten_obs(timestep.observation)
         info = {}
         return observation, info
 

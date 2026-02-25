@@ -60,7 +60,7 @@ from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
-from src.rl.networks.rl_networks import ObsType, StateActionCritic
+from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
@@ -164,8 +164,8 @@ def main(config: _config.OnlineTrainConfig):
     env = DummyVectorEnv(env_fns)
     task_description = ""
     
-    dummy_obs = env.observation_space.sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)
-    dummy_act = env.action_space.sample()       #config.model.fake_act(batch_size=1)
+    dummy_obs = env.observation_space[0].sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)
+    dummy_act = env.action_space[0].sample()       #config.model.fake_act(batch_size=1)
     state_action_critic_def, policy_def = _build_actor_critic_defs(config)
 
     # Create dummy observations and model definitions
@@ -220,7 +220,7 @@ def main(config: _config.OnlineTrainConfig):
 
     infos = []
     for step in pbar:
-        info = agent.update()
+        #info = agent.update()
         #infos.append(info)
 
         # if step % config.log_interval == 0:
