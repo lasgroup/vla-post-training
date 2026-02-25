@@ -55,7 +55,7 @@ def collect_data(
             }
             agent.add_data(step_data)
 
-            if config.collect.add_per_step_data:
+            if config.collect.add_per_step_data and False: # TODO: Change back after test
                 current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
                 current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
             else:
