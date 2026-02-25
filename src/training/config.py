@@ -25,7 +25,7 @@ class CollectionConfig:
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
-    add_per_step_data: bool = False #True # TODO: Change back when done with test
+    add_per_step_data: bool = True
     obs_prefix_key: str = "pi0"
 
 

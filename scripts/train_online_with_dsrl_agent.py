@@ -162,8 +162,9 @@ def main(config: _config.OnlineTrainConfig):
     def make_env(seed):
         return DMCEnv(domain_name="cartpole", task_name="swingup", task_kwargs={"random": seed}) #, seed=seed
 
-    env_fns = [functools.partial(make_env, seed=42)]
-    env = DummyVectorEnv(env_fns)
+    env_num = int(config.collect.env_num)
+    env_fns = [functools.partial(make_env, seed=int(config.seed) + i) for i in range(env_num)]
+    env = SubprocVectorEnv(env_fns) if env_num > 1 else DummyVectorEnv(env_fns)
     task_description = ""
     
     dummy_obs = env.observation_space[0].sample()  #_make_dummy_critic_observation(config, prefix_embedding_shape=None)

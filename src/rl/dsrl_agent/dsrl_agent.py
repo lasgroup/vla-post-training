@@ -113,6 +113,18 @@ class DSRLLearner(Agent):
             dummy_act=dummy_act,
             use_sharding=False
         )
+        def _sample_policy_actions(params, obs, rng):
+            policy = nnx.merge(self._policy_state.model_def, params)
+            policy.eval()
+            dist = policy(obs)
+            return dist.sample(seed=rng)
+
+        self._sample_policy_actions_jit = jax.jit(_sample_policy_actions)
+        warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
+        warmup_rng = jax.random.fold_in(self._rng, 0)
+        _ = jax.block_until_ready(
+            self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
+        )
         # self._train_actor_step = jax.jit(
         #     functools.partial(train_actor_step, config),
         #     # in_shardings=(
@@ -142,11 +154,16 @@ class DSRLLearner(Agent):
         #actions = np.stack([self._dummy_act for _ in range(1)], axis=0)
         #return np.asarray(self._dummy_act, dtype=np.float32)
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
-        policy.eval()
-        dist = policy(obs)
+        # policy = nnx.merge(self._policy_state.model_def, self._policy_state.params)
+        # policy.eval()
+        # dist = policy(obs)
+        # rng, self._rng = jax.random.split(self._rng)
+        # actions = dist.sample(seed=rng)
         rng, self._rng = jax.random.split(self._rng)
-        actions = dist.sample(seed=rng)
+        actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
+        actions = np.asarray(actions, dtype=np.float32)
+        if actions.ndim == 1:
+            actions = actions[None, ...]  # single-env safety
         
         return np.asarray(actions, dtype=np.float32)
 
@@ -159,7 +176,7 @@ class DSRLLearner(Agent):
         def get_env_value(vec, env_id):
             return jax.tree.map(lambda x: x[env_id], vec)
 
-        for i in range(1): #self._config.collect.env_num
+        for i in range(self._config.collect.env_num): #self._config.collect.env_num
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def update(self):
