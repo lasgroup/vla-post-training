@@ -169,6 +169,7 @@ def train_q_step(
     q_state: training_utils.TrainState,
     policy_state: training_utils.TrainState,
     batch: CriticBatch,
+    alpha: at.Float[at.ArrayLike, ""] | float,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     # ── online Q model (will receive gradients) ──────────────────────────
     q_model = nnx.merge(q_state.model_def, q_state.params)
@@ -204,7 +205,7 @@ def train_q_step(
     next_log_probs = _as_scalar_batch(next_log_probs)
 
     # ── entropy coefficient ──────────────────────────────────────────────
-    alpha = 0.2
+    alpha = jnp.asarray(alpha, dtype=jnp.float32)
 
     # ── compute TD targets (everything stop-gradiented) ──────────────────
     target_q_next = summarize_critic_values(q_target_model(next_observation, next_actions))
@@ -223,6 +224,7 @@ def train_q_step(
         td_errors = q_values - td_targets
         loss = jnp.mean(jnp.square(td_errors))
         return loss, {
+            "alpha": alpha,
             "td_error_mean": jnp.mean(td_errors),
             "q_value_mean": jnp.mean(q_values),
             "td_target_mean": jnp.mean(td_targets),

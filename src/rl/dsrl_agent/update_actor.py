@@ -137,8 +137,9 @@ def train_actor_step(
     actor_state: training_utils.TrainState,
     q_state: training_utils.TrainState,
     batch: ObsType,
+    alpha: at.Float[at.ArrayLike, ""] | float,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    alpha = 0.2
+    alpha = jnp.asarray(alpha, dtype=jnp.float32)
 
     # ── rebuild models ───────────────────────────────────────────────────
     actor = nnx.merge(actor_state.model_def, actor_state.params)
@@ -173,6 +174,7 @@ def train_actor_step(
         actor_loss = jnp.mean(entropy_term - q_values)
 
         return actor_loss, {
+            "alpha": alpha,
             "entropy_term_mean": jnp.mean(entropy_term),
             "log_prob_mean": jnp.mean(log_probs),
             "q_value_mean": jnp.mean(q_values),

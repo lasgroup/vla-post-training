@@ -12,6 +12,7 @@ from typing import Any, Dict, Deque, Optional
 import numpy as np
 import jax
 import jax.numpy as jnp
+import optax
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -42,6 +43,13 @@ class TransitionBatch:
     next_observation: Any
     reward: np.ndarray
     done: np.ndarray
+
+
+@dataclass
+class AlphaState:
+    log_alpha: jax.Array
+    opt_state: optax.OptState
+    tx: optax.GradientTransformation
 
 class MinimalReplayBuffer:
     """Stores transitions of the form (obs, act, next_obs, reward, done)."""
@@ -92,6 +100,7 @@ class DSRLLearner(Agent):
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
+        self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
 
         q_init_rng, polciy_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = init_state_action_critic_train_state(
@@ -127,6 +136,8 @@ class DSRLLearner(Agent):
         )
         self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
+        self._alpha_state = self._init_alpha_state()
+        self._target_entropy = self._get_target_entropy()
 
     def sample_actions(self, observations, **kwargs):
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
@@ -158,6 +169,77 @@ class DSRLLearner(Agent):
         rl = getattr(self._config, "rl", None)
         return int(getattr(rl, "actor_update_frequency", 1))
 
+    def _get_utd_ratio(self) -> int:
+        rl = getattr(self._config, "rl", None)
+        return max(1, int(getattr(rl, "utd_ratio", 1)))
+
+    def _alpha_autotune_enabled(self) -> bool:
+        rl = getattr(self._config, "rl", None)
+        return bool(getattr(rl, "autotune_alpha", True))
+
+    def _get_init_alpha(self) -> float:
+        rl = getattr(self._config, "rl", None)
+        return max(1e-6, float(getattr(rl, "init_alpha", 0.1)))
+
+    def _get_alpha_lr(self) -> float:
+        rl = getattr(self._config, "rl", None)
+        return max(1e-8, float(getattr(rl, "alpha_lr", 3e-4)))
+
+    def _get_target_entropy(self) -> float:
+        rl = getattr(self._config, "rl", None)
+        target_entropy = getattr(rl, "target_entropy", "auto")
+        if target_entropy in (None, "auto"):
+            return -float(self._action_dim)
+        return float(target_entropy)
+
+    def _init_alpha_state(self) -> AlphaState:
+        init_alpha = self._get_init_alpha()
+        log_alpha = jnp.asarray(np.log(init_alpha), dtype=jnp.float32)
+        tx = optax.adam(self._get_alpha_lr())
+        opt_state = tx.init(log_alpha)
+        return AlphaState(log_alpha=log_alpha, opt_state=opt_state, tx=tx)
+
+    def _current_alpha(self) -> jax.Array:
+        return jnp.exp(self._alpha_state.log_alpha)
+
+    def _update_alpha(self, log_prob_mean: jax.Array) -> dict[str, jax.Array]:
+        if not self._alpha_autotune_enabled():
+            alpha = self._current_alpha()
+            entropy = -jnp.asarray(log_prob_mean, dtype=jnp.float32)
+            return {
+                "alpha": alpha,
+                "alpha_loss": jnp.asarray(0.0, dtype=jnp.float32),
+                "entropy_mean": entropy,
+                "target_entropy": jnp.asarray(self._target_entropy, dtype=jnp.float32),
+            }
+
+        log_prob_mean = jax.lax.stop_gradient(jnp.asarray(log_prob_mean, dtype=jnp.float32))
+        entropy_mean = -log_prob_mean
+        target_entropy_mag = jnp.asarray(-self._target_entropy, dtype=jnp.float32)
+
+        def alpha_loss_fn(log_alpha):
+            alpha = jnp.exp(log_alpha)
+            # Increase alpha when observed entropy exceeds the target.
+            return alpha * (target_entropy_mag - entropy_mean)
+
+        alpha_loss, grads = jax.value_and_grad(alpha_loss_fn)(self._alpha_state.log_alpha)
+        updates, new_opt_state = self._alpha_state.tx.update(
+            grads, self._alpha_state.opt_state, self._alpha_state.log_alpha
+        )
+        new_log_alpha = optax.apply_updates(self._alpha_state.log_alpha, updates)
+        self._alpha_state = AlphaState(
+            log_alpha=new_log_alpha,
+            opt_state=new_opt_state,
+            tx=self._alpha_state.tx,
+        )
+
+        return {
+            "alpha": jnp.exp(new_log_alpha),
+            "alpha_loss": alpha_loss,
+            "entropy_mean": entropy_mean,
+            "target_entropy": jnp.asarray(self._target_entropy, dtype=jnp.float32),
+        }
+
     def update(self):
         self.training_steps += 1
 
@@ -167,34 +249,36 @@ class DSRLLearner(Agent):
 
         info = {}
 
-        # ---- critic update (AWR-style: always/periodically) ----
+        # ---- critic update(s): UTD ratio controls repeated critic steps per learner step ----
         if self.training_steps % self._get_critic_update_frequency() == 0:
-            batch = self.replay.sample(batch_size=batch_size)
+            for _ in range(self._get_utd_ratio()):
+                batch = self.replay.sample(batch_size=batch_size)
 
-            observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
-            )
-            actions = jnp.asarray(batch.action, dtype=jnp.float32)
-            next_observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.next_observation
-            )
-            reward = jnp.asarray(batch.reward, dtype=jnp.float32)
+                observation = jax.tree.map(
+                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+                )
+                actions = jnp.asarray(batch.action, dtype=jnp.float32)
+                next_observation = jax.tree.map(
+                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch.next_observation
+                )
+                reward = jnp.asarray(batch.reward, dtype=jnp.float32)
 
-            done = jnp.asarray(batch.done, dtype=jnp.float32)
-            discount = jnp.asarray(
-                float(self._config.discount) * (1.0 - done), dtype=jnp.float32
-            )
+                done = jnp.asarray(batch.done, dtype=jnp.float32)
+                discount = jnp.asarray(
+                    float(self._config.discount) * (1.0 - done), dtype=jnp.float32
+                )
 
-            critic_batch = (observation, actions, next_observation, reward, discount)
+                critic_batch = (observation, actions, next_observation, reward, discount)
 
-            train_rng, self._rng = jax.random.split(self._rng)
-            self._state_action_critic_state, critic_info = self._train_critic_step(
-                train_rng,
-                self._state_action_critic_state,
-                self._policy_state,
-                critic_batch,
-            )
-            info.update({f"critic/{k}": v for k, v in critic_info.items()})
+                train_rng, self._rng = jax.random.split(self._rng)
+                self._state_action_critic_state, critic_info = self._train_critic_step(
+                    train_rng,
+                    self._state_action_critic_state,
+                    self._policy_state,
+                    critic_batch,
+                    self._current_alpha(),
+                )
+                info.update({f"critic/{k}": v for k, v in critic_info.items()})
 
         # ---- actor update (AWR-style: periodic separate step) ----
         if self.training_steps % self._get_actor_update_frequency() == 0:
@@ -210,8 +294,15 @@ class DSRLLearner(Agent):
                 self._policy_state,
                 self._state_action_critic_state,
                 observation,
+                self._current_alpha(),
             )
             info.update({f"actor/{k}": v for k, v in actor_info.items()})
+            if "log_prob_mean" in actor_info:
+                alpha_info = self._update_alpha(actor_info["log_prob_mean"])
+                info.update({f"alpha/{k}": v for k, v in alpha_info.items()})
+
+        info.setdefault("alpha/value", self._current_alpha())
+        info.setdefault("sac/utd_ratio", jnp.asarray(self._get_utd_ratio(), dtype=jnp.float32))
 
         return info
 

@@ -39,10 +39,27 @@ class OnlineDataConfig(DataConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class SACConfig:
+    # Number of critic updates per learner step (UTD ratio).
+    utd_ratio: int = 1
+    critic_update_frequency: int = 1
+    actor_update_frequency: int = 1
+    # SAC target network EMA ~= (1 - tau). tau=0.005 -> ema_decay=0.995
+    critic_ema_decay: float | None = 0.995
+    # Entropy coefficient settings.
+    autotune_alpha: bool = True
+    init_alpha: float = 0.1
+    alpha_lr: float = 3e-4
+    # "auto" uses -|A|, the standard SAC default.
+    target_entropy: str | float = "auto"
+
+
+@dataclasses.dataclass(frozen=True)
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     discount: float = 0.99
+    rl: SACConfig = SACConfig()
     return_prefix_rep = False
 
 
