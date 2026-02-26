@@ -74,7 +74,6 @@ def train_step(
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]
         aux_data = {
-            "advantage_weights": jnp.mean(score),
             "chunked_loss": jnp.mean(chunked_loss),
         }
         return jnp.sum(score * chunked_loss), aux_data
@@ -136,5 +135,8 @@ def train_step(
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
         "advantage_mean": jnp.mean(advantage),
+        "advantage_max": jnp.max(advantage),
+        "advantage_min": jnp.min(advantage),
+        "advantage_std": jnp.std(advantage),
     } | aux_data
     return new_state, info
