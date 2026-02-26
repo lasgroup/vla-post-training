@@ -303,8 +303,8 @@ class FilteredSFTLearner(Agent):
         token_transforms = [t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)]
         non_token_transforms = [t for t in data_config.model_transforms.inputs if not isinstance(t, tt_types)]
         assert len(token_transforms) == 1, f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
-        token_transform = token_transforms[0]
-        pre_token_transform = _transforms.compose(
+        self._token_transform = token_transforms[0]
+        self._pre_token_transform = _transforms.compose(
             [
                 *data_config.repack_transforms.inputs,
                 *data_config.data_transforms.inputs,
@@ -314,6 +314,7 @@ class FilteredSFTLearner(Agent):
                 *non_token_transforms,
             ]
         )
+        self._token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
         # prepare dummy data for initializing the replay buffer
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
@@ -325,9 +326,7 @@ class FilteredSFTLearner(Agent):
         dummy_data = {
                 "observation": dummy_obs_dict,
                 "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
-                "next_observation": {
-                    "state": np.zeros((1, transition_state_dim), dtype=np.float32)
-                },
+                "next_observation": dummy_obs_dict,
                 "reward": np.zeros((1,), dtype=np.float32),
                 "discount": np.zeros((1,), dtype=np.float32),
             }
@@ -335,48 +334,13 @@ class FilteredSFTLearner(Agent):
             "Initializing online replay buffer (capacity=%d)",
             self._config.online_buffer_size,
         )
-        token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-
-        def _preprocess_insert(episode_data: Dict[str, Any]):
-            obs = pre_token_transform(episode_data)
-            # ensure batched image masks
-            batch_shape = obs["state"].shape[:-1]
-            obs["image_mask"] = {k: np.full(batch_shape, bool(v)) for k, v in obs["image_mask"].items()}
-            obs["state"] = obs["state"].astype(np.float32)
-            actions = obs.pop("actions").astype(np.float32)
-            prompt = obs.pop("prompt")
-
-            if isinstance(token_transform, _transforms.TokenizePrompt):
-                if prompt not in token_cache:
-                    tok = token_transform({"prompt": prompt})
-                    token_cache[prompt] = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
-                tokens, token_masks = token_cache[prompt]
-                obs["tokenized_prompt"] = np.broadcast_to(
-                    tokens, batch_shape + tokens.shape
-                ).copy()
-                obs["tokenized_prompt_mask"] = np.broadcast_to(
-                    token_masks, batch_shape + token_masks.shape
-                ).copy()
-            else:
-                raise TypeError(f"Unsupported token transform: {type(token_transform)}")
-
-            return {
-                "observation": obs,
-                "actions": actions,
-                "next_observation": {
-                    # TODO: assign  proper next obs here
-                    "state": obs["state"]
-                },
-                "reward": episode_data["reward"],
-                "discount": episode_data["discount"],
-            }
 
         return ShardedReplayBuffer(
             dummy_data=dummy_data,
             max_capacity=self._config.online_buffer_size,
             data_sharding=self._data_sharding,
             seed=self._config.seed,
-            preprocess_fn=_preprocess_insert,
+            preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
         )
@@ -395,7 +359,6 @@ class FilteredSFTLearner(Agent):
         resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
-        # TODO: return prompt and resized image from the environment
         return obs
 
     def _sample_action(
@@ -468,196 +431,66 @@ class FilteredSFTLearner(Agent):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
-    def save_episode(self, is_success: bool = False, env_index: int = 0, task_description: str | None = None):
-        if env_index < 0 or env_index >= len(self._episode_storage):
-            raise IndexError(
-                f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
-            )
+    def save_episode(self, is_success: bool, env_index: int, task_description: str):
 
-        # Extract episode data from storage
+        assert env_index in range(len(self._episode_storage)), \
+            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
-        # Empty the storage now for the next episode
         self._episode_storage[env_index] = []
+        # filtered SFT keeps only successful episodes.
         if not is_success:
-            # Filtered SFT keeps only successful episodes.
             return
-        discount_gamma = float(self._config.discount)
 
-        def _extract_policy_obs(obs: Dict[str, Any]) -> Dict[str, Any]:
-            return {key[len("observation/") :]: val for key, val in obs.items() if key.startswith("observation/")}
+        assert self._config.collect.add_per_step_data, \
+            "Currently filtered SFT is designed to work with per-step data collection."
+        
+        # concatenate all chunks
+        episode_data = jax.tree_util.tree_map(lambda *xs: np.concatenate(xs, axis=0), *episode_data)
+        done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
+        n_steps = np.where(done)[0][0] + 1
+        act_h = int(self._config.model.action_horizon)
+        exp_gamma = float(self._config.discount**act_h)
+        n_windows = n_steps - act_h + 1
+        if n_windows <= 0:
+            return
 
-        # TODO: this can be simplified
-        def process_frame(
-            ob: Dict[str, Any],
-            *,
-            actions: Any,
-            next_ob: Dict[str, Any] | None,
-            reward: float,
-            done: bool,
-            discount: float,
-        ) -> Dict[str, Any]:
-            # Extract actions and observations from total_obs.
-            obs = ob["observation"]
-            frame = _extract_policy_obs(obs)
-            if "state" not in frame:
-                raise KeyError(
-                    "Cannot construct transitions: current observation is missing state."
-                )
+        # process elements to account for action chunks
+        remove_prefix_and_crop = lambda x: {k[len("observation/") :]: v[:n_windows] for k, v in x.items()}
+        _obs = remove_prefix_and_crop(episode_data["observation"]["observation"])
+        _next_obs = remove_prefix_and_crop(episode_data["next_observation"]["observation"])
+        _actions = np.stack([episode_data["observation"]["action"][start : start + act_h] for start in range(n_windows)])
+        _reward = np.asarray([episode_data["reward"][start : start + act_h].sum() for start in range(n_windows)])
+        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else exp_gamma for start in range(n_windows)])
 
-            frame["actions"] = np.asarray(actions, dtype=np.float32)
-            next_state = frame["state"]
-            if next_ob is not None:
-                next_obs = _extract_policy_obs(next_ob["observation"])
-                if "state" in next_obs:
-                    next_state = next_obs["state"]
-            frame["next_observation"] = {"state": next_state}
-            frame["reward"] = np.float32(reward)
-            frame["done"] = np.bool_(done)
-            frame["discount"] = np.float32(discount)
-            return frame
+        def transform(obs, act, prompt):
+            obs.update({"actions": act, "prompt": prompt})
+            obs = self._pre_token_transform(obs)
+            obs["image_mask"] = {k: np.full((n_windows,), bool(v)) for k, v in obs["image_mask"].items()}
+            if isinstance(self._token_transform, _transforms.TokenizePrompt):
+                if prompt not in self._token_cache:
+                    tok = self._token_transform({"prompt": prompt})
+                    self._token_cache[prompt] = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
+                tokens, token_masks = self._token_cache[prompt]
+                obs["tokenized_prompt"] = np.broadcast_to(tokens, (n_windows, ) + tokens.shape).copy()
+                obs["tokenized_prompt_mask"] = np.broadcast_to(token_masks, (n_windows, ) + token_masks.shape).copy()
+            else:
+                raise TypeError(f"Unsupported token transform: {type(self._token_transform)}")
+            actions = obs.pop("actions")
+            prompt = obs.pop("prompt")
+            return obs, actions
 
-        def _stack_transitions(frames):
-            return jax.tree_util.tree_map(lambda *xs: np.stack(xs, axis=0), *frames)
+        # process observations and actions according to pi0 preprocessing
+        _next_obs, _ = transform(_next_obs, _actions, str(task_description))
+        _obs, _actions = transform(_obs, _actions, str(task_description))
 
-        transitions = []
-        # TODO: only one of these options is relevant to filtered SFT
-        if self._config.collect.add_per_step_data:
-            # Build one-step transitions first, then convert to H-step sliding windows.
-            for ep in episode_data:
-                ep_obs, ep_next_obs, ep_rewards, terminate, truncate = (
-                    ep["observation"],
-                    ep.get("next_observation"),
-                    ep.get("reward"),
-                    ep["terminate"],
-                    ep["truncate"],
-                )
-                done_mask = np.asarray(
-                    np.logical_or(terminate, truncate), dtype=np.bool_
-                )
-                valid_steps = int(done_mask.shape[0])
-                done_indices = np.where(done_mask)[0]
-                if done_indices.size > 0:
-                    # Keep the terminal step, drop only wrapper-introduced padding after termination.
-                    valid_steps = int(done_indices[0]) + 1
-
-                for step in range(valid_steps):
-                    step_obs = jax.tree.map(lambda x: x[step], ep_obs)
-                    step_next_obs = (
-                        jax.tree.map(lambda x: x[step], ep_next_obs)
-                        if ep_next_obs is not None
-                        else None
-                    )
-                    step_reward = (
-                        float(np.asarray(ep_rewards, dtype=np.float32)[step])
-                        if ep_rewards is not None
-                        else 0.0
-                    )
-                    step_done = bool(done_mask[step])
-                    transitions.append(
-                        process_frame(
-                            step_obs,
-                            actions=np.asarray(
-                                ep_obs["action"][step], dtype=np.float32
-                            ),
-                            next_ob=step_next_obs,
-                            reward=step_reward,
-                            done=step_done,
-                            discount=0.0 if step_done else discount_gamma,
-                        )
-                    )
-            if not transitions:
-                return
-            episode_batch = _stack_transitions(transitions)
-            action_horizon = int(self._config.model.action_horizon)
-            actions = np.asarray(episode_batch["actions"], dtype=np.float32)
-            rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
-            dones = np.asarray(episode_batch["done"], dtype=np.bool_)
-            next_states = np.asarray(
-                episode_batch["next_observation"]["state"], dtype=np.float32
-            )
-            num_steps = int(actions.shape[0])
-            num_windows = num_steps - action_horizon + 1
-            if num_windows <= 0:
-                return
-
-            windowed_batch = {
-                key: np.asarray(value)[:num_windows]
-                for key, value in episode_batch.items()
-                if key
-                not in {
-                    "actions",
-                    "next_observation",
-                    "reward",
-                    "done",
-                    "discount",
-                }
-            }
-            windowed_batch["actions"] = np.stack(
-                [
-                    actions[start : start + action_horizon]
-                    for start in range(num_windows)
-                ],
-                axis=0,
-            )
-            windowed_batch["reward"] = np.asarray(
-                [
-                    rewards[start : start + action_horizon].sum()
-                    for start in range(num_windows)
-                ],
-                dtype=np.float32,
-            )
-            windowed_batch["discount"] = np.asarray(
-                [
-                    (
-                        0.0
-                        if np.any(dones[start : start + action_horizon])
-                        else float(discount_gamma**action_horizon)
-                    )
-                    for start in range(num_windows)
-                ],
-                dtype=np.float32,
-            )
-            windowed_batch["next_observation"] = {
-                "state": next_states[
-                    action_horizon - 1 : action_horizon - 1 + num_windows
-                ]
-            }
-            episode_batch = windowed_batch
-        else:
-            for ep in episode_data:
-                reward = ep.get("reward")
-                terminate = ep.get("terminate", False)
-                truncate = ep.get("truncate", False)
-                done = bool(
-                    np.asarray(terminate).reshape(-1)[-1]
-                    or np.asarray(truncate).reshape(-1)[-1]
-                )
-                reward_value = (
-                    float(np.asarray(reward).reshape(-1)[0])
-                    if reward is not None
-                    else 0.0
-                )
-                chunk_horizon = int(self._config.collect.replan_steps)
-                discount_value = 0.0 if done else float(discount_gamma**chunk_horizon)
-                transitions.append(
-                    process_frame(
-                        ep["observation"],
-                        actions=np.asarray(
-                            ep["observation"]["action"], dtype=np.float32
-                        ),
-                        next_ob=ep.get("next_observation"),
-                        reward=reward_value,
-                        done=done,
-                        discount=discount_value,
-                    )
-                )
-            if not transitions:
-                return
-            episode_batch = _stack_transitions(transitions)
-            episode_batch.pop("done", None)
-        if task_description is not None:
-            episode_batch["prompt"] = str(task_description)
-        self._online_data_buffer.insert(episode_batch)
+        self._online_data_buffer.insert({
+            "observation": _obs,
+            "actions": _actions.astype(np.float32),
+            "next_observation": _next_obs,
+            "reward": _reward.astype(np.float32),
+            "discount": _discount.astype(np.float32),
+        })
         self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):

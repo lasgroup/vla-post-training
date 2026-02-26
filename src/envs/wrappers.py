@@ -116,10 +116,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self._post_step_filter = post_step_filter
 
     @property
-    def return_full_transitions(self) -> bool:
-        return self._store_full_transitions
-
-    @property
     def expand_space(self, space):
         # We define a function to expand a single space leaf (e.g., a Box)
         if isinstance(space, gym.spaces.Box):
