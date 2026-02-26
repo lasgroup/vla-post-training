@@ -51,7 +51,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
     env_class = config.domain
     seed = config.seed
     discount = config.discount
-    add_per_step_data = config.collect.add_per_step_data
     env_factories = []
     for i in range(env_num):
 
@@ -69,7 +68,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
                 env=base_env,
                 query_frequency=replan_steps,
                 discount=discount,
-                store_full_transitions=add_per_step_data,
                 post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
@@ -352,9 +350,7 @@ class FilteredSFTLearner(Agent):
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
-        obs = observations["observation"]
-        if self._config.collect.add_per_step_data:
-            obs = jax.tree_util.tree_map(lambda x: x[:, -1], obs)
+        obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations["observation"])
         size = int(self._config.collect.resize_image)
         resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
@@ -441,9 +437,6 @@ class FilteredSFTLearner(Agent):
         # filtered SFT keeps only successful episodes.
         if not is_success:
             return
-
-        assert self._config.collect.add_per_step_data, \
-            "Currently filtered SFT is designed to work with per-step data collection."
         
         # concatenate all chunks
         episode_data = jax.tree_util.tree_map(lambda *xs: np.concatenate(xs, axis=0), *episode_data)

@@ -42,7 +42,7 @@ class MockEnv(gym.Env):
 def test_full_transitions_mode():
     query_freq = 3
     env = MockEnv()
-    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq, store_full_transitions=True)
+    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq)
 
     # Mock action: (3, 1) array
     action = np.zeros((query_freq, 1))
@@ -58,35 +58,12 @@ def test_full_transitions_mode():
     np.testing.assert_array_equal(reward, [1.0, 1.0, 1.0])
 
 
-def test_discounted_summary_mode():
-    query_freq = 3
-    gamma = 0.9
-    env = MockEnv()
-    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq,
-                                    discount=gamma, store_full_transitions=False)
-
-    action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
-
-    # 1. Check reward: 1.0 + (1.0 * 0.9) + (1.0 * 0.9^2) = 1 + 0.9 + 0.81 = 2.71
-    expected_reward = 1.0 + 0.9 + 0.81
-    assert reward == pytest.approx(expected_reward)
-
-    # 2. Check observation: should only be the LAST one (3.0)
-    assert obs.shape == (1,)
-    assert obs[0] == 3.0
-
-    # 3. Check info: should be the last step's info
-    assert info["step"] == 3
-
-
 def test_early_termination():
     """Verify the wrapper handles the environment ending mid-query."""
     query_freq = 10  # Long query
     env = MockEnv()  # MockEnv ends at step 5
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq,
-                                    discount=1.0, store_full_transitions=True)
+                                    discount=1.0)
 
     action = np.zeros((query_freq, 1))
     obs_act, reward, term, trunc, info = wrapped.step(action)
