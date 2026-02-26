@@ -61,6 +61,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     return_prefix_rep = config.collect.store_prefix_rep
     env_factories = []
     for i in range(env_num):
+
         def _make_env(rank=i):
             # Create the base environment
             base_env = env_fn(rank)
@@ -116,7 +117,7 @@ def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndar
 
 
 def _load_weights_and_validate(
-        loader: _weight_loaders.WeightLoader, params_shape: at.Params
+    loader: _weight_loaders.WeightLoader, params_shape: at.Params
 ) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
@@ -136,18 +137,18 @@ def _load_weights_and_validate(
 
 @at.typecheck
 def init_train_state(
-        config: OnlineTrainConfig,
-        init_rng: at.KeyArrayLike,
-        mesh: jax.sharding.Mesh,
-        *,
-        resume: bool,
+    config: OnlineTrainConfig,
+    init_rng: at.KeyArrayLike,
+    mesh: jax.sharding.Mesh,
+    *,
+    resume: bool,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
     )
 
     def init(
-            rng: at.KeyArrayLike, partial_params: at.Params | None = None
+        rng: at.KeyArrayLike, partial_params: at.Params | None = None
     ) -> training_utils.TrainState:
         rng, model_rng = jax.random.split(rng)
         # initialize the model (and its parameters).
@@ -282,9 +283,9 @@ class FilteredSFTLearner(Agent):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 
         def _get_prefix_rep_with_model_fn(
-                m: _model.BaseModel,
-                *,
-                observation: _model.Observation,
+            m: _model.BaseModel,
+            *,
+            observation: _model.Observation,
         ):
             if not hasattr(m, "get_prefix_rep"):
                 raise AttributeError(
@@ -298,8 +299,8 @@ class FilteredSFTLearner(Agent):
         # Create policy for data collection
         policy_checkpoint_dir = os.environ.get("OPENPI_POLICY_CHECKPOINT_DIR")
         if policy_checkpoint_dir is None and isinstance(
-                self._config.weight_loader,
-                _weight_loaders.CheckpointWeightLoader,
+            self._config.weight_loader,
+            _weight_loaders.CheckpointWeightLoader,
         ):
             params_path = self._config.weight_loader.params_path
             if params_path.endswith("/params"):
@@ -384,21 +385,21 @@ class FilteredSFTLearner(Agent):
             return None
 
     def _get_online_replay_buffer(
-            self,
-            data_sharding: jax.sharding.NamedSharding,
-            *,
-            prefix_embedding_template: np.ndarray | None = None,
+        self,
+        data_sharding: jax.sharding.NamedSharding,
+        *,
+        prefix_embedding_template: np.ndarray | None = None,
     ) -> ShardedReplayBuffer:
         train_config = self._config
         data_config = self._data_loader.data_config()
 
         token_transform: (
-                _transforms.TokenizePrompt | _transforms.TokenizeFASTInputs | None
+            _transforms.TokenizePrompt | _transforms.TokenizeFASTInputs | None
         ) = None
         non_token_model_transforms = []
         for t in data_config.model_transforms.inputs:
             if isinstance(
-                    t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
+                t, (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
             ):
                 token_transform = t
             else:
@@ -462,10 +463,10 @@ class FilteredSFTLearner(Agent):
             "state": _zeros_like_spec(obs_spec_dict["state"]),
         }
         for k in (
-                "tokenized_prompt",
-                "tokenized_prompt_mask",
-                "token_ar_mask",
-                "token_loss_mask",
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
         ):
             if k in obs_spec_dict and obs_spec_dict[k] is not None:
                 dummy_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
@@ -488,10 +489,10 @@ class FilteredSFTLearner(Agent):
             "state": np.zeros((1, transition_state_dim), dtype=np.float32),
         }
         for k in (
-                "tokenized_prompt",
-                "tokenized_prompt_mask",
-                "token_ar_mask",
-                "token_loss_mask",
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
         ):
             if k in obs_spec_dict and obs_spec_dict[k] is not None:
                 dummy_next_obs_dict[k] = _zeros_like_spec(obs_spec_dict[k])
@@ -501,6 +502,7 @@ class FilteredSFTLearner(Agent):
             )
         dummy_rewards = np.zeros((1,), dtype=np.float32)
         dummy_discounts = np.zeros((1,), dtype=np.float32)
+        dummy_mc_returns = np.zeros((1,), dtype=np.float32)
         batch_size = int(train_config.batch_size)
         # Keep enough online data for stable sampling when mixing with offline batches.
         max_capacity = max(batch_size, train_config.rl.buffer_capacity)
@@ -532,7 +534,7 @@ class FilteredSFTLearner(Agent):
             return arr
 
         def _ensure_batch_scalar(
-                values: Any | None, *, batch_size: int, default: float
+            values: Any | None, *, batch_size: int, default: float
         ) -> np.ndarray:
             if values is None:
                 return np.full((batch_size,), default, dtype=np.float32)
@@ -549,7 +551,7 @@ class FilteredSFTLearner(Agent):
             return arr.astype(np.float32, copy=False)
 
         def _normalize_observation_layout(
-                raw_episode: Dict[str, Any],
+            raw_episode: Dict[str, Any],
         ) -> Dict[str, Any]:
             """Normalize accepted observation layouts into a single structure."""
             raw = dict(raw_episode)
@@ -591,8 +593,8 @@ class FilteredSFTLearner(Agent):
                 normalized_next_obs = dict(next_obs)
                 for source, target in aliases:
                     if (
-                            target not in normalized_next_obs
-                            and source in normalized_next_obs
+                        target not in normalized_next_obs
+                        and source in normalized_next_obs
                     ):
                         normalized_next_obs[target] = normalized_next_obs[source]
                 raw["next_observation"] = normalized_next_obs
@@ -798,10 +800,10 @@ class FilteredSFTLearner(Agent):
             # language tokens when computing the next-obs prefix embedding.
             # The prompt is the same for current and next obs within an episode.
             for tok_key in (
-                    "tokenized_prompt",
-                    "tokenized_prompt_mask",
-                    "token_ar_mask",
-                    "token_loss_mask",
+                "tokenized_prompt",
+                "tokenized_prompt_mask",
+                "token_ar_mask",
+                "token_loss_mask",
             ):
                 if tok_key in data:
                     transition_next_observation[tok_key] = data[tok_key]
@@ -810,12 +812,17 @@ class FilteredSFTLearner(Agent):
                     processed_next_prefix
                 )
 
+            transition_mc_return = _ensure_batch_scalar(
+                raw.get("mc_return"), batch_size=insert_batch_size, default=0.0
+            )
+
             return {
                 "observation": data,
                 "actions": actions,
                 "next_observation": transition_next_observation,
                 "reward": transition_reward,
                 "discount": transition_discount,
+                "mc_return": transition_mc_return,
             }
 
         return ShardedReplayBuffer(
@@ -825,6 +832,7 @@ class FilteredSFTLearner(Agent):
                 "next_observation": dummy_next_obs_dict,
                 "reward": dummy_rewards,
                 "discount": dummy_discounts,
+                "mc_return": dummy_mc_returns,
             },
             max_capacity=max_capacity,
             batch_size=batch_size,
@@ -836,9 +844,9 @@ class FilteredSFTLearner(Agent):
         )
 
     def _process_obs_for_pi0(
-            self,
-            observations: Dict,
-            task_description: str | None = None,
+        self,
+        observations: Dict,
+        task_description: str | None = None,
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
@@ -917,10 +925,10 @@ class FilteredSFTLearner(Agent):
         return inputs
 
     def _compute_prefix_rep_with_model(
-            self,
-            *,
-            model: _model.BaseModel,
-            observations: Dict[str, Any],
+        self,
+        *,
+        model: _model.BaseModel,
+        observations: Dict[str, Any],
     ) -> np.ndarray:
         if getattr(self._policy, "_is_pytorch_model", False):
             raise NotImplementedError(
@@ -935,12 +943,12 @@ class FilteredSFTLearner(Agent):
         return np.asarray(prefix_rep, dtype=np.float32)
 
     def _sample_action(
-            self,
-            observations: Dict,
-            rng: jax.random.PRNGKey,
-            train_state: training_utils.TrainState,
-            batch_actions: bool = True,
-            return_prefix_rep: bool = False,
+        self,
+        observations: Dict,
+        rng: jax.random.PRNGKey,
+        train_state: training_utils.TrainState,
+        batch_actions: bool = True,
+        return_prefix_rep: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         params = (
             train_state.ema_params
@@ -977,7 +985,7 @@ class FilteredSFTLearner(Agent):
         return actions
 
     def _generate_actions(
-            self, observations: np.ndarray | Dict, **kwargs
+        self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         task_description = kwargs.get("task_description")
         batch_actions = kwargs.get("batch_actions")
@@ -1006,12 +1014,12 @@ class FilteredSFTLearner(Agent):
         return self._generate_actions(observations, **kwargs)
 
     def sample_actions(
-            self, observations: np.ndarray | Dict, **kwargs
+        self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
 
     def _online_batch_to_sft_batch(
-            self, online_batch: Dict[str, Any]
+        self, online_batch: Dict[str, Any]
     ) -> tuple[_model.Observation, _model.Actions]:
         return (
             _model.Observation.from_dict(online_batch["observation"]),
@@ -1049,7 +1057,7 @@ class FilteredSFTLearner(Agent):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def _broadcast_prefix_embedding(
-            self, prefix_embedding: Any, observation: Dict[str, Any]
+        self, prefix_embedding: Any, observation: Dict[str, Any]
     ) -> np.ndarray:
         """Shape prefix embeddings to match observation layout.
 
@@ -1095,10 +1103,10 @@ class FilteredSFTLearner(Agent):
         )
 
     def _compute_prefix_for_observation(
-            self,
-            *,
-            observation: Dict[str, Any] | None,
-            task_description: str | None,
+        self,
+        *,
+        observation: Dict[str, Any] | None,
+        task_description: str | None,
     ) -> np.ndarray | None:
         """Compute policy prefix embedding for one observation dict.
 
@@ -1142,10 +1150,10 @@ class FilteredSFTLearner(Agent):
         return np.asarray(prefix_rep, dtype=np.float32)
 
     def _attach_prefix_embeddings_to_episode_data(
-            self,
-            episode_data: list[Dict[str, Any]],
-            *,
-            task_description: str | None,
+        self,
+        episode_data: list[Dict[str, Any]],
+        *,
+        task_description: str | None,
     ) -> None:
         """Unpack `(actions, prefix)` payloads and align prefixes to transitions.
 
@@ -1236,13 +1244,13 @@ class FilteredSFTLearner(Agent):
             return extracted
 
         def process_frame(
-                obs: Dict[str, Any],
-                *,
-                actions: Any,
-                next_obs: Dict[str, Any] | None,
-                reward: float,
-                done: bool,
-                discount: float,
+            obs: Dict[str, Any],
+            *,
+            actions: Any,
+            next_obs: Dict[str, Any] | None,
+            reward: float,
+            done: bool,
+            discount: float,
         ) -> Dict[str, Any]:
             # Extract actions and observations from total_obs.
             frame = _extract_policy_obs(obs)
@@ -1337,6 +1345,14 @@ class FilteredSFTLearner(Agent):
             rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
             dones = np.asarray(episode_batch["done"], dtype=np.bool_)
             num_steps = int(actions.shape[0])
+
+            # Compute MC returns: mc_return_t = sum_{k=t}^{T} gamma^{k-t} * r_k
+            mc_returns = np.zeros(num_steps, dtype=np.float32)
+            running_return = 0.0
+            for t in reversed(range(num_steps)):
+                running_return = rewards[t] + discount_gamma * running_return
+                mc_returns[t] = running_return
+            episode_batch["mc_return"] = mc_returns
             num_windows = num_steps - action_horizon + 1
             if num_windows <= 0:
                 return
@@ -1345,24 +1361,24 @@ class FilteredSFTLearner(Agent):
                 key: np.asarray(value)[:num_windows]
                 for key, value in episode_batch.items()
                 if key
-                   not in {
-                       "actions",
-                       "next_observation",
-                       "reward",
-                       "done",
-                       "discount",
-                   }
+                not in {
+                    "actions",
+                    "next_observation",
+                    "reward",
+                    "done",
+                    "discount",
+                }
             }
             windowed_batch["actions"] = np.stack(
                 [
-                    actions[start: start + action_horizon]
+                    actions[start : start + action_horizon]
                     for start in range(num_windows)
                 ],
                 axis=0,
             )
             windowed_batch["reward"] = np.asarray(
                 [
-                    rewards[start: start + action_horizon].sum()
+                    rewards[start : start + action_horizon].sum()
                     for start in range(num_windows)
                 ],
                 dtype=np.float32,
@@ -1371,8 +1387,8 @@ class FilteredSFTLearner(Agent):
                 [
                     (
                         0.0
-                        if np.any(dones[start: start + action_horizon])
-                        else float(discount_gamma ** action_horizon)
+                        if np.any(dones[start : start + action_horizon])
+                        else float(discount_gamma**action_horizon)
                     )
                     for start in range(num_windows)
                 ],
@@ -1380,8 +1396,8 @@ class FilteredSFTLearner(Agent):
             )
             windowed_batch["next_observation"] = jax.tree_util.tree_map(
                 lambda x: np.asarray(x)[
-                          action_horizon - 1: action_horizon - 1 + num_windows
-                          ],
+                    action_horizon - 1 : action_horizon - 1 + num_windows
+                ],
                 episode_batch["next_observation"],
             )
             episode_batch = windowed_batch
@@ -1401,7 +1417,7 @@ class FilteredSFTLearner(Agent):
                     else 0.0
                 )
                 chunk_horizon = int(self._config.collect.replan_steps)
-                discount_value = 0.0 if done else float(discount_gamma ** chunk_horizon)
+                discount_value = 0.0 if done else float(discount_gamma**chunk_horizon)
                 transitions.append(
                     process_frame(
                         ep["observation"],
@@ -1416,6 +1432,17 @@ class FilteredSFTLearner(Agent):
                 return
             episode_batch = _stack_transitions(transitions)
             episode_batch.pop("done", None)
+
+            # Compute MC returns for chunk-level transitions
+            chunk_rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
+            num_chunks = int(chunk_rewards.shape[0])
+            chunk_horizon = int(self._config.collect.replan_steps)
+            mc_returns = np.zeros(num_chunks, dtype=np.float32)
+            running_return = 0.0
+            for t in reversed(range(num_chunks)):
+                running_return = chunk_rewards[t] + (discount_gamma ** chunk_horizon) * running_return
+                mc_returns[t] = running_return
+            episode_batch["mc_return"] = mc_returns
         if task_description is not None:
             episode_batch["prompt"] = str(task_description)
         self._online_data_buffer.insert(episode_batch)
@@ -1437,11 +1464,12 @@ class FilteredSFTLearner(Agent):
         self.training_steps += 1
         batch = next(self._data_iter)
         rl_config = self._config.rl
-        assert isinstance(rl_config, FilteredSFTLearnerConfig), "Only Filtered SFT config should be passed " \
-                                                                "to the filtered SFT agent"
+        assert isinstance(rl_config, FilteredSFTLearnerConfig), (
+            "Only Filtered SFT config should be passed " "to the filtered SFT agent"
+        )
         update_policy = (
-                self.training_steps >= rl_config.policy_training_start_step
-                and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy_training_start_step
+            and self.training_steps % rl_config.policy_update_interval == 0
         )
         if not update_policy:
             return {
@@ -1450,7 +1478,7 @@ class FilteredSFTLearner(Agent):
                 )
             }
         use_online = (
-                self._online_data_buffer.size >= self._online_data_buffer.batch_size
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
         if use_online:
             online_batch_raw = self._online_data_buffer.sample()
