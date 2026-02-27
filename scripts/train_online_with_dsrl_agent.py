@@ -90,10 +90,10 @@ def _build_actor_critic_defs(
     action_high: jax.Array,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
     critic_encoder_hidden_dims = tuple(
-        _get_rl_attr(config, "critic_encoder_hidden_dims", (256, 256))
+        _get_rl_attr(config, "critic_encoder_hidden_dims", ())
     )
     critic_decoder_hidden_dims = tuple(
-        _get_rl_attr(config, "critic_decoder_hidden_dims", ())
+        _get_rl_attr(config, "critic_decoder_hidden_dims", (256, 256))
     )
     policy_decoder_hidden_dims = tuple(
         _get_rl_attr(config, "policy_decoder_hidden_dims", (256, 256))
@@ -279,9 +279,10 @@ def main(config: _config.OnlineTrainConfig):
     infos = []
     for step in pbar:
         info = agent.update()
-        infos.append(info)
+        if info:
+            infos.append(info)
 
-        if step % config.log_interval == 0:
+        if step % config.log_interval == 0 and infos:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())

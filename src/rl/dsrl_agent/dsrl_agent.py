@@ -276,6 +276,10 @@ class DSRLLearner(Agent):
         if not episode:
             return
 
+        def _copy_leaf(x, *, dtype=None):
+            arr = np.asarray(x, dtype=dtype)
+            return np.array(arr, copy=True)
+
         for ep in episode:
             obs = ep["observation"]
             next_obs = ep.get("next_observation", obs)
@@ -291,9 +295,11 @@ class DSRLLearner(Agent):
             done = bool(terminated or truncated)
 
             self.replay.insert({
-                "observation": jax.tree_util.tree_map(np.asarray, obs),
-                "action": np.asarray(act, dtype=np.float32),
-                "next_observation": jax.tree_util.tree_map(np.asarray, next_obs),
+                # Copy leaves to avoid aliasing with collector buffers that are
+                # mutated in-place after per-env resets.
+                "observation": jax.tree_util.tree_map(_copy_leaf, obs),
+                "action": _copy_leaf(act, dtype=np.float32),
+                "next_observation": jax.tree_util.tree_map(_copy_leaf, next_obs),
                 "reward": np.float32(r),
                 "terminated": np.bool_(terminated),
                 "truncated": np.bool_(truncated),

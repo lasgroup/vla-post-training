@@ -48,6 +48,11 @@ class OnlineDataConfig(DataConfig):
 class SACConfig:
     actor_lr: float = 3e-4
     critic_lr: float = 3e-4
+    # Network architecture (kept explicit for parity across scripts/experiments).
+    critic_encoder_hidden_dims: tuple[int, ...] = ()
+    critic_decoder_hidden_dims: tuple[int, ...] = (256, 256)
+    policy_decoder_hidden_dims: tuple[int, ...] = (256, 256)
+    critic_num_qs: int = 2
     critic_reduction: str = "mean"
     backup_entropy: bool = False
     critic_update_frequency: int = 1
