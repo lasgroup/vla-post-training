@@ -26,14 +26,6 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
-from src.training.config import _CONFIGS_DICT
-# from openpi.training.config import (
-#     _CONFIGS,
-#     TrainConfig,
-#     DataConfig,
-#     pi0_config,
-#     LeRobotLiberoDataConfig,
-# )
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
@@ -41,11 +33,12 @@ from src.rl.agent import Agent
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
+from src.rl.dsrl_agent.dsrl_vector_env_config import EnvConfig
+from src.rl.dsrl_agent.dsrl_vector_env_config import _env_config
 
 gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 gym_new_venv_step_type = Tuple[
@@ -87,7 +80,7 @@ def _load_weights_and_validate(
 
 @at.typecheck
 def init_train_state(
-    config: OnlineTrainConfig,
+    config: EnvConfig,
     init_rng: at.KeyArrayLike,
     mesh: jax.sharding.Mesh,
     *,
@@ -155,7 +148,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
     """Vectorized environment wrapper based on subprocess for DSRL."""
     def __init__(self, env_fns: List[Callable[[], gym.Env]], **kwargs: Any) -> None:
         super().__init__(env_fns, **kwargs)
-        self._config = _CONFIGS_DICT["pi05_libero_online"]
+        self._config = _env_config
         self._rng = jax.random.key(self._config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
 
