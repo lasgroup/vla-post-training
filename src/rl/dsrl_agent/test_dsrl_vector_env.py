@@ -1,5 +1,5 @@
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
-from src.envs.venv import DSRLVectorEnv
+from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv
 import numpy as np
 import gymnasium as gym
 
@@ -50,6 +50,7 @@ def test_dsrl_vector_env():
     env_fns = [make_env_fn for _ in range(4)]
     wrapped = DSRLVectorEnv(env_fns)
     
+    print("Testing reset()...")
     obs, info = wrapped.reset()
     observation = obs["observation"]
     action = obs["action"]
@@ -65,6 +66,7 @@ def test_dsrl_vector_env():
     assert action.shape == (4, 5, 7)
     assert prefix_rep.shape == (4, 968, 2048)
     
+    print("Testing step(noise)...")
     noise = np.random.randn(4, 10, 32)
     next_obs, reward, terminate, truncate, info = wrapped.step(noise)
     next_observation = next_obs["observation"]
