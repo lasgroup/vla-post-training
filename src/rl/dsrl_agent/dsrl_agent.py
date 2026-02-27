@@ -40,6 +40,8 @@ class TransitionBatch:
     action: np.ndarray
     next_observation: Any
     reward: np.ndarray
+    terminated: np.ndarray
+    truncated: np.ndarray
     done: np.ndarray
 
 
@@ -73,6 +75,8 @@ class MinimalReplayBuffer:
             action=np.asarray(stacked["action"], dtype=np.float32),
             next_observation=stacked["next_observation"],
             reward=np.asarray(stacked["reward"], dtype=np.float32).reshape(-1),
+            terminated=np.asarray(stacked["terminated"], dtype=np.bool_).reshape(-1),
+            truncated=np.asarray(stacked["truncated"], dtype=np.bool_).reshape(-1),
             done=np.asarray(stacked["done"], dtype=np.bool_).reshape(-1),
         )
     
@@ -217,7 +221,9 @@ class DSRLLearner(Agent):
             )
             reward = jnp.asarray(batch.reward, dtype=jnp.float32)
 
-            done = jnp.asarray(batch.done, dtype=jnp.float32)
+            # Time-limit truncations should not zero the bootstrap term.
+            # Only true environment terminations should set discount to zero.
+            done = jnp.asarray(batch.terminated, dtype=jnp.float32)
             discount = jnp.asarray(
                 float(self._config.discount) * (1.0 - done), dtype=jnp.float32
             )
@@ -280,13 +286,17 @@ class DSRLLearner(Agent):
             trunc = ep.get("truncate", False)
 
             r = float(np.asarray(rew).reshape(-1)[0]) if rew is not None else 0.0
-            done = bool(np.asarray(term).reshape(-1)[0] or np.asarray(trunc).reshape(-1)[0])
+            terminated = bool(np.any(np.asarray(term).reshape(-1)))
+            truncated = bool(np.any(np.asarray(trunc).reshape(-1)))
+            done = bool(terminated or truncated)
 
             self.replay.insert({
                 "observation": jax.tree_util.tree_map(np.asarray, obs),
                 "action": np.asarray(act, dtype=np.float32),
                 "next_observation": jax.tree_util.tree_map(np.asarray, next_obs),
                 "reward": np.float32(r),
+                "terminated": np.bool_(terminated),
+                "truncated": np.bool_(truncated),
                 "done": np.bool_(done),
             })
 
