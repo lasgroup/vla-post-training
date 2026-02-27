@@ -103,13 +103,11 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         query_frequency: int,
-        discount: float = 0.99,
         pre_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
         post_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-        self._discount = discount
         self._pre_step_filter = pre_step_filter
         self._post_step_filter = post_step_filter
 

@@ -67,7 +67,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
             base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=replan_steps,
-                discount=discount,
                 post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
@@ -326,6 +325,7 @@ class FilteredSFTLearner(Agent):
                 "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
                 "next_observation": dummy_obs_dict,
                 "reward": np.zeros((1,), dtype=np.float32),
+                "mc_return": np.zeros((1,), dtype=np.float32),
                 "discount": np.zeros((1,), dtype=np.float32),
             }
         logging.info(
@@ -437,15 +437,19 @@ class FilteredSFTLearner(Agent):
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
-        if not is_success:
-            return
-        
+        if is_success:
+            self._save_episode_in_buffer(episode_data, task_description)
+
+    def _save_episode_in_buffer(self, episode_data, task_description):
+
         # concatenate all chunks
         episode_data = jax.tree_util.tree_map(lambda *xs: np.concatenate(xs, axis=0), *episode_data)
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
-        exp_gamma = float(self._config.discount**act_h)
+        last_gamma = float(self._config.discount**act_h)
+        all_gammas = np.array([self._config.discount**i for i in range(n_steps)])
+        w_gammas = all_gammas[:act_h]
         n_windows = n_steps - act_h + 1
         if n_windows <= 0:
             return
@@ -455,8 +459,9 @@ class FilteredSFTLearner(Agent):
         _obs = remove_prefix_and_crop(episode_data["observation"]["observation"])
         _next_obs = remove_prefix_and_crop(episode_data["next_observation"]["observation"])
         _actions = np.stack([episode_data["observation"]["action"][start : start + act_h] for start in range(n_windows)])
-        _reward = np.asarray([episode_data["reward"][start : start + act_h].sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else exp_gamma for start in range(n_windows)])
+        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
+        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         def transform(obs, act, prompt):
             obs.update({"actions": act, "prompt": prompt})
@@ -484,6 +489,7 @@ class FilteredSFTLearner(Agent):
             "actions": _actions.astype(np.float32),
             "next_observation": _next_obs,
             "reward": _reward.astype(np.float32),
+            "mc_return": _mc_return.astype(np.float32),
             "discount": _discount.astype(np.float32),
         })
         self._collection_success_episodes += 1
