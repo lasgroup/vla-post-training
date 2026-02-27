@@ -341,6 +341,8 @@ class FilteredSFTLearner(Agent):
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
+            load_paths=self._config.buffer_load_paths,
+            save_path=self._config.buffer_save_path,
         )
 
     def _process_obs_for_pi0(

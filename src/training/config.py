@@ -40,6 +40,8 @@ class OnlineTrainConfig(TrainConfig):
     online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
     online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99
+    buffer_save_path: str | None = None  # if set, save each episode to this directory
+    buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
 
 
 # Use `get_config` if you need to get a config by name in your code.
