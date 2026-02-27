@@ -23,6 +23,17 @@ class ConstantSchedule(_optimizer.LRScheduleConfig):
 
     def create(self) -> optax.Schedule:
         return optax.constant_schedule(self.value)
+    
+@dataclasses.dataclass(frozen=True)
+class LinearSchedule(_optimizer.LRScheduleConfig):
+    """Linear schedule that starts at init_value and ends at end_value"""
+
+    init_value: float = 0.0
+    end_value: float = 1.0
+    transition_steps: int = 1000
+
+    def create(self) -> optax.Schedule:
+        return optax.linear_schedule(self.init_value, self.end_value, self.transition_steps)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -32,6 +43,25 @@ class RLAlgorithmConfig:
 
 
 # Define hyperparameter structures for your algorithms
+@dataclasses.dataclass(frozen=True)
+class BestofNLearnerConfig(RLAlgorithmConfig):
+    n_samples: int = 8
+    online_ratio: float = 0.0
+    critic_update_interval: int = 1
+    critic_training_start_step: int = 0
+    use_ema_critic: bool = True
+    critic_ema_decay: float = 0.995
+    critic_reduction: str = "min"
+    critic_lr_schedule = ConstantSchedule(value=1e-4)
+    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    critic_encoder_hidden_dims: Sequence[int] = (512, 512)
+    critic_decoder_hidden_dims: Sequence[int] = (256, 256)
+    critic_num_qs: int = 2
+    critic_num_vs: int = 2
+    num_critic_updates_per_batch: int = 1
+    critic_inference_start_step: int = 100
+    td_weight_schedule = LinearSchedule(init_value=0.0, end_value=1.0, transition_steps=1_000)
+
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_update_interval: int = 1
@@ -176,6 +206,11 @@ _CONFIGS.extend(
                 policy_update_interval=20,
                 policy_training_start_step=100,
             ),
+        ),
+        # 4. Best of N
+        make_base_online_config(
+            name="pi05_libero_online_best_of_n",
+            rl_config=BestofNLearnerConfig(),
         ),
     ]
 )

@@ -478,6 +478,12 @@ class FilteredSFTLearner(Agent):
 
         dummy_actions = np.zeros(act_spec.shape, dtype=act_spec.dtype)
         transition_state_dim = int(obs_spec_dict["state"].shape[-1])
+        self._transition_state_dim = transition_state_dim
+        self._act_dim = int(act_spec.shape[-1])
+        self._state_normalize = _transforms.Normalize(
+            data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
+        )
+        self._action_normalize = action_normalize_transform
         dummy_next_obs_dict = {
             "image": {
                 k: _zeros_like_spec(v, override_dtype=np.uint8)
