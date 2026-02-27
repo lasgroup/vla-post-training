@@ -46,6 +46,7 @@ import flax.nnx as nnx
 from flax.training import common_utils
 import jax
 import jax.numpy as jnp
+import numpy as np
 import tqdm_loggable.auto as tqdm
 import wandb
 
@@ -66,7 +67,8 @@ from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 
 from src.envs.dmc_env import DMCEnv
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
-from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
+from src.envs.libero import make_env_libero
+from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
 
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
@@ -74,15 +76,29 @@ from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
 import functools
 
+
+def _get_rl_attr(config: _config.OnlineTrainConfig, name: str, default: Any) -> Any:
+    rl = getattr(config, "rl", None)
+    if rl is None:
+        return default
+    return getattr(rl, name, default)
+
+
 def _build_actor_critic_defs(
     config: _config.OnlineTrainConfig,
     action_low: jax.Array,
     action_high: jax.Array,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
-    critic_encoder_hidden_dims = (1024, 512) #tuple(_get_rl_attr(config, "critic_encoder_hidden_dims", (1024, 512)))
-    critic_decoder_hidden_dims = () #tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", ()))
-    policy_decoder_hidden_dims = (256,)
-    critic_num_qs = 2 #int(_get_rl_attr(config, "critic_num_qs", 2))
+    critic_encoder_hidden_dims = tuple(
+        _get_rl_attr(config, "critic_encoder_hidden_dims", (256, 256))
+    )
+    critic_decoder_hidden_dims = tuple(
+        _get_rl_attr(config, "critic_decoder_hidden_dims", ())
+    )
+    policy_decoder_hidden_dims = tuple(
+        _get_rl_attr(config, "policy_decoder_hidden_dims", (256, 256))
+    )
+    critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
         network_def = lambda o, rg: MLP(
@@ -147,6 +163,78 @@ def _build_actor_critic_defs(
 
     return state_action_critic_def, policy_def
 
+
+def _resolve_env_backend(config: _config.OnlineTrainConfig) -> str:
+    backend = str(getattr(config.collect, "env_backend", "dmc")).strip().lower()
+    if backend not in ("dmc", "libero"):
+        raise ValueError(
+            f"Unsupported collect.env_backend={backend!r}. Expected 'dmc' or 'libero'."
+        )
+    return backend
+
+
+def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
+    env_num = int(config.collect.env_num)
+    add_states = bool(config.collect.add_states)
+    obs_prefix_key = str(config.collect.obs_prefix_key)
+    replan_steps = int(config.collect.replan_steps)
+    discount = float(config.discount)
+    add_per_step_data = bool(config.collect.add_per_step_data)
+
+    env_factories = []
+    for i in range(env_num):
+
+        def _make_env(rank=i):
+            base_env = env_fn(rank)
+            base_env = Pi0ObservationWrapper(
+                env=base_env,
+                env_class="libero",
+                task_description=task_description,
+                add_states=add_states,
+                pi0_obs_prefix=obs_prefix_key,
+            )
+            base_env = QueryFrequencyWrapper(
+                env=base_env,
+                query_frequency=replan_steps,
+                discount=discount,
+                store_full_transitions=add_per_step_data,
+                pre_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+            )
+            return base_env
+
+        env_factories.append(_make_env)
+
+    env = SubprocVectorEnv(env_factories) if env_num > 1 else DummyVectorEnv(env_factories)
+    env.seed(int(config.seed))
+    return env
+
+
+def _build_training_env(config: _config.OnlineTrainConfig):
+    backend = _resolve_env_backend(config)
+    if backend == "libero":
+        env_fn, task_description = make_env_libero(config)
+        env = _wrap_dsrl_env_for_libero(
+            env_fn=env_fn,
+            config=config,
+            task_description=task_description,
+        )
+        return env, task_description
+
+    domain_name = str(getattr(config.collect, "dmc_domain_name", "walker"))
+    task_name = str(getattr(config.collect, "dmc_task_name", "walk"))
+
+    def make_env(seed):
+        return DMCEnv(
+            domain_name=domain_name,
+            task_name=task_name,
+            task_kwargs={"random": seed},
+        )
+
+    env_num = int(config.collect.env_num)
+    env_fns = [functools.partial(make_env, seed=int(config.seed) + i) for i in range(env_num)]
+    env = SubprocVectorEnv(env_fns) if env_num > 1 else DummyVectorEnv(env_fns)
+    return env, ""
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -155,13 +243,7 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
-    def make_env(seed): # cartpole, swingup
-        return DMCEnv(domain_name="walker", task_name="walk", task_kwargs={"random": seed}) #, seed=seed
-
-    env_num = int(config.collect.env_num)
-    env_fns = [functools.partial(make_env, seed=int(config.seed) + i) for i in range(env_num)]
-    env = SubprocVectorEnv(env_fns) if env_num > 1 else DummyVectorEnv(env_fns)
-    task_description = ""
+    env, task_description = _build_training_env(config)
     
     dummy_obs = env.observation_space[0].sample()
     action_space = env.action_space[0]

@@ -1,6 +1,6 @@
 # ruff: noqa: F722
 import dataclasses
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 import flax.nnx as nnx
@@ -10,8 +10,6 @@ import optax
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
-import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig
@@ -77,22 +75,43 @@ def _update_train_state(
 
 
 @at.typecheck
-def summarize_critic_values(critic_values: at.ArrayLike) -> at.Float[at.Array, " b"]:
+def summarize_critic_values(
+    critic_values: at.ArrayLike, reduction: str = "mean"
+) -> at.Float[at.Array, " b"]:
     critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
     if critic_values.ndim > 1:
-        critic_values = jnp.min(critic_values, axis=0)
+        if reduction == "min":
+            critic_values = jnp.min(critic_values, axis=0)
+        elif reduction == "mean":
+            critic_values = jnp.mean(critic_values, axis=0)
+        else:
+            raise ValueError(f"Invalid critic reduction: {reduction}")
     return _as_scalar_batch(critic_values)
-
-
-@at.typecheck
-def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, "b a"]:
-    return values.reshape((values.shape[0], -1))
 
 
 def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
     if isinstance(rng, nnx.Rngs):
         return rng
     return nnx.Rngs(rng)
+
+
+def _get_critic_lr(config: OnlineTrainConfig) -> float:
+    rl = getattr(config, "rl", None)
+    return max(1e-8, float(getattr(rl, "critic_lr", 3e-4)))
+
+
+def get_critic_reduction(config: OnlineTrainConfig) -> str:
+    rl = getattr(config, "rl", None)
+    reduction = str(getattr(rl, "critic_reduction", "mean")).lower()
+    if reduction not in ("min", "mean"):
+        raise ValueError(f"Invalid rl.critic_reduction: {reduction}")
+    return reduction
+
+
+def _backup_entropy_enabled(config: OnlineTrainConfig) -> bool:
+    rl = getattr(config, "rl", None)
+    return bool(getattr(rl, "backup_entropy", False))
+
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
     rl_config = getattr(config, "rl", None)
@@ -111,9 +130,7 @@ def init_state_action_critic_train_state(
     dummy_act: ActionType,
     use_sharding: bool = True,
 ) -> tuple[training_utils.TrainState, Any]:
-    tx = _optimizer.create_optimizer(
-        config.optimizer, config.lr_schedule, weight_decay_mask=None
-    )
+    tx = optax.adam(_get_critic_lr(config))
     ema_decay = _critic_ema_decay(config)
 
     # Normalize dummy inputs for shape inference / init.
@@ -171,6 +188,9 @@ def train_q_step(
     batch: CriticBatch,
     alpha: at.Float[at.ArrayLike, ""] | float,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
+    critic_reduction = get_critic_reduction(config)
+    backup_entropy = _backup_entropy_enabled(config)
+
     # ── online Q model (will receive gradients) ──────────────────────────
     q_model = nnx.merge(q_state.model_def, q_state.params)
     q_model.train()
@@ -213,9 +233,16 @@ def train_q_step(
     alpha = jnp.asarray(alpha, dtype=jnp.float32)
 
     # ── compute TD targets (everything stop-gradiented) ──────────────────
-    target_q_next = summarize_critic_values(q_target_model(next_observation, next_actions))
+    target_q_next = summarize_critic_values(
+        q_target_model(next_observation, next_actions), reduction=critic_reduction
+    )
     entropy_bonus = -alpha * next_log_probs
-    td_targets = jax.lax.stop_gradient(reward + discount * (target_q_next + entropy_bonus))
+    if backup_entropy:
+        td_targets = jax.lax.stop_gradient(
+            reward + discount * (target_q_next + entropy_bonus)
+        )
+    else:
+        td_targets = jax.lax.stop_gradient(reward + discount * target_q_next)
 
     # ── loss only differentiates through q_model ─────────────────────────
     @at.typecheck
@@ -225,16 +252,23 @@ def train_q_step(
         actions: _model.Actions,
         td_targets: at.Float[at.Array, " b"],
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        q_values = summarize_critic_values(critic_model(observation, actions))
-        td_errors = q_values - td_targets
+        q_values_all = jnp.asarray(critic_model(observation, actions), dtype=jnp.float32)
+        if q_values_all.ndim == 1:
+            q_values_all = q_values_all[jnp.newaxis, :]
+        td_errors = q_values_all - td_targets[jnp.newaxis, :]
         loss = jnp.mean(jnp.square(td_errors))
+        q_values_reduced = summarize_critic_values(
+            q_values_all, reduction=critic_reduction
+        )
         return loss, {
             "alpha": alpha,
             "td_error_mean": jnp.mean(td_errors),
-            "q_value_mean": jnp.mean(q_values),
+            "q_value_mean": jnp.mean(q_values_all),
+            "q_value_reduced_mean": jnp.mean(q_values_reduced),
             "td_target_mean": jnp.mean(td_targets),
             "entropy_bonus_mean": jnp.mean(entropy_bonus),
             "next_log_prob_mean": jnp.mean(next_log_probs),
+            "target_actor_entropy": -jnp.mean(next_log_probs),
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)

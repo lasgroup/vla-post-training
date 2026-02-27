@@ -20,6 +20,17 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
+def _supports_shift_window(observation: dict[str, Any], next_observation: dict[str, Any]) -> bool:
+    leaves_obs = jax.tree_util.tree_leaves(observation)
+    leaves_next = jax.tree_util.tree_leaves(next_observation)
+    if not leaves_obs or not leaves_next or len(leaves_obs) != len(leaves_next):
+        return False
+    return all(
+        np.asarray(curr).ndim >= 3 and np.asarray(nxt).ndim >= 3
+        for curr, nxt in zip(leaves_obs, leaves_next)
+    )
+
+
 def collect_data(
     agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
 ):
@@ -47,7 +58,7 @@ def collect_data(
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 
-            if config.collect.add_per_step_data:
+            if config.collect.add_per_step_data and _supports_shift_window(obs, next_obs):
                 aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
             else:
                 aligned_obs = obs
@@ -62,9 +73,9 @@ def collect_data(
             }
             agent.add_data(step_data)
 
-            if config.collect.add_per_step_data and False: # TODO: Change back after test
-                current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
-                current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
+            if config.collect.add_per_step_data and np.asarray(terminate).ndim > 1:
+                current_terminate = np.asarray(terminate)[:, -1]
+                current_truncate = np.asarray(truncate)[:, -1]
             else:
                 current_terminate, current_truncate = terminate, truncate
 

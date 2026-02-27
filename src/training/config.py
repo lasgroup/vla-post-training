@@ -19,6 +19,12 @@ USER = os.getenv("USER")
 
 @dataclasses.dataclass(frozen=True)
 class CollectionConfig:
+    # Environment backend used by scripts/train_online_with_dsrl_agent.py.
+    # Supported: "dmc", "libero".
+    env_backend: str = "dmc"
+    # DMC task selection (used when env_backend == "dmc").
+    dmc_domain_name: str = "walker"
+    dmc_task_name: str = "walk"
     collect_interval: int = 200
     env_num: int = 4
     env_resolution: int = 256
@@ -40,17 +46,16 @@ class OnlineDataConfig(DataConfig):
 
 @dataclasses.dataclass(frozen=True)
 class SACConfig:
-    # Number of critic updates per learner step (UTD ratio).
-    utd_ratio: int = 1
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    critic_reduction: str = "mean"
+    backup_entropy: bool = False
     critic_update_frequency: int = 1
     actor_update_frequency: int = 1
-    # SAC target network EMA ~= (1 - tau). tau=0.005 -> ema_decay=0.995
     critic_ema_decay: float | None = 0.995
-    # Entropy coefficient settings.
     autotune_alpha: bool = True
-    init_alpha: float = 0.1
+    init_alpha: float = 1.0
     alpha_lr: float = 3e-4
-    # "auto" uses -|A|, the standard SAC default.
     target_entropy: str | float = "auto"
 
 

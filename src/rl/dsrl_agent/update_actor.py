@@ -22,16 +22,15 @@ import jax.numpy as jnp
 import optax
 
 import openpi.shared.array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig
 from src.rl.dsrl_agent.update_critic import (
     flatten_action_horizon,
+    get_critic_reduction,
     summarize_critic_values,
 )
 from collections.abc import Callable
 from src.rl.networks.rl_networks import ObsType, ActionType, Policy
-import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 
 PolicyDef = Callable[[ObsType, ActionType, nnx.Rngs], Policy]
@@ -41,6 +40,12 @@ def _ensure_rngs(rng: at.KeyArrayLike | nnx.Rngs) -> nnx.Rngs:
     if isinstance(rng, nnx.Rngs):
         return rng
     return nnx.Rngs(rng)
+
+
+def _get_actor_lr(config: OnlineTrainConfig) -> float:
+    rl = getattr(config, "rl", None)
+    return max(1e-8, float(getattr(rl, "actor_lr", 3e-4)))
+
 
 def init_policy_state(
     config: OnlineTrainConfig,
@@ -52,9 +57,7 @@ def init_policy_state(
     dummy_act: ActionType,
     use_sharding: bool = True,
 ) -> tuple[training_utils.TrainState, Any]:
-    tx = _optimizer.create_optimizer(
-        config.optimizer, config.lr_schedule, weight_decay_mask=None
-    )
+    tx = optax.adam(_get_actor_lr(config))
     ema_decay = None  # or pull from config if you want EMA on the actor
 
     dummy_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
@@ -140,11 +143,12 @@ def train_actor_step(
     alpha: at.Float[at.ArrayLike, ""] | float,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     alpha = jnp.asarray(alpha, dtype=jnp.float32)
+    critic_reduction = get_critic_reduction(config)
 
     # ── rebuild models ───────────────────────────────────────────────────
     actor = nnx.merge(actor_state.model_def, actor_state.params)
     actor.train()
-    q_params = q_state.ema_params if q_state.ema_params is not None else q_state.params
+    q_params = q_state.params
     q_model_def = q_state.model_def
 
     # ── loss: E_{a~π}[ α log π(a|s) − Q(s,a) ] ─────────────────────────
@@ -168,7 +172,9 @@ def train_actor_step(
             
         q_model = nnx.merge(q_model_def, q_params)
         q_model.eval()
-        q_values = summarize_critic_values(q_model(observation, flat_actions))
+        q_values = summarize_critic_values(
+            q_model(observation, flat_actions), reduction=critic_reduction
+        )
 
         entropy_term = alpha * log_probs        # (B,)
         actor_loss = jnp.mean(entropy_term - q_values)
@@ -177,6 +183,7 @@ def train_actor_step(
             "alpha": alpha,
             "entropy_term_mean": jnp.mean(entropy_term),
             "log_prob_mean": jnp.mean(log_probs),
+            "entropy": -jnp.mean(log_probs),
             "q_value_mean": jnp.mean(q_values),
             "action_mean": jnp.mean(jnp.abs(actions)),
             "action_std": jnp.std(actions),
