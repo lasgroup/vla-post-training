@@ -319,8 +319,8 @@ class FilteredSFTLearner(Agent):
         obs_spec_dict = obs_spec.to_dict()
         dummy_obs_dict = jax.tree.map(lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict)
         dummy_obs_dict = {k: v for k, v in dummy_obs_dict.items() if v is not None}
-        dummy_obs_dict["image"] = jax.tree.map(lambda v: v.astype(np.uint8), dummy_obs_dict["image"])
-        transition_state_dim = int(obs_spec_dict["state"].shape[-1])
+        if "image" in dummy_obs_dict:
+            dummy_obs_dict["image"] = jax.tree.map(lambda v: v.astype(np.uint8), dummy_obs_dict["image"])
         dummy_data = {
                 "observation": dummy_obs_dict,
                 "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
