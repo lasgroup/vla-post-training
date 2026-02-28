@@ -330,9 +330,36 @@ def main(config: _config.OnlineTrainConfig):
             obs_action = action_from_obs[0:1]
 
     if backend == "libero":
-        # DSRLVectorEnv-style wrappers expose previous action chunks in reset obs.
-        # Prefer that shape when available, otherwise fall back to config/model specs.
-        if obs_action is not None:
+        # When using DSRLVectorEnv, the learner should emit policy noise
+        # (H, action_dim) expected by env.step(...), not environment actions.
+        if isinstance(env, DSRLVectorEnv):
+            policy = getattr(env, "_policy", None)
+            if policy is not None:
+                action_horizon = int(getattr(policy, "action_horizon"))
+                action_dim = int(getattr(policy, "action_dim"))
+                dummy_act = jnp.zeros(
+                    (1, action_horizon, action_dim), dtype=jnp.float32
+                )
+                logging.info(
+                    "Using DSRLVectorEnv policy noise shape for DSRL init: "
+                    "(horizon=%d, action_dim=%d).",
+                    action_horizon,
+                    action_dim,
+                )
+            else:
+                action_horizon = int(getattr(config.model, "action_horizon", 10))
+                action_dim = int(getattr(config.model, "action_dim", 32))
+                dummy_act = jnp.zeros(
+                    (1, action_horizon, action_dim), dtype=jnp.float32
+                )
+                logging.warning(
+                    "DSRLVectorEnv policy not found; using model fallback noise shape "
+                    "(horizon=%d, action_dim=%d).",
+                    action_horizon,
+                    action_dim,
+                )
+        # Otherwise (e.g. DummyVectorEnv path), use environment action chunks.
+        elif obs_action is not None:
             dummy_act = jnp.asarray(obs_action, dtype=jnp.float32)
             logging.info(
                 "Using action chunk from reset observation for DSRL init: shape=%s",
