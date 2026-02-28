@@ -299,6 +299,27 @@ def _build_training_env(config: _config.OnlineTrainConfig):
     env = SubprocVectorEnv(env_fns) if env_num > 1 else DummyVectorEnv(env_fns)
     return env, ""
 
+
+def _configure_dsrl_vector_env(env: Any) -> None:
+    """Adjust runtime settings for DSRLVectorEnv in online collection.
+
+    During collection we reset individual env ids; that produces batch size 1
+    observations. A batch-sharded policy spec (PartitionSpec("batch")) fails
+    for these partial resets when device count > 1. Use replicated sharding.
+    """
+    if not isinstance(env, DSRLVectorEnv):
+        return
+    sharding_spec = getattr(env, "_policy_sharding_spec", None)
+    if sharding_spec is None:
+        return
+    env._policy_sharding_spec = jax.sharding.NamedSharding(
+        sharding_spec.mesh,
+        jax.sharding.PartitionSpec(),
+    )
+    logging.info(
+        "Configured DSRLVectorEnv policy sharding to replicated for per-env resets."
+    )
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -309,6 +330,7 @@ def main(config: _config.OnlineTrainConfig):
         )
     backend = _resolve_env_backend(config)
     env, task_description = _build_training_env(config)
+    _configure_dsrl_vector_env(env)
 
     # Dummy observation and action
     reset_out = env.reset()
