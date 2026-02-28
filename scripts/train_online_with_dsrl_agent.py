@@ -64,6 +64,7 @@ from src.rl.dsrl_agent.update_actor import (
 from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.policies.learned_std_normal_policy import (
+    LearnedStdNormalPolicyDecoder,
     LearnedStdTanhNormalPolicyDecoder,
 )
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
@@ -91,6 +92,8 @@ def _build_actor_critic_defs(
     config: _config.OnlineTrainConfig,
     action_low: jax.Array,
     action_high: jax.Array,
+    *,
+    policy_distribution: str,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
     critic_encoder_hidden_dims = tuple(
         _get_rl_attr(config, "critic_encoder_hidden_dims", ())
@@ -133,14 +136,26 @@ def _build_actor_critic_defs(
 
     def policy_decoder_def(
         embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
-    ) -> LearnedStdTanhNormalPolicyDecoder:
-        return LearnedStdTanhNormalPolicyDecoder(
-            observation=embedding,
-            action=action,
-            hidden_dims=policy_decoder_hidden_dims,
-            low=action_low,
-            high=action_high,
-            rngs=rngs,
+    ):
+        if policy_distribution == "normal":
+            return LearnedStdNormalPolicyDecoder(
+                observation=embedding,
+                action=action,
+                hidden_dims=policy_decoder_hidden_dims,
+                rngs=rngs,
+            )
+        if policy_distribution == "tanh_normal":
+            return LearnedStdTanhNormalPolicyDecoder(
+                observation=embedding,
+                action=action,
+                hidden_dims=policy_decoder_hidden_dims,
+                low=action_low,
+                high=action_high,
+                rngs=rngs,
+            )
+        raise ValueError(
+            f"Unsupported policy distribution {policy_distribution!r}. "
+            "Expected 'normal' or 'tanh_normal'."
         )
 
     def state_action_critic_def(
@@ -174,6 +189,21 @@ def _resolve_env_backend(config: _config.OnlineTrainConfig) -> str:
             f"Unsupported collect.env_backend={backend!r}. Expected 'dmc' or 'libero'."
         )
     return backend
+
+
+def _resolve_policy_distribution(
+    config: _config.OnlineTrainConfig, backend: str
+) -> str:
+    configured = str(_get_rl_attr(config, "policy_distribution", "auto")).strip().lower()
+    if configured == "auto":
+        # LIBERO uses Pi0 noise-space policy decoding, which should stay unbounded.
+        return "normal" if backend == "libero" else "tanh_normal"
+    if configured in ("normal", "tanh_normal"):
+        return configured
+    raise ValueError(
+        f"Unsupported rl.policy_distribution={configured!r}. "
+        "Expected 'auto', 'normal', or 'tanh_normal'."
+    )
 
 
 def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
@@ -421,7 +451,14 @@ def main(config: _config.OnlineTrainConfig):
         action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
         action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
     
-    state_action_critic_def, policy_def = _build_actor_critic_defs(config, action_low=action_low, action_high=action_high)
+    policy_distribution = _resolve_policy_distribution(config, backend)
+    logging.info("DSRL actor policy distribution: %s", policy_distribution)
+    state_action_critic_def, policy_def = _build_actor_critic_defs(
+        config,
+        action_low=action_low,
+        action_high=action_high,
+        policy_distribution=policy_distribution,
+    )
 
     agent = DSRLLearner(config=config, 
                         dummy_obs=dummy_obs,

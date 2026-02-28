@@ -62,6 +62,11 @@ class SACConfig:
     init_alpha: float = 1.0
     alpha_lr: float = 3e-4
     target_entropy: str | float = "auto"
+    # Actor distribution used by DSRL policy decoder.
+    # - "auto": normal for LIBERO, tanh_normal otherwise
+    # - "normal": unbounded Gaussian with learned std
+    # - "tanh_normal": tanh-squashed Gaussian with learned std
+    policy_distribution: str = "auto"
 
 
 @dataclasses.dataclass(frozen=True)
