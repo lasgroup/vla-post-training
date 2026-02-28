@@ -41,6 +41,18 @@ def normalize_action_batch_shape(
         return actions
     if actions.ndim >= 2 and np.prod(actions.shape[1:]) == np.prod(expected_shape):
         return actions.reshape((actions.shape[0], *expected_shape))
+    # Fallback for chunked environments: if the policy emits one action per env
+    # (B, A) but the wrapped env expects (B, H, A), repeat across the horizon.
+    if (
+        actions.ndim == 2
+        and len(expected_shape) >= 2
+        and actions.shape[-1] == expected_shape[-1]
+    ):
+        repeated = np.repeat(actions[:, None, :], expected_shape[0], axis=1)
+        if tuple(repeated.shape[1:]) == expected_shape:
+            return repeated
+        if np.prod(repeated.shape[1:]) == np.prod(expected_shape):
+            return repeated.reshape((actions.shape[0], *expected_shape))
     return actions
 
 

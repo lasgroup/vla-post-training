@@ -243,18 +243,38 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
+    backend = _resolve_env_backend(config)
     env, task_description = _build_training_env(config)
-    
-    dummy_obs = env.observation_space[0].sample()
-    action_space = env.action_space[0]
-    dummy_act = action_space.sample()
-    action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
-    action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
+
+    reset_out = env.reset()
+    if isinstance(reset_out, (tuple, list)) and len(reset_out) == 2:
+        obs_batch = reset_out[0]
+    else:
+        obs_batch = reset_out
+    # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(
-        lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
-        dummy_obs,
+        lambda x: jnp.asarray(x, dtype=jnp.float32)[0:1],
+        obs_batch,
     )
-    dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)[None, ...]
+
+    if backend == "libero":
+        # Avoid querying wrapper action_space during init. Infer shape from env attrs.
+        action_dim_raw = env.get_env_attr("action_dim", id=0)[0]
+        if action_dim_raw is None:
+            raise RuntimeError(
+                "Failed to infer LIBERO action_dim from environment during DSRL init."
+            )
+        action_dim = int(action_dim_raw)
+        action_horizon = int(config.collect.replan_steps)
+        dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
+        # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
+        action_low = jnp.asarray(-1.0, dtype=jnp.float32)
+        action_high = jnp.asarray(1.0, dtype=jnp.float32)
+    else:
+        action_space = env.action_space[0]
+        dummy_act = jnp.asarray(action_space.sample(), dtype=jnp.float32)[None, ...]
+        action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
+        action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
     state_action_critic_def, policy_def = _build_actor_critic_defs(
         config, action_low=action_low, action_high=action_high
     )
