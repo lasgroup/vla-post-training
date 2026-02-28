@@ -222,7 +222,6 @@ def _kernel_param_norm(model: nnx.Module) -> at.Float[at.Array, ""]:
 def train_q_step(
     config: OnlineTrainConfig,
     rng: at.KeyArrayLike,
-    step: at.Int[at.Array, ""],
     q_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
     batch: CriticBatch,
@@ -232,12 +231,13 @@ def train_q_step(
     q_model.train()
     value_model = create_critic(value_state, config)
     value_model.eval()
-
+    step = q_state.step
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
+    assert isinstance(config.rl, BestofNLearnerConfig)
 
     @at.typecheck
     def loss_fn(
@@ -262,12 +262,17 @@ def train_q_step(
         td_errors = q_values - td_targets
         mc_errors = q_values - mc_return
         td_weight = config.rl.td_weight_schedule.create()(step)
-        loss = td_weight * jnp.mean(jnp.square(td_errors)) + (1 - td_weight) * jnp.mean(jnp.square(mc_errors))
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
+        td_loss = jnp.mean(jnp.square(td_errors))
+        mc_loss = jnp.mean(jnp.square(mc_errors))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
-            "td_error_mean": jnp.mean(td_errors),
+            # "td_error_mean": jnp.mean(td_errors),
             "value_mean": jnp.mean(q_values),
-            "td_target_mean": jnp.mean(td_targets),
-            "mc_error_mean": jnp.mean(mc_errors),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            # "td_target_mean": jnp.mean(td_targets),
+            # "mc_error_mean": jnp.mean(mc_errors),
             "td_weight": td_weight,
         }
 
@@ -298,33 +303,54 @@ def train_value_step(
     config: OnlineTrainConfig,
     rng: at.KeyArrayLike,
     value_state: training_utils.TrainState,
+    q_state: training_utils.TrainState,
     batch: CriticBatch,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    del rng, config
+    del rng
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    step = value_state.step
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
-    observation, _, _, _, _, mc_return = batch
+    q_model = create_critic(q_state, config)
+    q_model.eval()
+
+    observation, actions, _, _, _, mc_return = batch
+
+    actions = flatten_action_horizon(actions)
     mc_return = _as_scalar_batch(mc_return)
 
     @at.typecheck
     def loss_fn(
         critic_model: StateValue,
         observation: ObsType,
+        actions: _model.Actions,
         mc_return: at.Float[at.ArrayLike, " b"],
+        target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        td_weight = config.rl.td_weight_schedule.create()(step)
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
         values = critic_model(observation)
+        q_values = summarize_critic_values(
+            target_q_model(observation, actions),
+            critic_reduction=config.rl.critic_reduction,
+        )
         mc_errors = values - mc_return
-        loss = jnp.mean(jnp.square(mc_errors))
+        td_error = values - q_values
+        td_loss = jnp.mean(jnp.square(td_error))
+        mc_loss = jnp.mean(jnp.square(mc_errors))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
             "value_mean": jnp.mean(values),
-            "value_mc_error_mean": jnp.mean(mc_errors),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            "td_weight": td_weight,
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
-    )(value_model, observation, mc_return)
+    )(value_model, observation, actions, mc_return, q_model)
     new_state = _update_train_state(value_state, value_model, grads)
     info = {
         "loss": loss,

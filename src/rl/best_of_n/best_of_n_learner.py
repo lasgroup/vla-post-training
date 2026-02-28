@@ -284,6 +284,21 @@ class BestofNLearner(FilteredSFTLearner):
         best_actions = all_actions[np.arange(env_num), best_idx]  # [env_num, horizon, dim]
         return np.asarray(best_actions, dtype=np.float32)
 
+    @at.typecheck
+    def _get_on_policy_action(
+            self,
+            online_observation: _model.Observation,
+            policy_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> _model.Actions:
+        model = self._get_policy_model(policy_state)
+        sampled_actions = model.sample_actions(
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
+        )
+        return sampled_actions
         
     @at.typecheck
     def _update_critics(
@@ -299,6 +314,18 @@ class BestofNLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
+        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
+        if self._config.rl.train_on_policy_value_function:
+            # We replace the action from the batch with the on policy action
+            # This ensures that we train an on policy critic.
+            policy_sample_rng, rng = jax.random.split(rng, 2)
+            value_actions = self._get_on_policy_action(
+                online_observation=_model.Observation.from_dict(batch["observation"]),
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
+        else:
+            value_actions = batch["actions"]
         # Add prefix representation to the batch for the critic
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -306,14 +333,15 @@ class BestofNLearner(FilteredSFTLearner):
         )
         
         # Update the state action critic state
-        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
         num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+
+        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4])
+
         for _ in range(num_updates):
             q_rng, v_rng = jax.random.split(rng, 2)
             # Update the state action critic state
             q_state, q_info = self._q_train_step(
                 q_rng,
-                q_state.step,
                 q_state,
                 value_state,
                 batch,
@@ -322,7 +350,8 @@ class BestofNLearner(FilteredSFTLearner):
             value_state, value_info = self._value_train_step(
                 v_rng,
                 value_state,
-                batch,
+                q_state,
+                value_batch,
             )
 
         return q_state, value_state, q_info, value_info
