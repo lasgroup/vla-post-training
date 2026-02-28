@@ -194,6 +194,27 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
         def __init__(self, env: gym.Env):
             super().__init__(env)
             self._last_action_chunk: np.ndarray | None = None
+            self._action_horizon = int(replan_steps)
+            self._action_dim = self._infer_action_dim()
+
+        def _infer_action_dim(self) -> int:
+            # Avoid QueryFrequencyWrapper.action_space (currently broken). Read
+            # single-step action dims from the unwrapped/base env instead.
+            default_dim = int(getattr(config.collect, "libero_action_dim", 7))
+            base_env = getattr(self.env, "unwrapped", None)
+            if base_env is not None:
+                base_action_space = getattr(base_env, "action_space", None)
+                if (
+                    base_action_space is not None
+                    and hasattr(base_action_space, "shape")
+                    and base_action_space.shape is not None
+                    and len(base_action_space.shape) > 0
+                ):
+                    return int(base_action_space.shape[-1])
+                action_dim_attr = getattr(base_env, "action_dim", None)
+                if action_dim_attr is not None:
+                    return int(action_dim_attr)
+            return default_dim
 
         def _wrap_obs(self, obs: dict[str, Any], action_chunk: np.ndarray) -> dict[str, Any]:
             return {
@@ -203,15 +224,19 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
 
         def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
             obs, info = self.env.reset(seed=seed, options=options)
-            # QueryFrequencyWrapper expands action_space to (H, action_dim).
-            action_template = np.asarray(self.env.action_space.sample(), dtype=np.float32)
-            action_template[...] = 0.0
+            action_template = np.zeros(
+                (self._action_horizon, self._action_dim), dtype=np.float32
+            )
             self._last_action_chunk = action_template
             return self._wrap_obs(obs, action_template), info
 
         def step(self, action):
             obs, reward, terminated, truncated, info = self.env.step(action)
             action_chunk = np.asarray(action, dtype=np.float32)
+            if action_chunk.ndim == 1:
+                action_chunk = np.repeat(
+                    action_chunk[None, ...], self._action_horizon, axis=0
+                )
             self._last_action_chunk = action_chunk
             return self._wrap_obs(obs, action_chunk), reward, terminated, truncated, info
 
