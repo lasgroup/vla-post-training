@@ -146,14 +146,9 @@ def init_train_state(
 
 class DSRLVectorEnv(SubprocVectorEnv):
     """Vectorized environment wrapper based on subprocess for DSRL."""
-    def __init__(
-        self,
-        env_fns: List[Callable[[], gym.Env]],
-        config: Any | None = None,
-        **kwargs: Any,
-    ) -> None:
+    def __init__(self, env_fns: List[Callable[[], gym.Env]], **kwargs: Any) -> None:
         super().__init__(env_fns, **kwargs)
-        self._config = _env_config if config is None else config
+        self._config = _env_config
         self._rng = jax.random.key(self._config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
 

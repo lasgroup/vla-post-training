@@ -25,18 +25,14 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
-from src.rl.filtered_sft_agent.update import train_step
+from rl.dsrl_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
-from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv, init_train_state
-from src.rl.dsrl_agent.env_config_utils import (
-    build_pre_step_filter,
-    resolve_dsrl_env_config,
-)
+from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv
 from src.rl.agent import Agent, EnvFn
 
 
@@ -52,10 +48,15 @@ def get_env_and_agent_for_dsrl(env_fn, config, task_description, env_class):
 
 
 def dsrl_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
-    env_cfg = resolve_dsrl_env_config(config)
-    pre_step_filter = build_pre_step_filter(env_cfg)
+    env_num = config.collect.env_num
+    add_states = config.collect.add_states
+    obs_prefix_key = config.collect.obs_prefix_key
+    replan_steps = config.collect.replan_steps
+    seed = config.seed
+    discount = config.discount
+    add_per_step_data = config.collect.add_per_step_data
     env_factories = []
-    for i in range(env_cfg.env_num):
+    for i in range(env_num):
 
         def _make_env(rank=i):
             # Create the base environment
@@ -65,28 +66,30 @@ def dsrl_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
-                add_states=env_cfg.add_states,
-                pi0_obs_prefix=env_cfg.obs_prefix_key,
+                add_states=add_states,
+                pi0_obs_prefix=obs_prefix_key,
             )
             # Add query frequency wrapper to rollout action chunks
             base_env = QueryFrequencyWrapper(
                 env=base_env,
-                query_frequency=env_cfg.replan_steps,
-                discount=env_cfg.discount,
-                store_full_transitions=env_cfg.add_per_step_data,
-                pre_step_filter=pre_step_filter,
+                query_frequency=replan_steps,
+                discount=discount,
+                store_full_transitions=add_per_step_data,
+                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
 
         env_factories.append(_make_env)
 
     env = (
-        DSRLVectorEnv(env_factories, config=config)
-        if env_cfg.env_num > 1
+        DSRLVectorEnv(env_factories)
+        if env_num > 1
         else DummyVectorEnv(env_factories)
     )
     # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
-    env.seed(env_cfg.seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    env.seed(
+        seed
+    )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     # re-use training seed
     return env
 
@@ -193,13 +196,11 @@ class DSRLLearner(FilteredSFTLearner):
 
         self._policy = self._create_trained_policy(
             self._config,
-            policy_checkpoint_dir,
         )
         
-    def _create_trained_policy(
-        self, config: OnlineTrainConfig, policy_checkpoint_dir: str | os.PathLike[str]
-    ):
-        return policy_config.create_trained_policy(config, policy_checkpoint_dir)
+    def _create_trained_policy(self, config: OnlineTrainConfig):
+        # TODO: implement a simple MLP policy for DSRL
+        raise NotImplementedError
         
     def _sample_action(
         self,
@@ -226,7 +227,7 @@ class DSRLLearner(FilteredSFTLearner):
             # noise=noise,
             sharding_spec=self._policy_sharding_spec,
         )["noises"]
-        if batch_actions and noises.ndim == 2:
+        if batch_noises and noises.ndim == 2:
             noises = noises[np.newaxis, ...]
         return noises
 

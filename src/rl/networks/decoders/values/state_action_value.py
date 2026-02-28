@@ -34,12 +34,6 @@ class StateActionValueDecoder(nnx.Module):
 
     @staticmethod
     def _prepare_inputs(observations: jnp.ndarray, actions: jnp.ndarray):
-        # For chunked observations (e.g. (B, H, F...)), flatten non-batch
-        # dimensions to keep critic input as (B, feature_dim).
-        if observations.ndim > 2:
-            observations = observations.reshape((observations.shape[0], -1))
-        if actions.ndim > 2:
-            actions = actions.reshape((actions.shape[0], -1))
         input = jnp.concatenate([observations, actions], axis=-1)
         return input
 

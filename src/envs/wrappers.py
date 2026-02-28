@@ -146,28 +146,20 @@ class QueryFrequencyWrapper(gym.Wrapper):
     def return_full_transitions(self) -> bool:
         return self._store_full_transitions
 
+    @property
     def expand_space(self, space):
-        # Recursively expand spaces to include a leading query-frequency axis.
+        # We define a function to expand a single space leaf (e.g., a Box)
         if isinstance(space, gym.spaces.Box):
+            # Expand Box: Shape becomes (query_frequency, *original_shape)
+            # We repeat the low/high bounds to match the new shape
             return gym.spaces.Box(
                 low=np.repeat(space.low[None, ...], self._query_frequency, axis=0),
                 high=np.repeat(space.high[None, ...], self._query_frequency, axis=0),
                 dtype=space.dtype,
             )
-        elif isinstance(space, gym.spaces.Dict):
-            return gym.spaces.Dict(
-                {k: self.expand_space(v) for k, v in space.spaces.items()}
-            )
-        elif isinstance(space, gym.spaces.Tuple):
-            return gym.spaces.Tuple(tuple(self.expand_space(v) for v in space.spaces))
         elif isinstance(space, gym.spaces.Discrete):
+            # Expand Discrete: Becomes MultiDiscrete with 'query_frequency' dimensions
             return gym.spaces.MultiDiscrete([space.n] * self._query_frequency)
-        elif isinstance(space, gym.spaces.MultiDiscrete):
-            nvec = np.asarray(space.nvec)
-            nvec = np.repeat(nvec[None, ...], self._query_frequency, axis=0).reshape(-1)
-            return gym.spaces.MultiDiscrete(nvec)
-        elif isinstance(space, gym.spaces.MultiBinary):
-            return gym.spaces.MultiBinary((self._query_frequency, *space.shape))
         else:
             raise NotImplementedError(
                 f"Space type {type(space)} not supported for expansion."
@@ -175,12 +167,14 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
     @property
     def action_space(self):
-        return self.expand_space(self.env.action_space)
+        return jax.tree_util.tree_map(self.expand_space, self.env.action_space)
 
     @property
     def observation_space(self):
         if self._store_full_transitions:
-            obs_space = self.expand_space(self.env.observation_space)
+            obs_space = jax.tree_util.tree_map(
+                self.expand_space, self.env.observation_space
+            )
         else:
             obs_space = self.env.observation_space
         return obs_space
@@ -215,7 +209,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
             sub_action = self._pre_step_filter(sub_action)
-            sub_action = self._align_action_to_space(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
             data.append(
                 {
@@ -244,34 +237,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
                 break
 
         return self.step_response(data)
-
-    def _align_action_to_space(self, action):
-        """Reshape/squeeze action leaves to match the wrapped env action space."""
-        action_space = self.env.action_space
-        if isinstance(action_space, gym.spaces.Box):
-            arr = np.asarray(action, dtype=action_space.dtype)
-            action_dim = getattr(self.env, "action_dim", None)
-            if action_dim is not None:
-                flat = np.squeeze(arr).reshape(-1)
-                if flat.size == int(action_dim):
-                    return flat.astype(action_space.dtype, copy=False)
-                if flat.size % int(action_dim) == 0:
-                    return flat.reshape((-1, int(action_dim)))[0].astype(
-                        action_space.dtype, copy=False
-                    )
-            if arr.shape == action_space.shape:
-                return arr
-            # Common case with chunked policies: extra singleton dimensions
-            squeezed = np.squeeze(arr)
-            target_size = int(np.prod(action_space.shape, dtype=np.int64))
-            if squeezed.ndim == 1 and squeezed.size == target_size:
-                return squeezed.astype(action_space.dtype, copy=False)
-            if squeezed.size == target_size:
-                return squeezed.reshape(action_space.shape).astype(
-                    action_space.dtype, copy=False
-                )
-            return arr
-        return action
 
     def step_response(self, data: List[Dict]):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)

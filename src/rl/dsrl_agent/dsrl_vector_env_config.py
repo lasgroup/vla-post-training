@@ -27,7 +27,6 @@ class EnvCollectionConfig:
     num_steps_wait: int = 10
     add_per_step_data: bool = True
     obs_prefix_key: str = "pi0"
-    action_deadzone: float = 0.0011
 
 
 @dataclasses.dataclass(frozen=True)

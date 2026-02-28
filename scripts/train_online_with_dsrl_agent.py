@@ -71,10 +71,6 @@ from src.envs.libero import make_env_libero
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
 
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.rl.dsrl_agent.env_config_utils import (
-    build_pre_step_filter,
-    resolve_dsrl_env_config,
-)
 import src.training.config as _config
 from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
@@ -178,11 +174,15 @@ def _resolve_env_backend(config: _config.OnlineTrainConfig) -> str:
 
 
 def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
-    env_cfg = resolve_dsrl_env_config(config)
-    pre_step_filter = build_pre_step_filter(env_cfg)
+    env_num = int(config.collect.env_num)
+    add_states = bool(config.collect.add_states)
+    obs_prefix_key = str(config.collect.obs_prefix_key)
+    replan_steps = int(config.collect.replan_steps)
+    discount = float(config.discount)
+    add_per_step_data = bool(config.collect.add_per_step_data)
 
     env_factories = []
-    for i in range(env_cfg.env_num):
+    for i in range(env_num):
 
         def _make_env(rank=i):
             base_env = env_fn(rank)
@@ -190,26 +190,22 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
                 env=base_env,
                 env_class="libero",
                 task_description=task_description,
-                add_states=env_cfg.add_states,
-                pi0_obs_prefix=env_cfg.obs_prefix_key,
+                add_states=add_states,
+                pi0_obs_prefix=obs_prefix_key,
             )
             base_env = QueryFrequencyWrapper(
                 env=base_env,
-                query_frequency=env_cfg.replan_steps,
-                discount=env_cfg.discount,
-                store_full_transitions=env_cfg.add_per_step_data,
-                pre_step_filter=pre_step_filter,
+                query_frequency=replan_steps,
+                discount=discount,
+                store_full_transitions=add_per_step_data,
+                pre_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
 
         env_factories.append(_make_env)
 
-    env = (
-        SubprocVectorEnv(env_factories)
-        if env_cfg.env_num > 1
-        else DummyVectorEnv(env_factories)
-    )
-    env.seed(env_cfg.seed)
+    env = SubprocVectorEnv(env_factories) if env_num > 1 else DummyVectorEnv(env_factories)
+    env.seed(int(config.seed))
     return env
 
 
@@ -252,12 +248,8 @@ def main(config: _config.OnlineTrainConfig):
     dummy_obs = env.observation_space[0].sample()
     action_space = env.action_space[0]
     dummy_act = action_space.sample()
-    # LearnedStdTanhNormalPolicyDecoder uses TFP bijectors that expect scalar
-    # (or simple per-dim) bounds. QueryFrequencyWrapper expands action space
-    # with extra rollout axes, which can trigger TFP broadcast-shape errors.
-    # Use global scalar bounds; env-side clipping still enforces exact limits.
-    action_low = jnp.asarray(float(np.min(action_space.low)), dtype=jnp.float32)
-    action_high = jnp.asarray(float(np.max(action_space.high)), dtype=jnp.float32)
+    action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
+    action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
     dummy_obs = jax.tree.map(
         lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
         dummy_obs,

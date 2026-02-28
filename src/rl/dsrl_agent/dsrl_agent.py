@@ -29,6 +29,12 @@ from src.rl.dsrl_agent.update_critic import (
     init_state_action_critic_train_state,
     train_q_step,
 )
+from src.rl.dsrl_agent.chunk_ops import (
+    expected_chunk_action_shape,
+    normalize_action_batch_shape,
+    normalize_observation_for_model,
+    reduce_chunk_transition,
+)
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -96,9 +102,10 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
-        dummy_obs = self._normalize_observation_for_model(dummy_obs)
+        dummy_obs = normalize_observation_for_model(dummy_obs)
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
+        self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
 
         q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(
@@ -162,64 +169,58 @@ class DSRLLearner(Agent):
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
 
-    @staticmethod
-    def _normalize_observation_for_model(observations: Any) -> Any:
-        if not isinstance(observations, dict):
-            return observations
-        if "state" not in observations:
-            return observations
-        state = jnp.asarray(observations["state"], dtype=jnp.float32)
-        if state.ndim >= 3:
-            leading = state.shape[:2]
-            tail = tuple(dim for dim in state.shape[2:] if dim != 1)
-            if not tail:
-                tail = (1,)
-            state = jnp.reshape(state, (*leading, *tail))
-        normalized = dict(observations)
-        normalized["state"] = state
-        return normalized
+    def _sample_action(
+        self,
+        observations: Dict[str, Any] | np.ndarray,
+        rng: jax.random.PRNGKey,
+        *,
+        deterministic: bool = False,
+        batch_actions: bool = True,
+    ) -> np.ndarray:
+        processed_obs = normalize_observation_for_model(observations)
+        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), processed_obs)
 
-    def _normalize_action_batch_shape(self, actions: np.ndarray) -> np.ndarray:
-        """Ensure sampled/eval actions match the wrapped env chunk-action shape."""
-        raw_shape = tuple(np.asarray(self._dummy_act).shape[1:])
-        if len(raw_shape) >= 2:
-            expected_shape = (raw_shape[0], *tuple(d for d in raw_shape[1:] if d != 1))
+        if deterministic:
+            sampled_actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
         else:
-            expected_shape = raw_shape
-        expected_ndim = len(expected_shape) + 1  # include batch axis
-        if actions.ndim == expected_ndim and tuple(actions.shape[1:]) == expected_shape:
-            return actions
-        if actions.ndim >= 2 and np.prod(actions.shape[1:]) == np.prod(expected_shape):
-            return actions.reshape((actions.shape[0], *expected_shape))
-        return actions
+            sampled_actions = self._sample_policy_actions_jit(
+                self._policy_state.params, obs, rng
+            )
 
-    def eval_actions(self, observations, **kwargs):
-        observations = self._normalize_observation_for_model(observations)
-        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
-        actions = np.asarray(actions, dtype=np.float32)
+        actions = np.asarray(sampled_actions, dtype=np.float32)
+        if not batch_actions:
+            return actions
+
         if actions.ndim == 1:
             actions = actions[None, ...]
-        actions = self._normalize_action_batch_shape(actions)
+        actions = normalize_action_batch_shape(actions, self._expected_action_shape)
         return actions
-
-    def sample_actions(self, observations, **kwargs):
-        observations = self._normalize_observation_for_model(observations)
-        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        rng, self._rng = jax.random.split(self._rng)
-        actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
-        actions = np.asarray(actions, dtype=np.float32)
-        if actions.ndim == 1:
-            actions = actions[None, ...]  # single-env safety
-        actions = self._normalize_action_batch_shape(actions)
-        return np.asarray(actions, dtype=np.float32)
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        if bool(kwargs.get("deterministic", False)):
-            return self.eval_actions(observations, **kwargs)
-        return self.sample_actions(observations, **kwargs)
+        deterministic = kwargs.get("deterministic")
+        batch_actions = kwargs.get("batch_actions")
+        if deterministic is None:
+            deterministic = False
+        if batch_actions is None:
+            batch_actions = True
+        rng, self._rng = jax.random.split(self._rng)
+        return np.asarray(
+            self._sample_action(
+                observations=observations,
+                rng=rng,
+                deterministic=bool(deterministic),
+                batch_actions=bool(batch_actions),
+            ),
+            dtype=np.float32,
+        )
+
+    def eval_actions(self, observations, **kwargs):
+        return self._generate_actions(observations, deterministic=True, **kwargs)
+
+    def sample_actions(self, observations, **kwargs):
+        return self._generate_actions(observations, deterministic=False, **kwargs)
 
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
@@ -273,8 +274,8 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_critic_update_frequency() == 0:
             batch = self.replay.sample(batch_size=batch_size)
 
-            batch_observation = self._normalize_observation_for_model(batch.observation)
-            batch_next_observation = self._normalize_observation_for_model(
+            batch_observation = normalize_observation_for_model(batch.observation)
+            batch_next_observation = normalize_observation_for_model(
                 batch.next_observation
             )
             observation = jax.tree.map(
@@ -309,7 +310,7 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_actor_update_frequency() == 0:
             if latest_actor_observation is None:
                 batch = self.replay.sample(batch_size=batch_size)
-                batch_observation = self._normalize_observation_for_model(
+                batch_observation = normalize_observation_for_model(
                     batch.observation
                 )
                 observation = jax.tree.map(
@@ -356,60 +357,13 @@ class DSRLLearner(Agent):
             rew = ep.get("reward", 0.0)
             term = ep.get("terminate", False)
             trunc = ep.get("truncate", False)
-
-            # Support both scalar and per-substep payloads from collection.
-            def _fit_length(arr, length, *, dtype, pad_value):
-                values = np.asarray(arr, dtype=dtype).reshape(-1)
-                if values.size == length:
-                    return values
-                if values.size == 0:
-                    return np.full((length,), pad_value, dtype=dtype)
-                if values.size == 1:
-                    return np.full((length,), values.item(), dtype=dtype)
-                if values.size > length:
-                    return values[:length]
-                return np.pad(
-                    values,
-                    (0, length - values.size),
-                    mode="constant",
-                    constant_values=pad_value,
-                )
-
-            reward_arr = np.asarray(
-                rew if rew is not None else 0.0, dtype=np.float32
-            ).reshape(-1)
-            term_arr = np.asarray(term, dtype=np.bool_).reshape(-1)
-            trunc_arr = np.asarray(trunc, dtype=np.bool_).reshape(-1)
-            rollout_len = int(max(reward_arr.size, term_arr.size, trunc_arr.size, 1))
-            reward_arr = _fit_length(
-                reward_arr, rollout_len, dtype=np.float32, pad_value=0.0
+            r, terminated, truncated, done, n_steps = reduce_chunk_transition(
+                reward=rew,
+                terminated=term,
+                truncated=trunc,
+                discount=float(self._config.discount),
+                action=act,
             )
-            term_arr = _fit_length(
-                term_arr, rollout_len, dtype=np.bool_, pad_value=False
-            )
-            trunc_arr = _fit_length(
-                trunc_arr, rollout_len, dtype=np.bool_, pad_value=False
-            )
-
-            done_arr = np.logical_or(term_arr, trunc_arr)
-            if bool(np.any(done_arr)):
-                n_steps = int(np.argmax(done_arr) + 1)
-            else:
-                n_steps = rollout_len
-                # For chunked-action env wrappers that collapse rewards/dones to scalars,
-                # infer the effective transition length from the action horizon.
-                action_arr = np.asarray(act)
-                if rollout_len == 1 and action_arr.ndim >= 2:
-                    n_steps = max(1, int(action_arr.shape[0]))
-
-            reward_weights = np.power(
-                np.float32(self._config.discount),
-                np.arange(n_steps, dtype=np.float32),
-            )
-            r = float(np.sum(reward_arr[:n_steps] * reward_weights))
-            terminated = bool(term_arr[n_steps - 1])
-            truncated = bool(trunc_arr[n_steps - 1])
-            done = bool(terminated or truncated)
 
             self.replay.insert({
                 # Copy leaves to avoid aliasing with collector buffers that are
