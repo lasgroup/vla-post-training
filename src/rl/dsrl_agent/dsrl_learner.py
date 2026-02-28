@@ -31,7 +31,8 @@ from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
-from src.envs.venv import DSRLVectorEnv, SubprocVectorEnv, DummyVectorEnv
+from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
+from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv
 from src.rl.agent import Agent, EnvFn
 
 
@@ -91,7 +92,6 @@ def dsrl_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
     )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     # re-use training seed
     return env
-
 
 
 class DSRLLearner(FilteredSFTLearner):

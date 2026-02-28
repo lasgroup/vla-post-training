@@ -1,5 +1,5 @@
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
-from src.envs.venv import DSRLVectorEnv
+from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv
 import numpy as np
 import gymnasium as gym
 
@@ -15,7 +15,7 @@ def test_dsrl_vector_env():
                 "robot0_eef_quat": gym.spaces.Box(low=-1, high=1, shape=(4,), dtype=np.float32),
                 "robot0_gripper_qpos": gym.spaces.Box(low=0, high=1, shape=(2,), dtype=np.float32),
             })
-            self.action_space = gym.spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32)
+            self.action_space = gym.spaces.Box(low=0, high=1, shape=(7,), dtype=np.float32)
 
         def reset(self, seed=None, options=None):
             obs = {
@@ -50,6 +50,7 @@ def test_dsrl_vector_env():
     env_fns = [make_env_fn for _ in range(4)]
     wrapped = DSRLVectorEnv(env_fns)
     
+    print("Testing reset()...")
     obs, info = wrapped.reset()
     observation = obs["observation"]
     action = obs["action"]
@@ -62,8 +63,30 @@ def test_dsrl_vector_env():
     assert image.shape == (4, 5, 128, 128, 3)
     assert state.shape == (4, 5, 8)
     assert wrist_image.shape == (4, 5, 128, 128, 3)
-    assert action.shape == (4, 5, 1)
+    assert action.shape == (4, 5, 7)
     assert prefix_rep.shape == (4, 968, 2048)
+    
+    print("Testing step(noise)...")
+    noise = np.random.randn(4, 10, 32)
+    next_obs, reward, terminate, truncate, info = wrapped.step(noise)
+    next_observation = next_obs["observation"]
+    action = next_obs["action"]
+    prefix_rep = next_obs["prefix_rep"]
+    
+    next_image = next_observation["pi0/image"]
+    next_state = next_observation["pi0/state"]
+    next_wrist_image = next_observation["pi0/wrist_image"]
+    
+    assert next_image.shape == (4, 5, 128, 128, 3)
+    assert next_state.shape == (4, 5, 8)
+    assert next_wrist_image.shape == (4, 5, 128, 128, 3)
+    assert action.shape == (4, 5, 7)
+    assert prefix_rep.shape == (4, 968, 2048)
+
+    assert reward.shape == (4, 5)
+    assert terminate.shape == (4, 5)
+    assert truncate.shape == (4, 5)
+    assert info.shape == (4,)
 
     print("Test passed!")
 
