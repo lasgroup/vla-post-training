@@ -255,6 +255,10 @@ class QueryFrequencyWrapper(gym.Wrapper):
                 flat = np.squeeze(arr).reshape(-1)
                 if flat.size == int(action_dim):
                     return flat.astype(action_space.dtype, copy=False)
+                if flat.size % int(action_dim) == 0:
+                    return flat.reshape((-1, int(action_dim)))[0].astype(
+                        action_space.dtype, copy=False
+                    )
             if arr.shape == action_space.shape:
                 return arr
             # Common case with chunked policies: extra singleton dimensions

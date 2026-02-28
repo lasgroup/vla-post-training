@@ -101,6 +101,20 @@ class MockSingletonVecNoActionDimEnv(gym.Env):
         return np.array([0.0], dtype=np.float32), {}
 
 
+class MockActionDimFallbackEnv(gym.Env):
+    def __init__(self):
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=(1,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(7,), dtype=np.float32)
+        self.action_dim = 7
+
+    def step(self, action):
+        assert len(action) == self.action_dim
+        return np.array([0.0], dtype=np.float32), 0.0, False, False, {}
+
+    def reset(self, seed=None, options=None):
+        return np.array([0.0], dtype=np.float32), {}
+
+
 def test_expand_dict_observation_space():
     query_freq = 4
     env = MockDictEnv()
@@ -138,6 +152,17 @@ def test_step_flattens_singleton_axis_without_action_dim():
     env = MockSingletonVecNoActionDimEnv()
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq, store_full_transitions=True)
     action = np.zeros((query_freq, 1, 7), dtype=np.float32)
+    obs, reward, term, trunc, info = wrapped.step(action)
+    assert obs.shape == (query_freq, 1)
+    assert reward.shape == (query_freq,)
+
+
+def test_step_action_dim_fallback_for_extra_axis():
+    query_freq = 3
+    env = MockActionDimFallbackEnv()
+    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq, store_full_transitions=True)
+    # Per-step payload has extra axis factor (e.g. from model broadcasting): (8, 7)
+    action = np.zeros((query_freq, 8, 7), dtype=np.float32)
     obs, reward, term, trunc, info = wrapped.step(action)
     assert obs.shape == (query_freq, 1)
     assert reward.shape == (query_freq,)

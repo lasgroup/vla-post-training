@@ -96,6 +96,7 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
+        dummy_obs = self._normalize_observation_for_model(dummy_obs)
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
@@ -161,9 +162,30 @@ class DSRLLearner(Agent):
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
 
+    @staticmethod
+    def _normalize_observation_for_model(observations: Any) -> Any:
+        if not isinstance(observations, dict):
+            return observations
+        if "state" not in observations:
+            return observations
+        state = jnp.asarray(observations["state"], dtype=jnp.float32)
+        if state.ndim >= 3:
+            leading = state.shape[:2]
+            tail = tuple(dim for dim in state.shape[2:] if dim != 1)
+            if not tail:
+                tail = (1,)
+            state = jnp.reshape(state, (*leading, *tail))
+        normalized = dict(observations)
+        normalized["state"] = state
+        return normalized
+
     def _normalize_action_batch_shape(self, actions: np.ndarray) -> np.ndarray:
         """Ensure sampled/eval actions match the wrapped env chunk-action shape."""
-        expected_shape = tuple(np.asarray(self._dummy_act).shape[1:])
+        raw_shape = tuple(np.asarray(self._dummy_act).shape[1:])
+        if len(raw_shape) >= 2:
+            expected_shape = (raw_shape[0], *tuple(d for d in raw_shape[1:] if d != 1))
+        else:
+            expected_shape = raw_shape
         expected_ndim = len(expected_shape) + 1  # include batch axis
         if actions.ndim == expected_ndim and tuple(actions.shape[1:]) == expected_shape:
             return actions
@@ -172,6 +194,7 @@ class DSRLLearner(Agent):
         return actions
 
     def eval_actions(self, observations, **kwargs):
+        observations = self._normalize_observation_for_model(observations)
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
         actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
         actions = np.asarray(actions, dtype=np.float32)
@@ -181,6 +204,7 @@ class DSRLLearner(Agent):
         return actions
 
     def sample_actions(self, observations, **kwargs):
+        observations = self._normalize_observation_for_model(observations)
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
         rng, self._rng = jax.random.split(self._rng)
         actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
@@ -249,12 +273,16 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_critic_update_frequency() == 0:
             batch = self.replay.sample(batch_size=batch_size)
 
+            batch_observation = self._normalize_observation_for_model(batch.observation)
+            batch_next_observation = self._normalize_observation_for_model(
+                batch.next_observation
+            )
             observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
             )
             actions = jnp.asarray(batch.action, dtype=jnp.float32)
             next_observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.next_observation
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation
             )
             reward = jnp.asarray(batch.reward, dtype=jnp.float32)
 
@@ -281,8 +309,11 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_actor_update_frequency() == 0:
             if latest_actor_observation is None:
                 batch = self.replay.sample(batch_size=batch_size)
+                batch_observation = self._normalize_observation_for_model(
+                    batch.observation
+                )
                 observation = jax.tree.map(
-                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
                 )
             else:
                 observation = latest_actor_observation
