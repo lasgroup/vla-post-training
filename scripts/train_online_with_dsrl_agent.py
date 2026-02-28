@@ -282,7 +282,6 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
                 env_class="libero",
                 task_description=task_description,
                 add_states=add_states,
-                include_prompt_in_obs=True,
                 pi0_obs_prefix=obs_prefix_key,
             )
             base_env = QueryFrequencyWrapper(
@@ -333,7 +332,11 @@ def _build_training_env(config: _config.OnlineTrainConfig):
     return env, ""
 
 
-def _configure_dsrl_vector_env(env: Any) -> None:
+def _configure_dsrl_vector_env(
+    env: Any,
+    *,
+    task_description: str | None = None,
+) -> None:
     """Adjust runtime settings for DSRLVectorEnv in online collection.
 
     During collection we reset individual env ids; that produces batch size 1
@@ -349,8 +352,39 @@ def _configure_dsrl_vector_env(env: Any) -> None:
         sharding_spec.mesh,
         jax.sharding.PartitionSpec(),
     )
+    if task_description is not None:
+        env._task_description = str(task_description)
+
+    # DSRLVectorEnv currently passes task_description="dummy" to its own
+    # _process_obs_for_pi0(...) in reset()/step(). Patch the instance method
+    # at call-site to use the real task language without editing the wrapper.
+    if not getattr(env, "_task_description_patch_applied", False):
+        original_process_obs_for_pi0 = env._process_obs_for_pi0
+
+        def _process_obs_for_pi0_with_task(observations, task_description=None):
+            resolved_task_description = task_description
+            if resolved_task_description in (None, "", "dummy"):
+                resolved_task_description = getattr(
+                    env, "_task_description", task_description
+                )
+            processed_obs = original_process_obs_for_pi0(
+                observations,
+                task_description=resolved_task_description,
+            )
+            prompt = processed_obs.get("prompt")
+            if prompt is not None and not isinstance(prompt, str):
+                prompt_arr = np.asarray(prompt)
+                if prompt_arr.size == 0:
+                    processed_obs["prompt"] = str(resolved_task_description or "")
+                else:
+                    processed_obs["prompt"] = str(prompt_arr.reshape(-1)[0])
+            return processed_obs
+
+        env._process_obs_for_pi0 = _process_obs_for_pi0_with_task
+        env._task_description_patch_applied = True
+
     logging.info(
-        "Configured DSRLVectorEnv policy sharding to replicated for per-env resets."
+        "Configured DSRLVectorEnv policy sharding/prompt handling for per-env resets."
     )
 
 def main(config: _config.OnlineTrainConfig):
@@ -363,7 +397,7 @@ def main(config: _config.OnlineTrainConfig):
         )
     backend = _resolve_env_backend(config)
     env, task_description = _build_training_env(config)
-    _configure_dsrl_vector_env(env)
+    _configure_dsrl_vector_env(env, task_description=task_description)
 
     # Dummy observation and action
     reset_out = env.reset()
