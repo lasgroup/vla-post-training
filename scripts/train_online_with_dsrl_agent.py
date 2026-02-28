@@ -252,8 +252,12 @@ def main(config: _config.OnlineTrainConfig):
     dummy_obs = env.observation_space[0].sample()
     action_space = env.action_space[0]
     dummy_act = action_space.sample()
-    action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
-    action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
+    # LearnedStdTanhNormalPolicyDecoder uses TFP bijectors that expect scalar
+    # (or simple per-dim) bounds. QueryFrequencyWrapper expands action space
+    # with extra rollout axes, which can trigger TFP broadcast-shape errors.
+    # Use global scalar bounds; env-side clipping still enforces exact limits.
+    action_low = jnp.asarray(float(np.min(action_space.low)), dtype=jnp.float32)
+    action_high = jnp.asarray(float(np.max(action_space.high)), dtype=jnp.float32)
     dummy_obs = jax.tree.map(
         lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
         dummy_obs,
