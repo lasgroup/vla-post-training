@@ -4,6 +4,7 @@ from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
 def unwrap_dsrl_vector_observation(observations: Any) -> Any:
@@ -18,25 +19,50 @@ def unwrap_dsrl_vector_observation(observations: Any) -> Any:
 
 
 def normalize_observation_for_model(observations: Any) -> Any:
-    """Convert wrapper observations to flat per-env state vectors for SAC models."""
+    """Convert wrapper observations to compact SAC model inputs.
+
+    Keeps only features used by the DSRL actor/critic:
+    - `state` (flattened per-env vector)
+    - optional `prefix_embedding`
+    """
     observations = unwrap_dsrl_vector_observation(observations)
     if not isinstance(observations, dict):
         return observations
-    if "state" not in observations:
-        return observations
+    normalized: dict[str, Any] = {}
 
-    state = jnp.asarray(observations["state"], dtype=jnp.float32)
-    # Query-frequency wrappers add a temporal/chunk axis after batch.
-    # For SAC/DSRL we model Q(s, a_chunk), so keep only the latest state.
-    if state.ndim >= 3:
-        state = state[:, -1, ...]
-    # Flatten any remaining non-batch axes (e.g. trailing singleton dims).
-    if state.ndim > 2:
-        state = jnp.reshape(state, (state.shape[0], -1))
+    if "state" in observations:
+        state = jnp.asarray(observations["state"], dtype=jnp.float32)
+        # Query-frequency wrappers add a temporal/chunk axis after batch.
+        # For SAC/DSRL we model Q(s, a_chunk), so keep only the latest state.
+        if state.ndim >= 3:
+            state = state[:, -1, ...]
+        # Flatten any remaining non-batch axes (e.g. trailing singleton dims).
+        if state.ndim > 2:
+            state = jnp.reshape(state, (state.shape[0], -1))
+        normalized["state"] = state
 
-    normalized = dict(observations)
-    normalized["state"] = state
-    return normalized
+    # Keep optional prefix embedding for experiments that enable it.
+    if PREFIX_EMBEDDING_NAME in observations:
+        prefix = jnp.asarray(observations[PREFIX_EMBEDDING_NAME], dtype=jnp.float32)
+        if prefix.ndim >= 4:
+            prefix = prefix[:, -1, ...]
+        if prefix.ndim == 4:
+            prefix = jnp.reshape(prefix, (prefix.shape[0], -1, prefix.shape[-1]))
+        if prefix.ndim == 3:
+            prefix = jnp.mean(prefix, axis=1)
+        normalized[PREFIX_EMBEDDING_NAME] = prefix
+    elif "prefix_rep" in observations:
+        # Backward-compatible alias used by DSRLVectorEnv.
+        prefix = jnp.asarray(observations["prefix_rep"], dtype=jnp.float32)
+        if prefix.ndim >= 4:
+            prefix = prefix[:, -1, ...]
+        if prefix.ndim == 4:
+            prefix = jnp.reshape(prefix, (prefix.shape[0], -1, prefix.shape[-1]))
+        if prefix.ndim == 3:
+            prefix = jnp.mean(prefix, axis=1)
+        normalized[PREFIX_EMBEDDING_NAME] = prefix
+
+    return normalized if normalized else observations
 
 
 def expected_chunk_action_shape(dummy_action: np.ndarray) -> tuple[int, ...]:

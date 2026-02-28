@@ -341,8 +341,10 @@ class DSRLLearner(Agent):
             return np.array(arr, copy=True)
 
         for ep in episode:
-            obs = ep["observation"]
-            next_obs = ep.get("next_observation", obs)
+            obs = normalize_observation_for_model(ep["observation"])
+            next_obs = normalize_observation_for_model(
+                ep.get("next_observation", ep["observation"])
+            )
             act = ep.get("action", ep.get("actions"))
 
             rew = ep.get("reward", 0.0)
