@@ -43,6 +43,7 @@ import platform
 from typing import Any
 
 import flax.nnx as nnx
+import gymnasium as gym
 from flax.training import common_utils
 import jax
 import jax.numpy as jnp
@@ -183,6 +184,37 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
     discount = float(config.discount)
     add_per_step_data = bool(config.collect.add_per_step_data)
 
+    class _DSRLVectorEnvInputCompatWrapper(gym.Wrapper):
+        """Adapts env outputs to the schema expected by DSRLVectorEnv.
+
+        DSRLVectorEnv expects observations shaped as:
+          {"observation": <obs_dict>, "action": <action_chunk>}
+        """
+
+        def __init__(self, env: gym.Env):
+            super().__init__(env)
+            self._last_action_chunk: np.ndarray | None = None
+
+        def _wrap_obs(self, obs: dict[str, Any], action_chunk: np.ndarray) -> dict[str, Any]:
+            return {
+                "observation": obs,
+                "action": np.asarray(action_chunk, dtype=np.float32),
+            }
+
+        def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
+            obs, info = self.env.reset(seed=seed, options=options)
+            # QueryFrequencyWrapper expands action_space to (H, action_dim).
+            action_template = np.asarray(self.env.action_space.sample(), dtype=np.float32)
+            action_template[...] = 0.0
+            self._last_action_chunk = action_template
+            return self._wrap_obs(obs, action_template), info
+
+        def step(self, action):
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            action_chunk = np.asarray(action, dtype=np.float32)
+            self._last_action_chunk = action_chunk
+            return self._wrap_obs(obs, action_chunk), reward, terminated, truncated, info
+
     env_factories = []
     for i in range(env_num):
 
@@ -202,6 +234,7 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
                 store_full_transitions=add_per_step_data,
                 pre_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
+            base_env = _DSRLVectorEnvInputCompatWrapper(base_env)
             return base_env
 
         env_factories.append(_make_env)
