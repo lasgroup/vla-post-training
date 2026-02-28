@@ -282,6 +282,7 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
                 env_class="libero",
                 task_description=task_description,
                 add_states=add_states,
+                include_prompt_in_obs=True,
                 pi0_obs_prefix=obs_prefix_key,
             )
             base_env = QueryFrequencyWrapper(

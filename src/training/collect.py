@@ -58,7 +58,16 @@ def collect_data(
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 
-            if config.collect.add_per_step_data and _supports_shift_window(obs, next_obs):
+            # DSRL stores one transition per action chunk and later reduces the
+            # chunked reward/done signals in save_episode(). In that setup,
+            # shift-window alignment makes s_t inconsistent with the sampled
+            # chunk action. Keep raw obs for DSRL learners.
+            use_shift_window = (
+                config.collect.add_per_step_data
+                and _supports_shift_window(obs, next_obs)
+                and not hasattr(agent, "replay")
+            )
+            if use_shift_window:
                 aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
             else:
                 aligned_obs = obs

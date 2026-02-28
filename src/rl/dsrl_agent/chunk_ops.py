@@ -14,7 +14,14 @@ def unwrap_dsrl_vector_observation(observations: Any) -> Any:
         and "observation" in observations
         and isinstance(observations["observation"], dict)
     ):
-        return observations["observation"]
+        unpacked = dict(observations["observation"])
+        # DSRLVectorEnv attaches prefix reps at the top level while model
+        # observations live under "observation". Preserve prefix features.
+        if PREFIX_EMBEDDING_NAME in observations:
+            unpacked.setdefault(PREFIX_EMBEDDING_NAME, observations[PREFIX_EMBEDDING_NAME])
+        if "prefix_rep" in observations:
+            unpacked.setdefault("prefix_rep", observations["prefix_rep"])
+        return unpacked
     return observations
 
 
