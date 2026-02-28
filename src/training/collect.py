@@ -122,6 +122,12 @@ def collect_data(
 
                 next_obs = jax.tree.map(update_state, next_obs, env_obs)
 
+            # DSRLVectorEnv keeps an internal observation cache used at step time.
+            # After per-env resets we reconstruct a full-batch `next_obs` above;
+            # mirror that into the env cache to keep batch sizes aligned.
+            if hasattr(env, "_last_obs"):
+                setattr(env, "_last_obs", next_obs)
+
             if total_episodes > 0:
                 pbar.set_postfix(SR=total_successes / total_episodes)
 
