@@ -23,9 +23,9 @@ class CollectionConfig:
     # Supported: "dmc", "libero".
     env_backend: str = "dmc"
     # DMC task selection (used when env_backend == "dmc").
-    dmc_domain_name: str = "walker"
-    dmc_task_name: str = "walk"
-    collect_interval: int = 200
+    dmc_domain_name: str = "cartpole" # walker
+    dmc_task_name: str = "swingup" # walk
+    collect_interval: int = 2500
     env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
@@ -103,7 +103,7 @@ _CONFIGS.extend(
                 "gs://openpi-assets/checkpoints/pi05_libero/params"
             ),
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
-            num_train_steps=10_000,
+            num_train_steps=1_000_000,
             num_workers=4,  # override default num_workers
             exp_name="test",
             resume=True,
