@@ -43,6 +43,7 @@ class TransitionBatch:
     terminated: np.ndarray
     truncated: np.ndarray
     done: np.ndarray
+    n_steps: np.ndarray
 
 
 class MinimalReplayBuffer:
@@ -78,6 +79,7 @@ class MinimalReplayBuffer:
             terminated=np.asarray(stacked["terminated"], dtype=np.bool_).reshape(-1),
             truncated=np.asarray(stacked["truncated"], dtype=np.bool_).reshape(-1),
             done=np.asarray(stacked["done"], dtype=np.bool_).reshape(-1),
+            n_steps=np.asarray(stacked["n_steps"], dtype=np.int32).reshape(-1),
         )
     
 class DSRLLearner(Agent):
@@ -134,16 +136,38 @@ class DSRLLearner(Agent):
             policy.eval()
             dist = policy(obs)
             return dist.sample(seed=rng)
+        
+        def _eval_policy_actions(params, obs):
+            policy = nnx.merge(self._policy_state.model_def, params)
+            policy.eval()
+            dist = policy(obs)
+            if hasattr(dist, "mode"):
+                return dist.mode()
+            if hasattr(dist, "mean"):
+                return dist.mean()
+            return dist.sample(seed=jax.random.PRNGKey(0))
 
         self._sample_policy_actions_jit = jax.jit(_sample_policy_actions)
+        self._eval_policy_actions_jit = jax.jit(_eval_policy_actions)
         warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
         warmup_rng = jax.random.fold_in(self._rng, 0)
         _ = jax.block_until_ready(
             self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
         )
+        _ = jax.block_until_ready(
+            self._eval_policy_actions_jit(self._policy_state.params, warmup_obs)
+        )
         self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
+
+    def eval_actions(self, observations, **kwargs):
+        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
+        actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
+        actions = np.asarray(actions, dtype=np.float32)
+        if actions.ndim == 1:
+            actions = actions[None, ...]
+        return actions
 
     def sample_actions(self, observations, **kwargs):
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
@@ -158,7 +182,9 @@ class DSRLLearner(Agent):
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        pass        
+        if bool(kwargs.get("deterministic", False)):
+            return self.eval_actions(observations, **kwargs)
+        return self.sample_actions(observations, **kwargs)
 
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
@@ -224,9 +250,9 @@ class DSRLLearner(Agent):
             # Time-limit truncations should not zero the bootstrap term.
             # Only true environment terminations should set discount to zero.
             done = jnp.asarray(batch.terminated, dtype=jnp.float32)
-            discount = jnp.asarray(
-                float(self._config.discount) * (1.0 - done), dtype=jnp.float32
-            )
+            n_steps = jnp.asarray(batch.n_steps, dtype=jnp.float32)
+            base_discount = jnp.asarray(float(self._config.discount), dtype=jnp.float32)
+            discount = jnp.power(base_discount, n_steps) * (1.0 - done)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
 
@@ -289,9 +315,58 @@ class DSRLLearner(Agent):
             term = ep.get("terminate", False)
             trunc = ep.get("truncate", False)
 
-            r = float(np.asarray(rew).reshape(-1)[0]) if rew is not None else 0.0
-            terminated = bool(np.any(np.asarray(term).reshape(-1)))
-            truncated = bool(np.any(np.asarray(trunc).reshape(-1)))
+            # Support both scalar and per-substep payloads from collection.
+            def _fit_length(arr, length, *, dtype, pad_value):
+                values = np.asarray(arr, dtype=dtype).reshape(-1)
+                if values.size == length:
+                    return values
+                if values.size == 0:
+                    return np.full((length,), pad_value, dtype=dtype)
+                if values.size == 1:
+                    return np.full((length,), values.item(), dtype=dtype)
+                if values.size > length:
+                    return values[:length]
+                return np.pad(
+                    values,
+                    (0, length - values.size),
+                    mode="constant",
+                    constant_values=pad_value,
+                )
+
+            reward_arr = np.asarray(
+                rew if rew is not None else 0.0, dtype=np.float32
+            ).reshape(-1)
+            term_arr = np.asarray(term, dtype=np.bool_).reshape(-1)
+            trunc_arr = np.asarray(trunc, dtype=np.bool_).reshape(-1)
+            rollout_len = int(max(reward_arr.size, term_arr.size, trunc_arr.size, 1))
+            reward_arr = _fit_length(
+                reward_arr, rollout_len, dtype=np.float32, pad_value=0.0
+            )
+            term_arr = _fit_length(
+                term_arr, rollout_len, dtype=np.bool_, pad_value=False
+            )
+            trunc_arr = _fit_length(
+                trunc_arr, rollout_len, dtype=np.bool_, pad_value=False
+            )
+
+            done_arr = np.logical_or(term_arr, trunc_arr)
+            if bool(np.any(done_arr)):
+                n_steps = int(np.argmax(done_arr) + 1)
+            else:
+                n_steps = rollout_len
+                # For chunked-action env wrappers that collapse rewards/dones to scalars,
+                # infer the effective transition length from the action horizon.
+                action_arr = np.asarray(act)
+                if rollout_len == 1 and action_arr.ndim >= 2:
+                    n_steps = max(1, int(action_arr.shape[0]))
+
+            reward_weights = np.power(
+                np.float32(self._config.discount),
+                np.arange(n_steps, dtype=np.float32),
+            )
+            r = float(np.sum(reward_arr[:n_steps] * reward_weights))
+            terminated = bool(term_arr[n_steps - 1])
+            truncated = bool(trunc_arr[n_steps - 1])
             done = bool(terminated or truncated)
 
             self.replay.insert({
@@ -304,9 +379,10 @@ class DSRLLearner(Agent):
                 "terminated": np.bool_(terminated),
                 "truncated": np.bool_(truncated),
                 "done": np.bool_(done),
+                "n_steps": np.int32(n_steps),
             })
 
-        self._collection_success_episodes += 1
+        self._collection_success_episodes += int(is_success)
     
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
