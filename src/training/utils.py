@@ -63,13 +63,16 @@ def init_wandb(
 
 
 def log_images(batch):
-    images_to_log = [
-        wandb.Image(
-            np.concatenate(
-                [(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()],
-                axis=1,
+    try:
+        images_to_log = [
+            wandb.Image(
+                np.concatenate(
+                    [(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()],
+                    axis=1,
+                )
             )
-        )
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
+            for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        ]
+        wandb.log({"camera_views": images_to_log}, step=0)
+    except Exception as e:
+        logging.warning(f"Skipping log_images: could not extract image from batch structure ({e})")
