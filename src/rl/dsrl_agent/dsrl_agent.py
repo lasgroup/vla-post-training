@@ -340,9 +340,30 @@ class DSRLLearner(Agent):
             arr = np.asarray(x, dtype=dtype)
             return np.array(arr, copy=True)
 
+        def _normalize_single_observation(obs_like: Any) -> Any:
+            """Normalize one transition observation using batched code-path.
+
+            DSRLVectorEnv emits per-step prefix reps with shape (S, E) for a single
+            env transition. Running normalization on unbatched tensors keeps that
+            full payload, which is expensive to store/sample. Add a synthetic batch
+            axis so normalize_observation_for_model() performs its pooled/batched
+            reductions, then remove that axis.
+            """
+            if isinstance(obs_like, dict):
+                batched = jax.tree_util.tree_map(
+                    lambda x: np.asarray(x)[None, ...], obs_like
+                )
+                normalized = normalize_observation_for_model(batched)
+                if isinstance(normalized, dict):
+                    return jax.tree_util.tree_map(
+                        lambda x: np.asarray(x)[0], normalized
+                    )
+                return np.asarray(normalized)[0]
+            return normalize_observation_for_model(obs_like)
+
         for ep in episode:
-            obs = normalize_observation_for_model(ep["observation"])
-            next_obs = normalize_observation_for_model(
+            obs = _normalize_single_observation(ep["observation"])
+            next_obs = _normalize_single_observation(
                 ep.get("next_observation", ep["observation"])
             )
             act = ep.get("action", ep.get("actions"))
