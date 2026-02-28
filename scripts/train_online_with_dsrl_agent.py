@@ -53,6 +53,7 @@ import wandb
 import openpi.training.utils as training_utils
 from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
 from src.rl.dsrl_agent.chunk_ops import unwrap_dsrl_vector_observation
+from src.rl.dsrl_agent.dsrl_vector_env import DSRLVectorEnv
 from src.rl.dsrl_agent.update_critic import (
     StateActionCriticDef,
 )
@@ -205,7 +206,11 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
 
         env_factories.append(_make_env)
 
-    env = SubprocVectorEnv(env_factories) if env_num > 1 else DummyVectorEnv(env_factories)
+    env = (
+        DSRLVectorEnv(env_factories)
+        if env_num > 1
+        else DummyVectorEnv(env_factories)
+    )
     env.seed(int(config.seed))
     return env
 

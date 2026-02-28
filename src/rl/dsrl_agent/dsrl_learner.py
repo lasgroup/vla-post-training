@@ -75,7 +75,7 @@ def dsrl_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
                 query_frequency=replan_steps,
                 discount=discount,
                 store_full_transitions=add_per_step_data,
-                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+                pre_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
 
