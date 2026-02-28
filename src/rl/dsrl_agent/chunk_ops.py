@@ -6,8 +6,20 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def unwrap_dsrl_vector_observation(observations: Any) -> Any:
+    """Extract the model observation payload from DSRLVectorEnv-style outputs."""
+    if (
+        isinstance(observations, dict)
+        and "observation" in observations
+        and isinstance(observations["observation"], dict)
+    ):
+        return observations["observation"]
+    return observations
+
+
 def normalize_observation_for_model(observations: Any) -> Any:
     """Drop singleton state axes introduced by chunked wrappers."""
+    observations = unwrap_dsrl_vector_observation(observations)
     if not isinstance(observations, dict):
         return observations
     if "state" not in observations:

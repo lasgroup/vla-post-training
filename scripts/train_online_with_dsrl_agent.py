@@ -52,6 +52,7 @@ import wandb
 
 import openpi.training.utils as training_utils
 from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
+from src.rl.dsrl_agent.chunk_ops import unwrap_dsrl_vector_observation
 from src.rl.dsrl_agent.update_critic import (
     StateActionCriticDef,
 )
@@ -251,22 +252,39 @@ def main(config: _config.OnlineTrainConfig):
         obs_batch = reset_out[0]
     else:
         obs_batch = reset_out
+    model_obs_batch = unwrap_dsrl_vector_observation(obs_batch)
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(
         lambda x: jnp.asarray(x, dtype=jnp.float32)[0:1],
-        obs_batch,
+        model_obs_batch,
     )
 
+    obs_action = None
+    if isinstance(obs_batch, dict) and obs_batch.get("action") is not None:
+        action_from_obs = np.asarray(obs_batch["action"], dtype=np.float32)
+        if action_from_obs.ndim >= 2:
+            obs_action = action_from_obs[0:1]
+
     if backend == "libero":
-        # Avoid querying wrapper action_space during init. Infer shape from env attrs.
-        action_dim_raw = env.get_env_attr("action_dim", id=0)[0]
-        if action_dim_raw is None:
-            raise RuntimeError(
-                "Failed to infer LIBERO action_dim from environment during DSRL init."
+        # DSRLVectorEnv-style wrappers expose previous action chunks in reset obs.
+        # Prefer that shape when available, otherwise fall back to config/model specs.
+        if obs_action is not None:
+            dummy_act = jnp.asarray(obs_action, dtype=jnp.float32)
+            logging.info(
+                "Using action chunk from reset observation for DSRL init: shape=%s",
+                tuple(np.asarray(dummy_act).shape),
             )
-        action_dim = int(action_dim_raw)
-        action_horizon = int(config.collect.replan_steps)
-        dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
+        else:
+            model_fake_act = np.asarray(config.model.fake_act(batch_size=1))
+            action_dim = int(model_fake_act.shape[-1])
+            action_horizon = int(config.collect.replan_steps)
+            dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
+            logging.warning(
+                "Reset observation has no action chunk; using model/config fallback "
+                "(horizon=%d, action_dim=%d).",
+                action_horizon,
+                action_dim,
+            )
         # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
         action_low = jnp.asarray(-1.0, dtype=jnp.float32)
         action_high = jnp.asarray(1.0, dtype=jnp.float32)
