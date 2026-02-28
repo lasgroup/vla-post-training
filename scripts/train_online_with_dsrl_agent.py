@@ -194,7 +194,9 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
         def __init__(self, env: gym.Env):
             super().__init__(env)
             self._last_action_chunk: np.ndarray | None = None
-            self._action_horizon = int(replan_steps)
+            self._action_horizon = int(
+                getattr(getattr(config, "model", None), "action_horizon", replan_steps)
+            )
             self._action_dim = self._infer_action_dim()
 
         def _infer_action_dim(self) -> int:
