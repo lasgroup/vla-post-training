@@ -29,6 +29,12 @@ from src.rl.dsrl_agent.update_critic import (
     init_state_action_critic_train_state,
     train_q_step,
 )
+from src.rl.dsrl_agent.chunk_ops import (
+    expected_chunk_action_shape,
+    normalize_action_batch_shape,
+    normalize_observation_for_model,
+    reduce_chunk_transition,
+)
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
@@ -43,9 +49,10 @@ class TransitionBatch:
     terminated: np.ndarray
     truncated: np.ndarray
     done: np.ndarray
+    n_steps: np.ndarray
 
 
-class MinimalReplayBuffer:
+class ReplayBuffer:
     """Stores transitions of the form (obs, act, next_obs, reward, done)."""
 
     def __init__(self, capacity: int = 100_000, seed: int = 0):
@@ -78,6 +85,7 @@ class MinimalReplayBuffer:
             terminated=np.asarray(stacked["terminated"], dtype=np.bool_).reshape(-1),
             truncated=np.asarray(stacked["truncated"], dtype=np.bool_).reshape(-1),
             done=np.asarray(stacked["done"], dtype=np.bool_).reshape(-1),
+            n_steps=np.asarray(stacked["n_steps"], dtype=np.int32).reshape(-1),
         )
     
 class DSRLLearner(Agent):
@@ -90,12 +98,14 @@ class DSRLLearner(Agent):
         policy_def: PolicyDef,
         task_description: str,):
         self._config = config
-        self.replay = MinimalReplayBuffer(capacity=100000, seed=int(getattr(self._config, "seed", 0)))
+        self.replay = ReplayBuffer(capacity=100000, seed=int(getattr(self._config, "seed", 0)))
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
+        dummy_obs = normalize_observation_for_model(dummy_obs)
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
+        self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
 
         q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(
@@ -134,37 +144,87 @@ class DSRLLearner(Agent):
             policy.eval()
             dist = policy(obs)
             return dist.sample(seed=rng)
+        
+        def _eval_policy_actions(params, obs):
+            policy = nnx.merge(self._policy_state.model_def, params)
+            policy.eval()
+            dist = policy(obs)
+            if hasattr(dist, "mode"):
+                return dist.mode()
+            if hasattr(dist, "mean"):
+                return dist.mean()
+            return dist.sample(seed=jax.random.PRNGKey(0))
 
         self._sample_policy_actions_jit = jax.jit(_sample_policy_actions)
+        self._eval_policy_actions_jit = jax.jit(_eval_policy_actions)
         warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
         warmup_rng = jax.random.fold_in(self._rng, 0)
         _ = jax.block_until_ready(
             self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
         )
+        _ = jax.block_until_ready(
+            self._eval_policy_actions_jit(self._policy_state.params, warmup_obs)
+        )
         self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
 
-    def sample_actions(self, observations, **kwargs):
-        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
-        rng, self._rng = jax.random.split(self._rng)
-        actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
-        actions = np.asarray(actions, dtype=np.float32)
+    def _sample_action(
+        self,
+        observations: Dict[str, Any] | np.ndarray,
+        rng: jax.random.PRNGKey,
+        *,
+        deterministic: bool = False,
+        batch_actions: bool = True,
+    ) -> np.ndarray:
+        processed_obs = normalize_observation_for_model(observations)
+        obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), processed_obs)
+
+        if deterministic:
+            sampled_actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
+        else:
+            sampled_actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
+
+        actions = np.asarray(sampled_actions, dtype=np.float32)
+        if not batch_actions:
+            return actions
+
         if actions.ndim == 1:
-            actions = actions[None, ...]  # single-env safety
-        
-        return np.asarray(actions, dtype=np.float32)
+            actions = actions[None, ...]
+        actions = normalize_action_batch_shape(actions, self._expected_action_shape)
+        return actions
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        pass        
+        deterministic = kwargs.get("deterministic")
+        batch_actions = kwargs.get("batch_actions")
+        if deterministic is None:
+            deterministic = False
+        if batch_actions is None:
+            batch_actions = True
+        rng, self._rng = jax.random.split(self._rng)
+        return np.asarray(
+            self._sample_action(
+                observations=observations,
+                rng=rng,
+                deterministic=bool(deterministic),
+                batch_actions=bool(batch_actions),
+            ),
+            dtype=np.float32,
+        )
+
+    def eval_actions(self, observations, **kwargs):
+        return self._generate_actions(observations, deterministic=True, **kwargs)
+
+    def sample_actions(self, observations, **kwargs):
+        return self._generate_actions(observations, deterministic=False, **kwargs)
 
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
             return jax.tree.map(lambda x: x[env_id], vec)
 
-        for i in range(self._config.collect.env_num): #self._config.collect.env_num
+        for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def _get_critic_update_frequency(self) -> int:
@@ -212,21 +272,22 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_critic_update_frequency() == 0:
             batch = self.replay.sample(batch_size=batch_size)
 
+            batch_observation = normalize_observation_for_model(batch.observation)
+            batch_next_observation = normalize_observation_for_model(
+                batch.next_observation
+            )
             observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
             )
             actions = jnp.asarray(batch.action, dtype=jnp.float32)
             next_observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch.next_observation
+                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation
             )
             reward = jnp.asarray(batch.reward, dtype=jnp.float32)
-
-            # Time-limit truncations should not zero the bootstrap term.
-            # Only true environment terminations should set discount to zero.
             done = jnp.asarray(batch.terminated, dtype=jnp.float32)
-            discount = jnp.asarray(
-                float(self._config.discount) * (1.0 - done), dtype=jnp.float32
-            )
+            n_steps = jnp.asarray(batch.n_steps, dtype=jnp.float32)
+            base_discount = jnp.asarray(float(self._config.discount), dtype=jnp.float32)
+            discount = jnp.power(base_discount, n_steps) * (1.0 - done)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
 
@@ -244,9 +305,8 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_actor_update_frequency() == 0:
             if latest_actor_observation is None:
                 batch = self.replay.sample(batch_size=batch_size)
-                observation = jax.tree.map(
-                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch.observation
-                )
+                batch_observation = normalize_observation_for_model(batch.observation)
+                observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             else:
                 observation = latest_actor_observation
 
@@ -288,15 +348,15 @@ class DSRLLearner(Agent):
             rew = ep.get("reward", 0.0)
             term = ep.get("terminate", False)
             trunc = ep.get("truncate", False)
-
-            r = float(np.asarray(rew).reshape(-1)[0]) if rew is not None else 0.0
-            terminated = bool(np.any(np.asarray(term).reshape(-1)))
-            truncated = bool(np.any(np.asarray(trunc).reshape(-1)))
-            done = bool(terminated or truncated)
+            r, terminated, truncated, done, n_steps = reduce_chunk_transition(
+                reward=rew,
+                terminated=term,
+                truncated=trunc,
+                discount=float(self._config.discount),
+                action=act,
+            )
 
             self.replay.insert({
-                # Copy leaves to avoid aliasing with collector buffers that are
-                # mutated in-place after per-env resets.
                 "observation": jax.tree_util.tree_map(_copy_leaf, obs),
                 "action": _copy_leaf(act, dtype=np.float32),
                 "next_observation": jax.tree_util.tree_map(_copy_leaf, next_obs),
@@ -304,18 +364,17 @@ class DSRLLearner(Agent):
                 "terminated": np.bool_(terminated),
                 "truncated": np.bool_(truncated),
                 "done": np.bool_(done),
+                "n_steps": np.int32(n_steps),
             })
 
-        self._collection_success_episodes += 1
+        self._collection_success_episodes += int(is_success)
     
     def start_data_collection(self, step: int | None = None):
-        # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
-        # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
         return collected_episodes

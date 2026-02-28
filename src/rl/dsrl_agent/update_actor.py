@@ -64,6 +64,9 @@ def init_policy_state(
     dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)
     if dummy_act.ndim == 1:
         dummy_act = dummy_act[None, ...]
+    # Keep actor output dimensionality aligned with critic inputs:
+    # critic consumes flattened action chunks (B, H*A), so actor should output H*A.
+    dummy_act = flatten_action_horizon(dummy_act)
 
     def init(obs, act, rng) -> training_utils.TrainState:
         policy = policy_def(obs, act, _ensure_rngs(rng))

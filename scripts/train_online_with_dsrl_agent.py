@@ -52,6 +52,7 @@ import wandb
 
 import openpi.training.utils as training_utils
 from src.rl.dsrl_agent.dsrl_agent import DSRLLearner
+from src.rl.dsrl_agent.chunk_ops import unwrap_dsrl_vector_observation
 from src.rl.dsrl_agent.update_critic import (
     StateActionCriticDef,
 )
@@ -243,21 +244,70 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
+    backend = _resolve_env_backend(config)
     env, task_description = _build_training_env(config)
-    
-    dummy_obs = env.observation_space[0].sample()
-    action_space = env.action_space[0]
-    dummy_act = action_space.sample()
-    action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
-    action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
+
+    # Dummy observation and action
+    reset_out = env.reset()
+    if isinstance(reset_out, (tuple, list)) and len(reset_out) == 2:
+        obs_batch = reset_out[0]
+    else:
+        obs_batch = reset_out
+    model_obs_batch = unwrap_dsrl_vector_observation(obs_batch)
+    # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(
-        lambda x: jnp.asarray(x, dtype=jnp.float32)[None, ...],
-        dummy_obs,
+        lambda x: jnp.asarray(x, dtype=jnp.float32)[0:1],
+        model_obs_batch,
     )
-    dummy_act = jnp.asarray(dummy_act, dtype=jnp.float32)[None, ...]
-    state_action_critic_def, policy_def = _build_actor_critic_defs(
-        config, action_low=action_low, action_high=action_high
-    )
+
+    obs_action = None
+    if isinstance(obs_batch, dict) and obs_batch.get("action") is not None:
+        action_from_obs = np.asarray(obs_batch["action"], dtype=np.float32)
+        if action_from_obs.ndim >= 2:
+            obs_action = action_from_obs[0:1]
+
+    if backend == "libero":
+        # DSRLVectorEnv-style wrappers expose previous action chunks in reset obs.
+        # Prefer that shape when available, otherwise fall back to config/model specs.
+        if obs_action is not None:
+            dummy_act = jnp.asarray(obs_action, dtype=jnp.float32)
+            logging.info(
+                "Using action chunk from reset observation for DSRL init: shape=%s",
+                tuple(np.asarray(dummy_act).shape),
+            )
+        else:
+            action_dim = None
+            env_action_dim = env.get_env_attr("action_dim", id=0)[0]
+            if env_action_dim is not None:
+                action_dim = int(env_action_dim)
+                logging.info("Using env action_dim=%d for DSRL init.", action_dim)
+            if action_dim is None:
+                warmup_action = env.get_env_attr("_warm_up_action", id=0)[0]
+                if warmup_action is not None:
+                    action_dim = int(np.asarray(warmup_action).reshape(-1).shape[0])
+                    logging.info(
+                        "Using warm-up action length=%d for DSRL init.", action_dim
+                    )
+            if action_dim is None:
+                action_dim = int(getattr(config.collect, "libero_action_dim", 7))
+            action_horizon = int(config.collect.replan_steps)
+            dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
+            logging.warning(
+                "Reset observation has no action chunk; using env/config fallback "
+                "(horizon=%d, action_dim=%d).",
+                action_horizon,
+                action_dim,
+            )
+        # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
+        action_low = jnp.asarray(-1.0, dtype=jnp.float32)
+        action_high = jnp.asarray(1.0, dtype=jnp.float32)
+    else:
+        action_space = env.action_space[0]
+        dummy_act = jnp.asarray(action_space.sample(), dtype=jnp.float32)[None, ...]
+        action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
+        action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
+    
+    state_action_critic_def, policy_def = _build_actor_critic_defs(config, action_low=action_low, action_high=action_high)
 
     agent = DSRLLearner(config=config, 
                         dummy_obs=dummy_obs,
@@ -265,6 +315,7 @@ def main(config: _config.OnlineTrainConfig):
                         state_action_critic_def=state_action_critic_def,
                         policy_def=policy_def,
                         task_description=task_description)
+    
     init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 
     start_step = int(jax.device_get(agent._state_action_critic_state.step))
