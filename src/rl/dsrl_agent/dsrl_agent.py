@@ -52,7 +52,7 @@ class TransitionBatch:
     n_steps: np.ndarray
 
 
-class MinimalReplayBuffer:
+class ReplayBuffer:
     """Stores transitions of the form (obs, act, next_obs, reward, done)."""
 
     def __init__(self, capacity: int = 100_000, seed: int = 0):
@@ -98,7 +98,7 @@ class DSRLLearner(Agent):
         policy_def: PolicyDef,
         task_description: str,):
         self._config = config
-        self.replay = MinimalReplayBuffer(capacity=100000, seed=int(getattr(self._config, "seed", 0)))
+        self.replay = ReplayBuffer(capacity=100000, seed=int(getattr(self._config, "seed", 0)))
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
@@ -183,9 +183,7 @@ class DSRLLearner(Agent):
         if deterministic:
             sampled_actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
         else:
-            sampled_actions = self._sample_policy_actions_jit(
-                self._policy_state.params, obs, rng
-            )
+            sampled_actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
 
         actions = np.asarray(sampled_actions, dtype=np.float32)
         if not batch_actions:
@@ -226,7 +224,7 @@ class DSRLLearner(Agent):
         def get_env_value(vec, env_id):
             return jax.tree.map(lambda x: x[env_id], vec)
 
-        for i in range(self._config.collect.env_num): #self._config.collect.env_num
+        for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(get_env_value(step_data, i))
 
     def _get_critic_update_frequency(self) -> int:
@@ -286,9 +284,6 @@ class DSRLLearner(Agent):
                 lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation
             )
             reward = jnp.asarray(batch.reward, dtype=jnp.float32)
-
-            # Time-limit truncations should not zero the bootstrap term.
-            # Only true environment terminations should set discount to zero.
             done = jnp.asarray(batch.terminated, dtype=jnp.float32)
             n_steps = jnp.asarray(batch.n_steps, dtype=jnp.float32)
             base_discount = jnp.asarray(float(self._config.discount), dtype=jnp.float32)
@@ -310,12 +305,8 @@ class DSRLLearner(Agent):
         if self.training_steps % self._get_actor_update_frequency() == 0:
             if latest_actor_observation is None:
                 batch = self.replay.sample(batch_size=batch_size)
-                batch_observation = normalize_observation_for_model(
-                    batch.observation
-                )
-                observation = jax.tree.map(
-                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
-                )
+                batch_observation = normalize_observation_for_model(batch.observation)
+                observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             else:
                 observation = latest_actor_observation
 
@@ -366,8 +357,6 @@ class DSRLLearner(Agent):
             )
 
             self.replay.insert({
-                # Copy leaves to avoid aliasing with collector buffers that are
-                # mutated in-place after per-env resets.
                 "observation": jax.tree_util.tree_map(_copy_leaf, obs),
                 "action": _copy_leaf(act, dtype=np.float32),
                 "next_observation": jax.tree_util.tree_map(_copy_leaf, next_obs),
@@ -381,13 +370,11 @@ class DSRLLearner(Agent):
         self._collection_success_episodes += int(is_success)
     
     def start_data_collection(self, step: int | None = None):
-        # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
-        # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
         return collected_episodes

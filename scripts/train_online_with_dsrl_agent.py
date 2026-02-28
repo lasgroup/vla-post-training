@@ -247,6 +247,7 @@ def main(config: _config.OnlineTrainConfig):
     backend = _resolve_env_backend(config)
     env, task_description = _build_training_env(config)
 
+    # Dummy observation and action
     reset_out = env.reset()
     if isinstance(reset_out, (tuple, list)) and len(reset_out) == 2:
         obs_batch = reset_out[0]
@@ -305,9 +306,8 @@ def main(config: _config.OnlineTrainConfig):
         dummy_act = jnp.asarray(action_space.sample(), dtype=jnp.float32)[None, ...]
         action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
         action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
-    state_action_critic_def, policy_def = _build_actor_critic_defs(
-        config, action_low=action_low, action_high=action_high
-    )
+    
+    state_action_critic_def, policy_def = _build_actor_critic_defs(config, action_low=action_low, action_high=action_high)
 
     agent = DSRLLearner(config=config, 
                         dummy_obs=dummy_obs,
@@ -315,6 +315,7 @@ def main(config: _config.OnlineTrainConfig):
                         state_action_critic_def=state_action_critic_def,
                         policy_def=policy_def,
                         task_description=task_description)
+    
     init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 
     start_step = int(jax.device_get(agent._state_action_critic_state.step))
