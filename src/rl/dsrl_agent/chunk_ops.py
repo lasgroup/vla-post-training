@@ -18,7 +18,7 @@ def unwrap_dsrl_vector_observation(observations: Any) -> Any:
 
 
 def normalize_observation_for_model(observations: Any) -> Any:
-    """Drop singleton state axes introduced by chunked wrappers."""
+    """Convert wrapper observations to flat per-env state vectors for SAC models."""
     observations = unwrap_dsrl_vector_observation(observations)
     if not isinstance(observations, dict):
         return observations
@@ -26,12 +26,13 @@ def normalize_observation_for_model(observations: Any) -> Any:
         return observations
 
     state = jnp.asarray(observations["state"], dtype=jnp.float32)
+    # Query-frequency wrappers add a temporal/chunk axis after batch.
+    # For SAC/DSRL we model Q(s, a_chunk), so keep only the latest state.
     if state.ndim >= 3:
-        leading = state.shape[:2]
-        tail = tuple(dim for dim in state.shape[2:] if dim != 1)
-        if not tail:
-            tail = (1,)
-        state = jnp.reshape(state, (*leading, *tail))
+        state = state[:, -1, ...]
+    # Flatten any remaining non-batch axes (e.g. trailing singleton dims).
+    if state.ndim > 2:
+        state = jnp.reshape(state, (state.shape[0], -1))
 
     normalized = dict(observations)
     normalized["state"] = state

@@ -275,12 +275,24 @@ def main(config: _config.OnlineTrainConfig):
                 tuple(np.asarray(dummy_act).shape),
             )
         else:
-            model_fake_act = np.asarray(config.model.fake_act(batch_size=1))
-            action_dim = int(model_fake_act.shape[-1])
+            action_dim = None
+            env_action_dim = env.get_env_attr("action_dim", id=0)[0]
+            if env_action_dim is not None:
+                action_dim = int(env_action_dim)
+                logging.info("Using env action_dim=%d for DSRL init.", action_dim)
+            if action_dim is None:
+                warmup_action = env.get_env_attr("_warm_up_action", id=0)[0]
+                if warmup_action is not None:
+                    action_dim = int(np.asarray(warmup_action).reshape(-1).shape[0])
+                    logging.info(
+                        "Using warm-up action length=%d for DSRL init.", action_dim
+                    )
+            if action_dim is None:
+                action_dim = int(getattr(config.collect, "libero_action_dim", 7))
             action_horizon = int(config.collect.replan_steps)
             dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
             logging.warning(
-                "Reset observation has no action chunk; using model/config fallback "
+                "Reset observation has no action chunk; using env/config fallback "
                 "(horizon=%d, action_dim=%d).",
                 action_horizon,
                 action_dim,
