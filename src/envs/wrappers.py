@@ -250,11 +250,18 @@ class QueryFrequencyWrapper(gym.Wrapper):
         action_space = self.env.action_space
         if isinstance(action_space, gym.spaces.Box):
             arr = np.asarray(action, dtype=action_space.dtype)
+            action_dim = getattr(self.env, "action_dim", None)
+            if action_dim is not None:
+                flat = np.squeeze(arr).reshape(-1)
+                if flat.size == int(action_dim):
+                    return flat.astype(action_space.dtype, copy=False)
             if arr.shape == action_space.shape:
                 return arr
             # Common case with chunked policies: extra singleton dimensions
             squeezed = np.squeeze(arr)
             target_size = int(np.prod(action_space.shape, dtype=np.int64))
+            if squeezed.ndim == 1 and squeezed.size == target_size:
+                return squeezed.astype(action_space.dtype, copy=False)
             if squeezed.size == target_size:
                 return squeezed.reshape(action_space.shape).astype(
                     action_space.dtype, copy=False
