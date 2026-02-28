@@ -147,18 +147,27 @@ class QueryFrequencyWrapper(gym.Wrapper):
         return self._store_full_transitions
 
     def expand_space(self, space):
-        # We define a function to expand a single space leaf (e.g., a Box)
+        # Recursively expand spaces to include a leading query-frequency axis.
         if isinstance(space, gym.spaces.Box):
-            # Expand Box: Shape becomes (query_frequency, *original_shape)
-            # We repeat the low/high bounds to match the new shape
             return gym.spaces.Box(
                 low=np.repeat(space.low[None, ...], self._query_frequency, axis=0),
                 high=np.repeat(space.high[None, ...], self._query_frequency, axis=0),
                 dtype=space.dtype,
             )
+        elif isinstance(space, gym.spaces.Dict):
+            return gym.spaces.Dict(
+                {k: self.expand_space(v) for k, v in space.spaces.items()}
+            )
+        elif isinstance(space, gym.spaces.Tuple):
+            return gym.spaces.Tuple(tuple(self.expand_space(v) for v in space.spaces))
         elif isinstance(space, gym.spaces.Discrete):
-            # Expand Discrete: Becomes MultiDiscrete with 'query_frequency' dimensions
             return gym.spaces.MultiDiscrete([space.n] * self._query_frequency)
+        elif isinstance(space, gym.spaces.MultiDiscrete):
+            nvec = np.asarray(space.nvec)
+            nvec = np.repeat(nvec[None, ...], self._query_frequency, axis=0).reshape(-1)
+            return gym.spaces.MultiDiscrete(nvec)
+        elif isinstance(space, gym.spaces.MultiBinary):
+            return gym.spaces.MultiBinary((self._query_frequency, *space.shape))
         else:
             raise NotImplementedError(
                 f"Space type {type(space)} not supported for expansion."
@@ -166,14 +175,12 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
     @property
     def action_space(self):
-        return jax.tree_util.tree_map(self.expand_space, self.env.action_space)
+        return self.expand_space(self.env.action_space)
 
     @property
     def observation_space(self):
         if self._store_full_transitions:
-            obs_space = jax.tree_util.tree_map(
-                self.expand_space, self.env.observation_space
-            )
+            obs_space = self.expand_space(self.env.observation_space)
         else:
             obs_space = self.env.observation_space
         return obs_space

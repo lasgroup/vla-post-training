@@ -39,6 +39,39 @@ class MockEnv(gym.Env):
         return np.array([0.0], dtype=np.float32), {}
 
 
+class MockDictEnv(gym.Env):
+    def __init__(self):
+        self.observation_space = gym.spaces.Dict(
+            {
+                "state": gym.spaces.Box(low=-1, high=1, shape=(3,), dtype=np.float32),
+                "pixels": gym.spaces.Box(low=0, high=255, shape=(8, 8, 3), dtype=np.uint8),
+            }
+        )
+        self.action_space = gym.spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+
+    def step(self, action):
+        obs, _ = self.reset()
+        return obs, 0.0, False, False, {}
+
+    def reset(self, seed=None, options=None):
+        return {
+            "state": np.zeros((3,), dtype=np.float32),
+            "pixels": np.zeros((8, 8, 3), dtype=np.uint8),
+        }, {}
+
+
+def test_expand_dict_observation_space():
+    query_freq = 4
+    env = MockDictEnv()
+    wrapped = QueryFrequencyWrapper(
+        env, query_frequency=query_freq, store_full_transitions=True
+    )
+    obs_space = wrapped.observation_space
+    assert isinstance(obs_space, gym.spaces.Dict)
+    assert obs_space["state"].shape == (query_freq, 3)
+    assert obs_space["pixels"].shape == (query_freq, 8, 8, 3)
+
+
 def test_full_transitions_mode():
     query_freq = 3
     env = MockEnv()
