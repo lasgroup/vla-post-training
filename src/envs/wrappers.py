@@ -215,6 +215,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
             sub_action = self._pre_step_filter(sub_action)
+            sub_action = self._align_action_to_space(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
             data.append(
                 {
@@ -243,6 +244,23 @@ class QueryFrequencyWrapper(gym.Wrapper):
                 break
 
         return self.step_response(data)
+
+    def _align_action_to_space(self, action):
+        """Reshape/squeeze action leaves to match the wrapped env action space."""
+        action_space = self.env.action_space
+        if isinstance(action_space, gym.spaces.Box):
+            arr = np.asarray(action, dtype=action_space.dtype)
+            if arr.shape == action_space.shape:
+                return arr
+            # Common case with chunked policies: extra singleton dimensions
+            squeezed = np.squeeze(arr)
+            target_size = int(np.prod(action_space.shape, dtype=np.int64))
+            if squeezed.size == target_size:
+                return squeezed.reshape(action_space.shape).astype(
+                    action_space.dtype, copy=False
+                )
+            return arr
+        return action
 
     def step_response(self, data: List[Dict]):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)

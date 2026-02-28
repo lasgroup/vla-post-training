@@ -161,12 +161,23 @@ class DSRLLearner(Agent):
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
 
+    def _normalize_action_batch_shape(self, actions: np.ndarray) -> np.ndarray:
+        """Ensure sampled/eval actions match the wrapped env chunk-action shape."""
+        expected_shape = tuple(np.asarray(self._dummy_act).shape[1:])
+        expected_ndim = len(expected_shape) + 1  # include batch axis
+        if actions.ndim == expected_ndim and tuple(actions.shape[1:]) == expected_shape:
+            return actions
+        if actions.ndim >= 2 and np.prod(actions.shape[1:]) == np.prod(expected_shape):
+            return actions.reshape((actions.shape[0], *expected_shape))
+        return actions
+
     def eval_actions(self, observations, **kwargs):
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), observations)
         actions = self._eval_policy_actions_jit(self._policy_state.params, obs)
         actions = np.asarray(actions, dtype=np.float32)
         if actions.ndim == 1:
             actions = actions[None, ...]
+        actions = self._normalize_action_batch_shape(actions)
         return actions
 
     def sample_actions(self, observations, **kwargs):
@@ -176,7 +187,7 @@ class DSRLLearner(Agent):
         actions = np.asarray(actions, dtype=np.float32)
         if actions.ndim == 1:
             actions = actions[None, ...]  # single-env safety
-        
+        actions = self._normalize_action_batch_shape(actions)
         return np.asarray(actions, dtype=np.float32)
 
     def _generate_actions(
