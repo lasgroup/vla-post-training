@@ -21,7 +21,7 @@ USER = os.getenv("USER")
 class CollectionConfig:
     # Environment backend used by scripts/train_online_with_dsrl_agent.py.
     # Supported: "dmc", "libero".
-    env_backend: str = "dmc"
+    env_backend: str = "libero"
     # DMC task selection (used when env_backend == "dmc").
     dmc_domain_name: str = "cartpole" # walker
     dmc_task_name: str = "swingup" # walk
@@ -30,7 +30,7 @@ class CollectionConfig:
     env_resolution: int = 256
     resize_image: int = 224
     add_states: bool = True
-    num_rollouts: int = 50
+    num_rollouts: int = 25
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
@@ -62,11 +62,7 @@ class SACConfig:
     init_alpha: float = 1.0
     alpha_lr: float = 3e-4
     target_entropy: str | float = "auto"
-    # Actor distribution used by DSRL policy decoder.
-    # - "auto": normal for LIBERO, tanh_normal otherwise
-    # - "normal": unbounded Gaussian with learned std
-    # - "tanh_normal": tanh-squashed Gaussian with learned std
-    policy_distribution: str = "auto"
+    policy_distribution: str = "tanh_normal"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,7 +104,7 @@ _CONFIGS.extend(
                 "gs://openpi-assets/checkpoints/pi05_libero/params"
             ),
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
-            num_train_steps=1_000_000,
+            num_train_steps=100_000,
             num_workers=4,  # override default num_workers
             exp_name="test",
             resume=True,
