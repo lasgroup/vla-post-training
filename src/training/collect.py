@@ -42,14 +42,9 @@ def collect_data(
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=task_description,
-                batch_actions=True,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
-
-            if config.collect.add_per_step_data:
-                aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
-            else:
-                aligned_obs = next_obs
+            aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
 
             step_data = {
                 "observation": aligned_obs,
@@ -60,11 +55,8 @@ def collect_data(
             }
             agent.add_data(step_data)
 
-            if config.collect.add_per_step_data:
-                current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
-                current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
-            else:
-                current_terminate, current_truncate = terminate, truncate
+            current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
+            current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
 
             done = np.logical_or(current_terminate, current_truncate)
             done_indices = np.where(done)[0]

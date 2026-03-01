@@ -77,25 +77,14 @@ def _quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
-def obs_to_img(obs, env_class: str = "libero"):
-    """Convert raw observation to resized image for DSRL actor/critic"""
-    if env_class == "libero":
-        curr_image = obs["agentview_image"][::-1, ::-1]
-    else:
-        raise NotImplementedError()
-    return curr_image
-
-
 def obs_to_pi_zero_input(
-    obs, env_class: str, task_description: str, *, include_prompt: bool = True
+    obs, env_class: str, task_description: str,
 ):
     if env_class == "libero":
-        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
         obs_pi_zero = {
-            "image": img,
-            "wrist_image": wrist_img,
-            "state": np.concatenate(
+            "observation/image": np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
+            "observation/wrist_image": np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]),
+            "observation/state": np.concatenate(
                 (
                     obs["robot0_eef_pos"],
                     _quat2axisangle(obs["robot0_eef_quat"]),
@@ -104,25 +93,9 @@ def obs_to_pi_zero_input(
                 dtype=np.float32,
             ),
         }
-        if include_prompt:
-            obs_pi_zero["prompt"] = np.asarray(str(task_description))
     else:
         raise NotImplementedError()
     return obs_pi_zero
-
-
-def obs_to_qpos(obs, env_class):
-    if env_class == "libero":
-        qpos = np.concatenate(
-            (
-                obs["robot0_eef_pos"],
-                _quat2axisangle(obs["robot0_eef_quat"]),
-                obs["robot0_gripper_qpos"],
-            )
-        )
-    else:
-        raise NotImplementedError()
-    return qpos
 
 
 class QueryFrequencyWrapper(gym.Wrapper):
@@ -130,21 +103,13 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         query_frequency: int,
-        discount: float = 0.99,
-        store_full_transitions: bool = False,
         pre_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
         post_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-        self._discount = discount
-        self._store_full_transitions = store_full_transitions
         self._pre_step_filter = pre_step_filter
         self._post_step_filter = post_step_filter
-
-    @property
-    def return_full_transitions(self) -> bool:
-        return self._store_full_transitions
 
     @property
     def expand_space(self, space):
@@ -171,14 +136,10 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
     @property
     def observation_space(self):
-        if self._store_full_transitions:
-            obs_space = jax.tree_util.tree_map(
-                self.expand_space, self.env.observation_space
-            )
-            act_space = self.action_space
-        else:
-            obs_space = self.env.observation_space
-            act_space = self.env.action_space
+        obs_space = jax.tree_util.tree_map(
+            self.expand_space, self.env.observation_space
+        )
+        act_space = self.action_space
         return gym.spaces.Dict({"observation": obs_space, "action": act_space})
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
@@ -192,15 +153,11 @@ class QueryFrequencyWrapper(gym.Wrapper):
         # 3. Construct the joint observation dict
         wrapped_obs = {"observation": obs, "action": initial_action}
 
-        # 3. Handle the 'observation' part based on store_full_transitions
-        if self._store_full_transitions:
-            # If we store full transitions, the observation space expects
-            # a sequence of shape (query_frequency, ...).
-            # We tile the initial observation to fill the buffer.
-            wrapped_obs = jax.tree_util.tree_map(
-                lambda x: np.repeat(x[None, ...], self._query_frequency, axis=0),
-                wrapped_obs,
-            )
+        # We tile the initial observation to fill the buffer.
+        wrapped_obs = jax.tree_util.tree_map(
+            lambda x: np.repeat(x[None, ...], self._query_frequency, axis=0),
+            wrapped_obs,
+        )
 
         return wrapped_obs, info
 
@@ -251,29 +208,14 @@ class QueryFrequencyWrapper(gym.Wrapper):
 
     def step_response(self, data: List[Dict]):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)
-        if self._store_full_transitions:
-            # Returns the dictionary where every leaf has shape (query_freq, ...)
-            return (
-                stacked["obs"],
-                stacked["reward"],
-                stacked["terminated"],
-                stacked["truncated"],
-                stacked["info"],
-            )
-        else:
-            # 1. Discounted sum of rewards: sum(r_t * gamma^t)
-            rewards = stacked["reward"]
-            discounts = self._discount ** np.arange(len(rewards))
-            discounted_reward = np.sum(rewards * discounts)
-
-            # 2. Extract only the final state values
-            # We use [-1] to get the state at the end of the query sequence
-            last_obs = jax.tree.map(lambda x: x[-1], stacked["obs"])
-            last_term = bool(stacked["terminated"][-1])
-            last_trunc = bool(stacked["truncated"][-1])
-            last_info = jax.tree.map(lambda x: x[-1], stacked["info"])
-
-            return last_obs, discounted_reward, last_term, last_trunc, last_info
+        # Returns the dictionary where every leaf has shape (query_freq, ...)
+        return (
+            stacked["obs"],
+            stacked["reward"],
+            stacked["terminated"],
+            stacked["truncated"],
+            stacked["info"],
+        )
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):
@@ -282,35 +224,20 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         env: gym.Env,
         env_class: str,
         task_description: str,
-        add_states: bool = True,
-        include_prompt_in_obs: bool = False,
-        pi0_obs_prefix: str = "pi0",
     ):
         super().__init__(env)
         self.task_description = task_description
         self._env_class = env_class
-        self._add_states = add_states
-        self._include_prompt_in_obs = include_prompt_in_obs
-        self._pi0_obs_prefix = pi0_obs_prefix
         logging.info(f"\nTask: {self.task_description}")
 
-        # produced by the helper functions (obs_to_img, etc.)
-        if getattr(env, "observation_space", None) is not None and hasattr(
-            env.observation_space, "sample"
-        ):
-            dummy_obs = env.observation_space.sample()
-        else:
-            reset_out = env.reset()
-            dummy_obs = (
-                reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
-            )
+        dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():
             if "prompt" in key:
                 spaces[key] = gym.spaces.Text(max_length=256_000)
                 continue
-            if "image" in key or "pixels" in key:
+            if "image" in key:
                 low, high = 0, 255
             else:
                 low, high = -np.inf, np.inf
@@ -321,24 +248,11 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(spaces)
 
     def observation(self, observation):
-        curr_image = obs_to_img(observation, env_class=self._env_class)
-        qpos = obs_to_qpos(observation, env_class=self._env_class)
-        obs_dict = {"pixels": curr_image[np.newaxis, ..., np.newaxis]}
-        if self._add_states:
-            obs_dict["state"] = qpos[np.newaxis, ..., np.newaxis]
-
-        # Do not inject prompt into env observations; prompt should be provided via default_prompt.
-        obs_pi_zero = obs_to_pi_zero_input(
+        return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
             task_description=self.task_description,
-            include_prompt=self._include_prompt_in_obs,
         )
-        obs_pi_zero = {
-            f"{self._pi0_obs_prefix}/{key}": val for key, val in obs_pi_zero.items()
-        }
-        obs_dict = obs_dict | obs_pi_zero
-        return obs_dict
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):
