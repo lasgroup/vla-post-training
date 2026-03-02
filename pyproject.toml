@@ -55,4 +55,4 @@ dev = [
 ]
 
 [tool.uv.sources]
-molmo-spaces = { path = "third_party/molmospaces" }
+molmo-spaces = { path = "molmospaces" }
