@@ -45,9 +45,14 @@ ENV UV_PROJECT_ENVIRONMENT=/.venv
 # Install the project's dependencies using the lockfile and settings
 RUN uv venv --python 3.11.9 $UV_PROJECT_ENVIRONMENT
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=packages/openpi-client/pyproject.toml,target=packages/openpi-client/pyproject.toml \
+    --mount=type=bind,source=packages/openpi-client/src,target=packages/openpi-client/src \
+    --mount=type=bind,source=third_party/molmospaces/pyproject.toml,target=third_party/molmospaces/pyproject.toml \
+    --mount=type=bind,source=third_party/molmospaces/README.md,target=third_party/molmospaces/README.md \
+    --mount=type=bind,source=third_party/molmospaces/molmo_spaces,target=third_party/molmospaces/molmo_spaces \
+    GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-install-project --group libero
 
 # Copy transformers_replace files while preserving directory structure
 COPY openpi/src/openpi/models_pytorch/transformers_replace/ /tmp/transformers_replace/

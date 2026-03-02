@@ -1,6 +1,6 @@
 [submodule "openpi"]
 	path = openpi
 	url = git@github.com:lasgroup/openpi.git
-[submodule "third_party/molmospaces"]
-	path = third_party/molmospaces
+[submodule "molmospaces"]
+	path = molmospaces
 	url = git@github.com:allenai/molmospaces.git
