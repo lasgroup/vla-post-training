@@ -40,6 +40,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10, 20, 50, 100],
+    "collect.use_time_to_success_as_reward": [True, False],
 }
 
 
