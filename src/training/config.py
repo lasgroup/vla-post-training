@@ -23,7 +23,8 @@ class ConstantSchedule(_optimizer.LRScheduleConfig):
 
     def create(self) -> optax.Schedule:
         return optax.constant_schedule(self.value)
-    
+
+
 @dataclasses.dataclass(frozen=True)
 class LinearSchedule(_optimizer.LRScheduleConfig):
     """Linear schedule that starts at init_value and ends at end_value"""
@@ -113,6 +114,7 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
+    use_time_to_success_as_reward: bool = False
     seed: int = 42
     obs_prefix_key: str = "pi0"
     store_prefix_rep: bool = False

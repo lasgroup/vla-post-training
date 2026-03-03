@@ -30,6 +30,7 @@ from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import (
+    TimeToSuccessAsRewardWrapper,
     Pi0ObservationWrapper,
     PrefixEmbeddingVectorEnvWrapper,
     QueryFrequencyWrapper,
@@ -59,12 +60,15 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     discount = config.rl.discount
     add_per_step_data = config.collect.add_per_step_data
     return_prefix_rep = config.collect.store_prefix_rep
+    use_time_to_success_as_reward = config.collect.use_time_to_success_as_reward
     env_factories = []
     for i in range(env_num):
 
         def _make_env(rank=i):
             # Create the base environment
             base_env = env_fn(rank)
+            if use_time_to_success_as_reward:
+                base_env = TimeToSuccessAsRewardWrapper(base_env)
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,

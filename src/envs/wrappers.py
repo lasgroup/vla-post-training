@@ -273,6 +273,17 @@ class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
         return super().step(env_action)
 
 
+class TimeToSuccessAsRewardWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env=env)
+
+    def step(self, action):
+        obs, reward, terminate, truncate, info = self.env.step(action)
+        # For all the steps we are in the environment, we add -1 as a reward
+        time_to_success_reward = 0.0 if terminate else -1.0
+        return obs, time_to_success_reward, terminate, truncate, info
+
+
 class Pi0ObservationWrapper(gym.ObservationWrapper):
     def __init__(
         self,
