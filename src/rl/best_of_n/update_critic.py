@@ -232,7 +232,7 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = (q_state.step // config.rl.num_critic_updates_per_batch) * config.rl.num_critic_updates_per_batch
+    step = (q_state.step // config.rl.num_critic_updates_per_batch)
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
@@ -309,7 +309,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = (value_state.step // config.rl.num_critic_updates_per_batch) * config.rl.num_critic_updates_per_batch
+    step = (value_state.step // config.rl.num_critic_updates_per_batch)
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
