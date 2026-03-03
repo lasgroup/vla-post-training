@@ -27,7 +27,7 @@ PROJECT_NAME = "awr_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
-DEFAULT_POLICY_START_TRAINING = 400
+DEFAULT_POLICY_START_TRAINING = 1000
 DEFAULT_POLICY_UPDATE_INTERVAL = 2
 DEFAULT_NUM_ROLLOUTS = 50
 DEFAULT_COLLECT_INTERVAL = 200
@@ -45,7 +45,9 @@ applicable_configs: Dict[str, List[Any]] = {
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
+    parser.add_argument(
+        "--dry", action="store_true", help="Print commands without submitting"
+    )
     parser.add_argument(
         "--mode",
         default="swiss-ai",
@@ -54,7 +56,9 @@ def main() -> None:
     )
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
-    parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
+    parser.add_argument(
+        "--config_name", default=CONFIG_NAME, help="Training config name"
+    )
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)
     parser.add_argument(
         "--checkpoint_base_dir",
@@ -64,10 +68,16 @@ def main() -> None:
 
     # AWR defaults matching submit_train.sh
     parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
-    parser.add_argument("--policy_start_training", type=int, default=DEFAULT_POLICY_START_TRAINING)
-    parser.add_argument("--policy_update_interval", type=int, default=DEFAULT_POLICY_UPDATE_INTERVAL)
+    parser.add_argument(
+        "--policy_start_training", type=int, default=DEFAULT_POLICY_START_TRAINING
+    )
+    parser.add_argument(
+        "--policy_update_interval", type=int, default=DEFAULT_POLICY_UPDATE_INTERVAL
+    )
     parser.add_argument("--num_rollouts", type=int, default=DEFAULT_NUM_ROLLOUTS)
-    parser.add_argument("--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL)
+    parser.add_argument(
+        "--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL
+    )
 
     args = parser.parse_args()
 
