@@ -32,6 +32,8 @@ DEFAULT_POLICY_UPDATE_INTERVAL = 2
 DEFAULT_NUM_ROLLOUTS = 50
 DEFAULT_COLLECT_INTERVAL = 200
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
+DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = False
+DEFAULT_BATCH_SIZE = 256
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -41,6 +43,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10, 20, 50, 100],
     "collect.use_time_to_success_as_reward": [True, False],
+    "batch_size": [32, 64, 256]
 }
 
 
@@ -98,6 +101,8 @@ def main() -> None:
             "rl.policy_update_interval": args.policy_update_interval,
             "rl.buffer_capacity": args.buffer_capacity,
             "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
+            "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
+            "batch_size": DEFAULT_BATCH_SIZE,
         }
         flags.update(combo)
 
