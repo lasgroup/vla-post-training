@@ -342,7 +342,7 @@ def train_value_step(
             critic_reduction=critic_reduction,
         )
         mc_errors = values - mc_return
-        td_error = values - q_values
+        td_error = values - jax.lax.stop_gradient(q_values)
         td_loss = jnp.mean(jnp.square(td_error))
         mc_loss = jnp.mean(jnp.square(mc_errors))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
