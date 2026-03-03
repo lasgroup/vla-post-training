@@ -38,9 +38,8 @@ DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
-    # "collect.seed": [0, 1, 2, 3, 4],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [1, 10, 50, 100]
+    "rl.num_critic_updates_per_batch": [10, 20, 50, 100],
 }
 
 

@@ -38,6 +38,24 @@ class LinearSchedule(_optimizer.LRScheduleConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class StepSchedule(_optimizer.LRScheduleConfig):
+    """Step schedule: returns init_value for steps < switch_step, then end_value."""
+
+    init_value: float = 0.0
+    end_value: float = 1.0
+    switch_step: int = 1000
+
+    def create(self) -> optax.Schedule:
+        return optax.join_schedules(
+            schedules=[
+                optax.constant_schedule(self.init_value),
+                optax.constant_schedule(self.end_value),
+            ],
+            boundaries=[self.switch_step],
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
     discount: float = 0.99
     buffer_capacity: int = 256 * 8
@@ -84,7 +102,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
-    td_weight_schedule = LinearSchedule(init_value=0.0, end_value=1.0, transition_steps=1_000)
+    td_weight_schedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
