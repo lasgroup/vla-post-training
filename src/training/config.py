@@ -9,6 +9,7 @@ from openpi.training.config import (
     LeRobotLiberoDataConfig,
 )
 from typing import Sequence
+import re
 
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
@@ -23,12 +24,49 @@ class CollectionConfig:
     add_states: bool = True
     num_rollouts: int = 50
     tasks: list[str] = dataclasses.field(
-        default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"]
+        default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"],
+        metadata={
+            "help": (
+                "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34') "
+                "or ranges (e.g., 'libero_90_22-56', 22 and 56 inclusive). The total number of expanded tasks "
+                "must be divisible by 4 for sharding."
+            )
+        },
     )
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True
     obs_prefix_key: str = "pi0"
+
+    def __post_init__(self):
+        expanded_tasks = []
+        
+        for task in self.tasks:
+            # Check if the task string matches the pattern: prefix_A-B
+            # e.g., "libero_90_0-70"
+            match = re.match(r"(.+)_(\d+)-(\d+)$", task)
+            
+            if match:
+                prefix = match.group(1)  
+                start = int(match.group(2))
+                end = int(match.group(3))  
+                
+                for i in range(start, end + 1):
+                    expanded_tasks.append(f"{prefix}_{i}")
+            else:
+                expanded_tasks.append(task)
+        
+        # Because frozen=True, we use object.__setattr__
+        object.__setattr__(self, 'tasks', expanded_tasks)
+
+        num_tasks = len(self.tasks)
+        if num_tasks % 4 != 0:
+            raise ValueError(
+                f"Invalid number of tasks: {num_tasks}. "
+                f"The task count must be a multiple of 4 (e.g., {((num_tasks // 4) + 1) * 4}) "
+                "because the current sharding implementation does not support "
+                "non-uniform task distributions across devices yet."
+            )
 
 
 @dataclasses.dataclass(frozen=True)
