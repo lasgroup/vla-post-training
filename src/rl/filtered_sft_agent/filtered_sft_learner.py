@@ -1351,6 +1351,10 @@ class FilteredSFTLearner(Agent):
                 return
             episode_batch = _stack_transitions(transitions)
             action_horizon = int(self._config.model.action_horizon)
+            discount_factors = np.array(
+                [discount_gamma**i for i in range(action_horizon)],
+                dtype=np.float32,
+            )
             actions = np.asarray(episode_batch["actions"], dtype=np.float32)
             rewards = np.asarray(episode_batch["reward"], dtype=np.float32)
             dones = np.asarray(episode_batch["done"], dtype=np.bool_)
@@ -1388,7 +1392,7 @@ class FilteredSFTLearner(Agent):
             )
             windowed_batch["reward"] = np.asarray(
                 [
-                    rewards[start : start + action_horizon].sum()
+                    (rewards[start : start + action_horizon] * discount_factors).sum()
                     for start in range(num_windows)
                 ],
                 dtype=np.float32,
