@@ -20,13 +20,10 @@ class CollectionConfig:
     env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
-    add_states: bool = True
     num_rollouts: int = 50
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
-    add_per_step_data: bool = True
-    obs_prefix_key: str = "pi0"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -39,7 +36,12 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
+    domain: str = "libero"
+    online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
+    online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99
+    buffer_save_path: str | None = None  # if set, save each episode to this directory
+    buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
 
 
 # Use `get_config` if you need to get a config by name in your code.

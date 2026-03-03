@@ -75,7 +75,6 @@ def test_collect_data_integration():
     # 1. Setup Mock Config
     config = MagicMock()
     config.collect.num_rollouts = 3
-    config.collect.add_per_step_data = True
     config.collect.resize_image = 0
     config.collect.replan_steps = NUM_REPLAN_STEPS
 

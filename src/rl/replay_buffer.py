@@ -1,13 +1,16 @@
 from typing import Union
 from typing import Iterable, Optional, Any, Callable
+import h5py
 import jax
 import gymnasium as gym
 import numpy as np
 import pickle
+import logging
+from pathlib import Path
 
 import copy
 
-from src.rl.dataset import Dataset, DatasetDict
+from src.rl.dataset import Dataset, DatasetDict, read_nested, write_nested
 import collections
 from flax.core import frozen_dict
 
@@ -312,12 +315,14 @@ class ShardedReplayBuffer:
         self,
         dummy_data: NestedData,
         max_capacity: int,
-        batch_size: int,
+        batch_size: int | None = None,
         data_sharding: jax.sharding.NamedSharding | None = None,
         seed: Optional[int] = None,
         preprocess_fn: Callable[[NestedData], NestedData] | None = None,
         postprocess_fn: Callable[[NestedData], Any] | None = None,
         freeze_dict: bool = True,
+        load_paths: Optional[list[str]] = None,
+        save_path: Optional[str] = None,
     ):
         """
         Args:
@@ -334,6 +339,7 @@ class ShardedReplayBuffer:
         self._preprocess_fn = preprocess_fn
         self._postprocess_fn = postprocess_fn
         self._freeze_dict = freeze_dict
+        self._save_path = save_path
 
         # 1. Pre-allocate the entire buffer in Host RAM (NumPy)
         # This prevents memory fragmentation during long training runs.
@@ -354,11 +360,19 @@ class ShardedReplayBuffer:
         # Seeding
         self._rng = np.random.default_rng(seed)
 
-    def insert(self, data: NestedData):
+        # Prefill
+        if load_paths:
+            self.load_episodes(load_paths)
+
+    def insert(self, data: NestedData, save_episode: bool = True):
         """
         Inserts nested data into the buffer.
         Assumes data structure matches the initialized dummy_data.
         """
+
+        if save_episode and self._save_path is not None:
+            self.save_episode(data, self._save_path)
+
         if self._preprocess_fn is not None:
             data = self._preprocess_fn(data)
         data_leaves, data_treedef = jax.tree_util.tree_flatten(data)
@@ -385,19 +399,16 @@ class ShardedReplayBuffer:
         self.ptr = int((self.ptr + num_new) % self.max_capacity)
         self.size = int(min(self.size + num_new, self.max_capacity))
 
-    def sample(self) -> NestedData:
+    def sample(self, batch_size=None) -> NestedData:
         """
         Samples a nested batch and shards every leaf.
         """
         if self.size == 0:
             raise ValueError("Cannot sample from an empty buffer")
-        # if self.size < self.batch_size:
-        #    # Fallback or error if not enough data yet
-        #    # For simplicity, we sample with replacement if buffer is tiny,
-        #    # or you can just return partial batches (requires care in training loop)
-        #    indices = self._rng.integers(0, self.size, size=self.batch_size)
-        # else:
-        indices = self._rng.integers(0, self.size, size=self.batch_size)
+        if batch_size is None:
+            assert self.batch_size is not None, "Batch size must be specified for sampling"
+            batch_size = self.batch_size
+        indices = self._rng.integers(0, self.size, size=batch_size)
 
         def fetch_and_shard(buffer_leaf):
             batch_slice = buffer_leaf[indices]
@@ -418,6 +429,27 @@ class ShardedReplayBuffer:
 
     def __len__(self):
         return self.size
+
+    def save_episode(self, data: NestedData, save_dir: str):
+        path = Path(save_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        existing_indices = [int(p.stem.split("_")[1]) for p in path.glob("episode_*.h5df")]
+        idx = max(existing_indices) + 1 if existing_indices else 0
+        file_path = path / f"episode_{idx:06d}.h5df"
+        with h5py.File(file_path, "w") as f:
+            write_nested(f, data)
+        logging.info("Saved episode to %s", file_path)
+
+    def load_episodes(self, paths: list[str]) -> int:
+        total = 0
+        for dir_path in paths:
+            episode_files = sorted(Path(dir_path).glob("episode_*.h5df"))
+            for file_path in episode_files:
+                with h5py.File(file_path, "r") as f:
+                    data = read_nested(f)
+                self.insert(data, save_episode=False)
+                total += 1
+        logging.info("Loaded %d episodes total (buffer size: %d)", total, self.size)
 
 
 if __name__ == "__main__":
