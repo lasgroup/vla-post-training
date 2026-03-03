@@ -338,7 +338,7 @@ class BestofNLearner(FilteredSFTLearner):
         value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4])
 
         for _ in range(num_updates):
-            q_rng, v_rng = jax.random.split(rng, 2)
+            q_rng, v_rng, rng = jax.random.split(rng, 3)
             # Update the state action critic state
             q_state, q_info = self._q_train_step(
                 q_rng,

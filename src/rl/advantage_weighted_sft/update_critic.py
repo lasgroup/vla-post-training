@@ -28,6 +28,7 @@ CriticBatch = tuple[
     ObsType,
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
+    at.Float[at.Array, " b"],       # MC returns
 ]
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
@@ -230,11 +231,15 @@ def train_q_step(
     q_model.train()
     value_model = create_critic(value_state, config)
     value_model.eval()
-
-    observation, actions, next_observation, reward, discount = batch
+    step = q_state.step
+    observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
+    mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    critic_reduction = config.rl.critic_reduction
+    td_weight_schedule = config.rl.td_weight_schedule
 
     @at.typecheck
     def loss_fn(
@@ -244,23 +249,33 @@ def train_q_step(
         next_observation: ObsType,
         reward: at.Float[at.ArrayLike, " b"],
         discount: at.Float[at.ArrayLike, " b"],
+        mc_return: at.Float[at.ArrayLike, " b"],
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         q_values = critic_model(observation, actions)
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=critic_reduction,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         if q_values.ndim > 1:
             td_targets = td_targets[jnp.newaxis]
 
         td_errors = q_values - td_targets
-        loss = jnp.mean(jnp.square(td_errors))
+        mc_errors = q_values - mc_return
+        td_weight = td_weight_schedule.create()(step)
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
+        td_loss = jnp.mean(jnp.square(td_errors))
+        mc_loss = jnp.mean(jnp.square(mc_errors))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
-            "td_error_mean": jnp.mean(td_errors),
-            "q_value_mean": jnp.mean(q_values),
-            "td_target_mean": jnp.mean(td_targets),
+            # "td_error_mean": jnp.mean(td_errors),
+            "value_mean": jnp.mean(q_values),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            # "td_target_mean": jnp.mean(td_targets),
+            # "mc_error_mean": jnp.mean(mc_errors),
+            "td_weight": td_weight,
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)
@@ -273,6 +288,7 @@ def train_q_step(
         next_observation,
         reward,
         discount,
+        mc_return,
         value_model,
     )
     new_state = _update_train_state(q_state, q_model, grads)
@@ -293,41 +309,53 @@ def train_value_step(
     batch: CriticBatch,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    step = value_state.step
+    td_weight_schedule = config.rl.td_weight_schedule
+    critic_reduction = config.rl.critic_reduction
+
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
+
     q_model = create_critic(q_state, config)
     q_model.eval()
 
-    observation, actions, _, _, _ = batch
+    observation, actions, _, _, _, mc_return = batch
+
     actions = flatten_action_horizon(actions)
+    mc_return = _as_scalar_batch(mc_return)
 
     @at.typecheck
     def loss_fn(
         critic_model: StateValue,
         observation: ObsType,
         actions: _model.Actions,
+        mc_return: at.Float[at.ArrayLike, " b"],
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        td_weight = td_weight_schedule.create()(step)
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
         values = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=critic_reduction,
         )
-        q_targets = jax.lax.stop_gradient(q_values)
-        if values.ndim > 1:
-            q_targets = q_targets[jnp.newaxis]
-        errors = values - q_targets
-        loss = jnp.mean(jnp.square(errors))
+        mc_errors = values - mc_return
+        td_error = values - q_values
+        td_loss = jnp.mean(jnp.square(td_error))
+        mc_loss = jnp.mean(jnp.square(mc_errors))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
             "value_mean": jnp.mean(values),
-            "q_target_mean": jnp.mean(q_targets),
-            "value_error_mean": jnp.mean(errors),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            "td_weight": td_weight,
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
-    )(value_model, observation, actions, q_model)
+    )(value_model, observation, actions, mc_return, q_model)
     new_state = _update_train_state(value_state, value_model, grads)
     info = {
         "loss": loss,

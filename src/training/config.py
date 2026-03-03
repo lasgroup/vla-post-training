@@ -84,6 +84,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
+    td_weight_schedule = LinearSchedule(init_value=0.0, end_value=1.0, transition_steps=1_000)
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
