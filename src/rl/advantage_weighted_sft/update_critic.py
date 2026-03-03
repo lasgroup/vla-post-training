@@ -231,7 +231,8 @@ def train_q_step(
     q_model.train()
     value_model = create_critic(value_state, config)
     value_model.eval()
-    step = q_state.step
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    step = (q_state.step // config.rl.num_critic_updates_per_batch) * config.rl.num_critic_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
@@ -310,7 +311,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    step = value_state.step
+    step = (value_state.step // config.rl.num_critic_updates_per_batch) * config.rl.num_critic_updates_per_batch
     td_weight_schedule = config.rl.td_weight_schedule
     critic_reduction = config.rl.critic_reduction
 
