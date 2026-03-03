@@ -177,6 +177,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         ObsType,
         at.Float[at.Array, " b"],
         at.Float[at.Array, " b"],
+        at.Float[at.Array, " b"],
     ]:
         online_observation = online_batch["observation"]
         observation_dict: dict[str, Any] = {
@@ -205,6 +206,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             next_observation_dict,
             online_batch["reward"],
             online_batch["discount"],
+            online_batch["mc_return"],
         )
 
     def _sft_batch_to_actor_batch(

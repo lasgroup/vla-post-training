@@ -116,7 +116,14 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         )
         # We replace the action from the batch with the on policy action
         # This ensures that we train an on policy critic.
-        value_batch = (batch[0], on_policy_action, batch[2], batch[3], batch[4])
+        value_batch = (
+            batch[0],
+            on_policy_action,
+            batch[2],
+            batch[3],
+            batch[4],
+            batch[5],
+        )
         # Update the state action critic state
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
