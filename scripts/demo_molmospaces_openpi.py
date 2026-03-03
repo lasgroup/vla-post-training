@@ -22,7 +22,7 @@ class Args:
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
-    benchmark_dir: str = "third_party/molmospaces/assets/benchmarks/path-to-benchmark"
+    benchmark_dir: str = "molmospaces/assets/benchmarks/path-to-benchmark"
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
     )

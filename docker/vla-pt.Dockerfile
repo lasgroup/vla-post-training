@@ -45,24 +45,16 @@ ENV UV_PROJECT_ENVIRONMENT=/.venv
 # Install the project's dependencies using the lockfile and settings
 RUN uv venv --python 3.11.9 $UV_PROJECT_ENVIRONMENT
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=packages/openpi-client/pyproject.toml,target=packages/openpi-client/pyproject.toml \
-    --mount=type=bind,source=packages/openpi-client/src,target=packages/openpi-client/src \
-    --mount=type=bind,source=third_party/molmospaces/pyproject.toml,target=third_party/molmospaces/pyproject.toml \
-    --mount=type=bind,source=third_party/molmospaces/README.md,target=third_party/molmospaces/README.md \
-    --mount=type=bind,source=third_party/molmospaces/molmo_spaces,target=third_party/molmospaces/molmo_spaces \
-    GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-install-project --group libero
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    uv sync --frozen
 
 # Copy transformers_replace files while preserving directory structure
 COPY openpi/src/openpi/models_pytorch/transformers_replace/ /tmp/transformers_replace/
 RUN /.venv/bin/python -c "import transformers; print(transformers.__file__)" | xargs dirname | xargs -I{} cp -r /tmp/transformers_replace/* {} && rm -rf /tmp/transformers_replace
 
 # Add openpi, openpi-client, MolmoSpaces to PATH
-ENV PYTHONPATH=/app:/app/openpi/packages/openpi-client/src:/app/openpi/src:/app/openpi/packages/openpi-client:/app/third_party/molmospaces
-
-# Use a deterministic asset path for MolmoSpaces in containerized runs.
-ENV MLSPACES_ASSETS_DIR=/app/.cache/molmospaces/assets
+ENV PYTHONPATH=/app:/app/openpi/packages/openpi-client/src:/app/openpi/src:/app/openpi/packages/openpi-client:/app/molmospaces
 
 # Setup macros for robosuite
 RUN uv run /.venv/lib/python3.11/site-packages/robosuite/scripts/setup_macros.py
@@ -73,10 +65,10 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d && echo '{"file_format_version" : "1.
 # Create a default config file to avoid an input prompt from LIBERO's init script.
 # https://github.com/Lifelong-Robot-Learning/LIBERO/blob/master/libero/libero/__init__.py
 ENV LIBERO_CONFIG_PATH=/etc/libero
-RUN mkdir -p /etc/libero && cat <<'EOF' > /etc/libero/config.yaml
+RUN mkdir -p /etc/libero && cat <<'EOF2' > /etc/libero/config.yaml
 benchmark_root: /.venv/lib/python3.11/site-packages/libero/libero
 bddl_files: /.venv/lib/python3.11/site-packages/libero/libero/./bddl_files
 init_states: /.venv/lib/python3.11/site-packages/libero/libero/./init_files
 datasets: /.venv/lib/python3.11/site-packages/libero/libero/../datasets
 assets: /.venv/lib/python3.11/site-packages/libero/libero/./assets
-EOF
+EOF2
