@@ -1,0 +1,34 @@
+executable = /home/malbaba/vla-post-training/mpi_scripts/awr.sh
+output     = /home/malbaba/vla-post-training/_job_logs/awr_seed$(SEED).out
+error      = /home/malbaba/vla-post-training/_job_logs/awr_seed$(SEED).err
+log        = /home/malbaba/vla-post-training/_job_logs/awr_seed$(SEED).log
+
+# Resources
+request_cpus   = 8
+request_memory = 128GB
+request_gpus   = 2
+requirements   = (TARGET.CUDAGlobalMemoryMb > 60000)
+
+# Shared filesystem — no file transfer needed
+should_transfer_files   = IF_NEEDED
+when_to_transfer_output = ON_EXIT
+
+# Checkpoint-and-hold support
+on_exit_hold            = (ExitCode =?= 3)
+on_exit_hold_reason     = "Checkpointed, will resume"
+on_exit_hold_subcode    = 1
+periodic_release        = ( (JobStatus =?= 5) && (HoldReasonCode =?= 3) && (HoldReasonSubCode =?= 1) )
+
++MaxRunningPrice        = 4000
++RunningPriceExceededAction = "restart"
+
+# Pass SEED into the job environment
+environment = "SEED=$(SEED)"
+
+queue SEED from (
+    0
+    1
+    2
+    3
+    4
+)
