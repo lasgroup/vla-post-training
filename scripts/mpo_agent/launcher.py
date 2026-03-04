@@ -41,15 +41,17 @@ DEFAULT_BATCH_SIZE = 256
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10, 20, 50, 100],
+    "rl.num_critic_updates_per_batch": [1, 5, 10, 20],
     "collect.use_time_to_success_as_reward": [True, False],
-    "batch_size": [32, 64, 256]
+    "batch_size": [256],
 }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
+    parser.add_argument(
+        "--dry", action="store_true", help="Print commands without submitting"
+    )
     parser.add_argument(
         "--mode",
         default="swiss-ai",
@@ -58,7 +60,9 @@ def main() -> None:
     )
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
-    parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
+    parser.add_argument(
+        "--config_name", default=CONFIG_NAME, help="Training config name"
+    )
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)
     parser.add_argument(
         "--checkpoint_base_dir",
