@@ -335,7 +335,7 @@ class BestofNLearner(FilteredSFTLearner):
         # Update the state action critic state
         num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
 
-        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4])
+        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
 
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
