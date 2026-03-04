@@ -29,7 +29,8 @@ DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_NUM_ROLLOUTS = 50
 DEFAULT_COLLECT_INTERVAL = 200
-DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 1
+DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 20
+DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_N_SAMPLES = 8
 DEFAULT_ENV_NUM = 4
 DEFAULT_NUM_TRAIN_STEPS = 10000
@@ -41,10 +42,11 @@ DEFAULT_NUM_CPUS = 16
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
-    "seed": [0],
-    "rl.n_samples": [1, 2, 4, 8],
+    "seed": [0, 1, 2],
+    "rl.n_samples": [8],
+    "collect.use_time_to_success_as_reward": [True],
     # "collect.seed": [0, 1, 2, 3, 4],
-    # "log_interval": [25],
+    "log_interval": [25],
 }
 
 
@@ -99,6 +101,8 @@ def main() -> None:
             "rl.n_samples": args.n_samples,
             "rl.critic_training_start_step": args.critic_training_start_step,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
+            "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
+
         }
         flags.update(combo)
 
