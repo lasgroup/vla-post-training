@@ -13,3 +13,6 @@ wandb/
 assets/
 bash_scripts/
 logs/
+
+# Cluster-specific files
+core_*

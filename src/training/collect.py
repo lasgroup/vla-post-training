@@ -45,15 +45,10 @@ def collect_data(
         while total_episodes < num_rollouts:
             action_chunk = agent.sample_actions(
                 obs,
-                task_descriptions=task_descriptions, 
-                batch_actions=True,
+                task_descriptions=task_descriptions,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
-
-            if config.collect.add_per_step_data:
-                aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
-            else:
-                aligned_obs = next_obs
+            aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
 
             step_data = {
                 "observation": aligned_obs,
@@ -64,11 +59,8 @@ def collect_data(
             }
             agent.add_data(step_data)
 
-            if config.collect.add_per_step_data:
-                current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
-                current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
-            else:
-                current_terminate, current_truncate = terminate, truncate
+            current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
+            current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
 
             done = np.logical_or(current_terminate, current_truncate)
             done_indices = np.where(done)[0]
@@ -113,6 +105,6 @@ def collect_data(
 
     per_env_success_rates = [s / e if e > 0 else 0.0 for s, e in zip(successes_per_env, episodes_per_env)]
     for i in range(env_num_multiask):
-        metrics[f"success_rate_{config.collect.tasks[i]}"] = per_env_success_rates[i]
+        metrics[f"Per Task/success_rate_{config.task_names[i]}"] = per_env_success_rates[i]
 
     return metrics, collected_episodes

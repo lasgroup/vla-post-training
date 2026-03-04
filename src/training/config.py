@@ -21,7 +21,6 @@ class CollectionConfig:
     env_num: int = 4 # Currently not used as we create one env per task
     env_resolution: int = 256
     resize_image: int = 224
-    add_states: bool = True
     num_rollouts: int = 50
     tasks: list[str] = dataclasses.field(
         default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"],
@@ -35,30 +34,24 @@ class CollectionConfig:
     )
     replan_steps: int = 5
     num_steps_wait: int = 10
-    add_per_step_data: bool = True
-    obs_prefix_key: str = "pi0"
 
     def __post_init__(self):
+        # Expand task ranges
         expanded_tasks = []
-        
         for task in self.tasks:
-            # Check if the task string matches the pattern: prefix_A-B
-            # e.g., "libero_90_0-70"
             match = re.match(r"(.+)_(\d+)-(\d+)$", task)
-            
             if match:
-                prefix = match.group(1)  
+                prefix = match.group(1)
                 start = int(match.group(2))
-                end = int(match.group(3))  
-                
+                end = int(match.group(3))
                 for i in range(start, end + 1):
                     expanded_tasks.append(f"{prefix}_{i}")
             else:
                 expanded_tasks.append(task)
         
-        # Because frozen=True, we use object.__setattr__
         object.__setattr__(self, 'tasks', expanded_tasks)
 
+        # Check divisibility by 4
         num_tasks = len(self.tasks)
         if num_tasks % 4 != 0:
             raise ValueError(
@@ -67,6 +60,26 @@ class CollectionConfig:
                 "because the current sharding implementation does not support "
                 "non-uniform task distributions across devices yet."
             )
+
+        # Count occurrences of each base task
+        counts = {}
+        for task in expanded_tasks:
+            counts[task] = counts.get(task, 0) + 1
+
+        # Generate task_names
+        task_name_counters = {}
+        task_names = []
+        for task in expanded_tasks:
+            if counts[task] == 1:
+                # Unique task → keep original
+                task_names.append(task)
+            else:
+                # Multiple instances → add index
+                idx = task_name_counters.get(task, 0)
+                task_names.append(f"{task}_{idx}")
+                task_name_counters[task] = idx + 1
+
+        object.__setattr__(self, 'task_names', task_names)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,8 +92,12 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
+    domain: str = "libero"
+    online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
+    online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99
-    replay_buffer_size: int = 10 * 256
+    buffer_save_path: str | None = None  # if set, save each episode to this directory
+    buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
 
 
 # Use `get_config` if you need to get a config by name in your code.

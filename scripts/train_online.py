@@ -44,6 +44,7 @@ import openpi.training.utils as training_utils
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     get_env_and_agent_for_filtered_sft,
 )
+from src.envs import make_env
 import src.training.config as _config
 from src.training.collect import collect_data
 from src.training.utils import init_logging, init_wandb, log_images
@@ -53,14 +54,11 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    from src.envs.libero import make_env_libero
-
-    env_fn, task_descriptions = make_env_libero(config)
+    env_fn, task_descriptions = make_env(config)
     env, agent = get_env_and_agent_for_filtered_sft(
         env_fn=env_fn,
         config=config,
         task_descriptions=task_descriptions,
-        env_class="libero",
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
