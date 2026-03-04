@@ -44,6 +44,9 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.num_critic_updates_per_batch": [1, 5, 10, 20],
     "collect.use_time_to_success_as_reward": [True, False],
     "batch_size": [256],
+    "rl.policy_training_start_step": [400, 1000],
+    "rl.td_weight_schedule.switch_step": [0, 400, 1000],
+    "collect.collect_interval": [200, 400],
 }
 
 
