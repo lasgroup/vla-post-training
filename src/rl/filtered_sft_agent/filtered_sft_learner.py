@@ -24,15 +24,20 @@ import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
-from src.rl.agent import Agent
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig
+from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
-from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
+from src.envs.wrappers import (
+    TimeToSuccessAsRewardWrapper,
+    Pi0ObservationWrapper,
+    PrefixEmbeddingVectorEnvWrapper,
+    QueryFrequencyWrapper,
+)
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME, unpack_action_and_prefix
 
 
 def get_env_and_agent_for_filtered_sft(env_fn, config, task_description):
@@ -56,14 +61,21 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
         def _make_env(rank=i):
             # Create the base environment
             base_env = env_fn(rank)
+            if config.collect.use_time_to_success_as_reward:
+                base_env = TimeToSuccessAsRewardWrapper(base_env)
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
             )
-            # Add query frequency wrapper to rollout action chunks
-            base_env = QueryFrequencyWrapper(
+            # Add query-frequency wrapper to rollout action chunks.
+            query_wrapper = (
+                PrefixEmbeddingVectorEnvWrapper
+                if config.collect.store_prefix_rep
+                else QueryFrequencyWrapper
+            )
+            base_env = query_wrapper(
                 env=base_env,
                 query_frequency=replan_steps,
             )
@@ -252,6 +264,21 @@ class FilteredSFTLearner(Agent):
         # Create temporary episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 
+        # TODO: clean up
+        def _get_prefix_rep_with_model_fn(
+            m: _model.BaseModel,
+            *,
+            observation: _model.Observation,
+        ):
+            if not hasattr(m, "get_prefix_rep"):
+                raise AttributeError(
+                    f"Model type {type(m)} does not implement get_prefix_rep."
+                )
+            prefix_rep = m.get_prefix_rep(observation)
+            return prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+
+        self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
+
         # Create policy for data collection
         policy_checkpoint_dir = self._config.weight_loader.params_path[: -len("/params")]
         self._policy = policy_config.create_trained_policy(
@@ -290,6 +317,34 @@ class FilteredSFTLearner(Agent):
             logging.warning(
                 "Policy model object is still alive after cleanup; other references remain."
             )
+
+    def _infer_prefix_embedding_template(self) -> np.ndarray | None:
+        # TODO: clean up
+        return_prefix_rep = self._config.collect.store_prefix_rep
+        if not return_prefix_rep:
+            return None
+        if getattr(self._policy, "_is_pytorch_model", False):
+            logging.warning(
+                "Prefix representations are not supported for PyTorch policies; skipping."
+            )
+            return None
+        get_prefix_rep = getattr(self._policy, "_get_prefix_rep", None)
+        if get_prefix_rep is None:
+            logging.warning("Policy does not expose get_prefix_rep; skipping.")
+            return None
+
+        try:
+            fake_obs = self._config.model.fake_obs(batch_size=1)
+            prefix_rep = get_prefix_rep(fake_obs)
+            if isinstance(prefix_rep, tuple):
+                prefix_rep = prefix_rep[0]
+            prefix_rep = np.asarray(prefix_rep, dtype=np.float32)
+            return np.zeros_like(prefix_rep, dtype=np.float32)
+        except Exception as exc:  # pragma: no cover - defensive startup path
+            logging.warning(
+                "Failed to infer prefix embedding shape for online buffer: %s", exc
+            )
+            return None
 
     def _get_online_replay_buffer(
         self,
@@ -360,18 +415,58 @@ class FilteredSFTLearner(Agent):
         obs["prompt"] = task_description
         return obs
 
+    def _prepare_policy_inputs(self, observations: Dict[str, Any]) -> Dict[str, Any]:
+        # TODO: clean up
+        inputs = jax.tree.map(lambda x: x, observations)
+        inputs = self._policy._input_transform(inputs)
+
+        if np.asarray(inputs["state"]).ndim > 1:
+            batch_size = int(np.asarray(inputs["state"]).shape[0])
+
+            def _add_batch_dim(x):
+                return jnp.broadcast_to(x[jnp.newaxis, ...], (batch_size,) + x.shape)
+
+            inputs = jax.tree.map(lambda x: jnp.asarray(x), inputs)
+            for key in list(inputs.keys()):
+                if key not in ("image", "state"):
+                    inputs[key] = jax.tree.map(_add_batch_dim, inputs[key])
+        else:
+            inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        return inputs
+
+    def _compute_prefix_rep_with_model(
+        self,
+        *,
+        model: _model.BaseModel,
+        observations: Dict[str, Any],
+    ) -> np.ndarray:
+        if getattr(self._policy, "_is_pytorch_model", False):
+            raise NotImplementedError(
+                "Prefix representation extraction is only supported for JAX policies."
+            )
+        # TODO: clean up
+        inputs = self._prepare_policy_inputs(observations)
+        observation = _model.Observation.from_dict(inputs)
+        prefix_rep = self._get_prefix_rep_with_model(
+            m=model,
+            observation=observation,
+        )
+        return np.asarray(prefix_rep, dtype=np.float32)
+
     def _sample_action(
         self,
         observations: Dict,
         rng: jax.random.PRNGKey,
         train_state: training_utils.TrainState,
-    ) -> np.ndarray:
+        return_prefix_rep: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         params = (
             train_state.ema_params
             if train_state.ema_params is not None
             else train_state.params
         )
         model = nnx.merge(train_state.model_def, params)
+        model.eval()
         assert "observation/state" in observations, "Observation must contain 'observation/state' key to infer batch size."
         batch_size = observations["observation/state"].shape[0] if observations["observation/state"].ndim > 1 else 1
         noise = jax.random.normal(
@@ -383,8 +478,20 @@ class FilteredSFTLearner(Agent):
             model=model,
             obs=observations,
             noise=noise,
+            return_prefix_rep=return_prefix_rep,
             sharding_spec=self._policy_sharding_spec,
         )["actions"]
+
+        # TODO: check if necessary
+        # Vector envs expect a batch dimension for actions. Policy inference
+        # can unbatch when batch_size == 1, so add it back for single-env runs.
+        if isinstance(actions, (tuple, list)):
+            actions = np.asarray(actions[0])
+            if actions.ndim == 2:
+                actions = actions[np.newaxis, ...]
+            return (actions, *actions[1:])
+        ###
+
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
         return actions
@@ -392,7 +499,7 @@ class FilteredSFTLearner(Agent):
     def _generate_actions(
         self, observations: np.ndarray | Dict,
         task_description: str,
-    ) -> np.ndarray:
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
             observations, task_description=task_description
@@ -401,13 +508,20 @@ class FilteredSFTLearner(Agent):
             observations=processed_obs,
             rng=rng,
             train_state=self._train_state,
+            return_prefix_rep=self._config.collect.store_prefix_rep,
         )
+
+        # TODO: check if necessary
+        if isinstance(actions, (tuple, list)):
+            return tuple(np.asarray(x, dtype=np.float32) for x in actions)
+        ###
+
         return np.asarray(actions, dtype=np.float32)
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         return self._generate_actions(observations, **kwargs)
 
-    def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
+    def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
 
     def _online_batch_to_sft_batch(
@@ -430,6 +544,155 @@ class FilteredSFTLearner(Agent):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
+    def _broadcast_prefix_embedding(
+        self, prefix_embedding: Any, observation: Dict[str, Any]
+    ) -> np.ndarray:
+        """Shape prefix embeddings to match observation layout.
+
+        For per-step collection, policy prefix embeddings are per observation
+        (shape [S, E] or [1, S, E]) while observations are sequences over the
+        query horizon. This helper repeats the prefix embedding across that
+        horizon so it can be stored alongside per-step observations.
+        """
+        # TODO: clean up
+        prefix = np.asarray(prefix_embedding, dtype=np.float32)
+        if not self._config.collect.add_per_step_data:
+            if prefix.ndim == 3 and prefix.shape[0] == 1:
+                return prefix[0]
+            return prefix
+
+        obs_leaves = jax.tree_util.tree_leaves(observation)
+        horizon = next(
+            (
+                int(np.asarray(leaf).shape[0])
+                for leaf in obs_leaves
+                if np.asarray(leaf).ndim >= 1
+            ),
+            None,
+        )
+        if horizon is None:
+            raise ValueError(
+                "Cannot infer per-step horizon for prefix embedding broadcast."
+            )
+
+        if prefix.ndim == 2:
+            return np.repeat(prefix[None, ...], horizon, axis=0)
+        if prefix.ndim == 3:
+            if prefix.shape[0] == 1:
+                return np.repeat(prefix, horizon, axis=0)
+            if prefix.shape[0] == horizon:
+                return prefix
+            raise ValueError(
+                "Per-step prefix embedding has incompatible leading dimension: "
+                f"got {prefix.shape[0]}, expected 1 or {horizon}."
+            )
+        raise ValueError(
+            "Per-step prefix embedding must be rank-2 or rank-3, "
+            f"got shape {prefix.shape}."
+        )
+
+    def _compute_prefix_for_observation(
+        self,
+        *,
+        observation: Dict[str, Any] | None,
+        task_description: str | None,
+    ) -> np.ndarray | None:
+        """Compute policy prefix embedding for one observation dict.
+
+        Used for the final transition in an episode, where the next-step
+        prefix embedding is not available from action payloads.
+        """
+        # TODO: clean up
+        if observation is None:
+            return None
+        if getattr(self._policy, "_is_pytorch_model", False):
+            return None
+        prompt = task_description or self._config.default_prompt
+        if prompt is None:
+            return None
+
+        # For per-step collection the observation is a short horizon [H, ...].
+        # We only need the final state in that horizon for the terminal next-observation prefix.
+        if self._config.collect.add_per_step_data:
+            observation = jax.tree.map(
+                lambda x: (arr[-1] if (arr := np.asarray(x)).ndim > 0 else arr),
+                observation,
+            )
+
+        batched_obs = jax.tree.map(lambda x: np.asarray(x)[None, ...], observation)
+        processed_obs = self._process_obs_for_pi0(
+            batched_obs,
+            task_description=str(prompt),
+        )
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
+        prefix_rep = self._compute_prefix_rep_with_model(
+            model=model,
+            observations=processed_obs,
+        )
+        if prefix_rep.ndim >= 3 and prefix_rep.shape[0] == 1:
+            prefix_rep = prefix_rep[0]
+        return np.asarray(prefix_rep, dtype=np.float32)
+
+    def _attach_prefix_embeddings_to_episode_data(
+        self,
+        episode_data: list[Dict[str, Any]],
+        *,
+        task_description: str | None,
+    ) -> None:
+        """Unpack `(actions, prefix)` payloads and align prefixes to transitions.
+
+        - Replaces each `ep["action"]` payload with pure actions.
+        - Writes the unpacked prefix embedding to `ep["observation"]`.
+        - Writes the shifted prefix embedding to `ep["next_observation"]`
+          using the next step's payload.
+        - Computes the final next-observation prefix with the current model.
+        """
+        # TODO: clean up
+        if not episode_data:
+            return
+
+        step_prefixes: list[np.ndarray | None] = []
+        for ep in episode_data:
+            actions, prefix_embedding = unpack_action_and_prefix(ep["action"])
+            ep["action"] = np.asarray(actions, dtype=np.float32)
+            step_prefixes.append(
+                None
+                if prefix_embedding is None
+                else np.asarray(prefix_embedding, dtype=np.float32)
+            )
+
+        final_next_prefix = self._compute_prefix_for_observation(
+            observation=episode_data[-1].get("next_observation"),
+            task_description=task_description,
+        )
+
+        for idx, ep in enumerate(episode_data):
+            obs = ep.get("observation")
+            curr_prefix = step_prefixes[idx]
+            if curr_prefix is not None and isinstance(obs, dict):
+                obs[PREFIX_EMBEDDING_NAME] = self._broadcast_prefix_embedding(
+                    curr_prefix, obs
+                )
+
+            next_obs = ep.get("next_observation")
+            if not isinstance(next_obs, dict):
+                continue
+            next_prefix = (
+                step_prefixes[idx + 1]
+                if idx + 1 < len(step_prefixes)
+                else final_next_prefix
+            )
+            if next_prefix is not None:
+                next_obs[PREFIX_EMBEDDING_NAME] = self._broadcast_prefix_embedding(
+                    next_prefix, next_obs
+                )
+
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
 
         assert env_index in range(len(self._episode_storage)), \
@@ -442,6 +705,15 @@ class FilteredSFTLearner(Agent):
             self._save_episode_in_buffer(episode_data, task_description)
 
     def _save_episode_in_buffer(self, episode_data, task_description):
+
+        # TODO clean up
+        return_prefix_rep = self._config.collect.store_prefix_rep
+        if return_prefix_rep:
+            self._attach_prefix_embeddings_to_episode_data(
+                episode_data,
+                task_description=task_description,
+            )
+        ###
 
         # concatenate all chunks
         episode_data = jax.tree_util.tree_map(lambda *xs: np.concatenate(xs, axis=0), *episode_data)
@@ -510,6 +782,22 @@ class FilteredSFTLearner(Agent):
 
     def update(self):
         self.training_steps += 1
+        # TODO: move assert
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig), (
+            "Only Filtered SFT config should be passed " "to the filtered SFT agent"
+        )
+        update_policy = (
+            self.training_steps >= rl_config.policy_training_start_step
+            and self.training_steps % rl_config.policy_update_interval == 0
+        )
+        if not update_policy:
+            return {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
+
         if self._online_data_buffer.size == 0:
             return {}
         online_ratio = self._config.rl.online_ratio
