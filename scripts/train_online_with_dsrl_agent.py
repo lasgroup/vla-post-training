@@ -324,30 +324,6 @@ def _build_actor_critic_defs(
     return state_action_critic_def, policy_def
 
 
-def _resolve_env_backend(config: _config.OnlineTrainConfig) -> str:
-    backend = str(getattr(config.collect, "env_backend", "dmc")).strip().lower()
-    if backend not in ("dmc", "libero"):
-        raise ValueError(
-            f"Unsupported collect.env_backend={backend!r}. Expected 'dmc' or 'libero'."
-        )
-    return backend
-
-
-def _resolve_policy_distribution(
-    config: _config.OnlineTrainConfig, backend: str
-) -> str:
-    configured = str(_get_rl_attr(config, "policy_distribution", "auto")).strip().lower()
-    if configured == "auto":
-        # LIBERO uses Pi0 noise-space policy decoding, which should stay unbounded.
-        return "normal" if backend == "libero" else "tanh_normal"
-    if configured in ("normal", "tanh_normal"):
-        return configured
-    raise ValueError(
-        f"Unsupported rl.policy_distribution={configured!r}. "
-        "Expected 'auto', 'normal', or 'tanh_normal'."
-    )
-
-
 def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
     env_num = int(config.collect.env_num)
     add_states = bool(config.collect.add_states)
@@ -448,7 +424,7 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
 
 
 def _build_training_env(config: _config.OnlineTrainConfig):
-    backend = _resolve_env_backend(config)
+    backend = getattr(config.collect, "env_backend", "dmc")
     if backend == "libero":
         env_fn, task_description = make_env_libero(config)
         env = _wrap_dsrl_env_for_libero(
@@ -537,7 +513,7 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
-    backend = _resolve_env_backend(config)
+    backend = getattr(config.collect, "env_backend", "dmc")
     env, task_description = _build_training_env(config)
     _configure_dsrl_vector_env(env, task_description=task_description)
 
@@ -628,7 +604,7 @@ def main(config: _config.OnlineTrainConfig):
         action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
         action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
     
-    policy_distribution = _resolve_policy_distribution(config, backend)
+    policy_distribution = "tanh_normal"
     logging.info("DSRL actor policy distribution: %s", policy_distribution)
     if backend == "libero":
         logging.info(

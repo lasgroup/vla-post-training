@@ -410,20 +410,20 @@ class DSRLLearner(Agent):
                 )
             batch = self._online_data_buffer.sample()
             batch_observation = normalize_observation_for_model(batch["observation"])
-            batch_next_observation = normalize_observation_for_model(
-                batch["next_observation"]
-            )
-            observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
-            )
+            batch_next_observation = normalize_observation_for_model(batch["next_observation"])
+            observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             actions = jnp.asarray(batch["actions"], dtype=jnp.float32)
-            next_observation = jax.tree.map(
-                lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation
-            )
+            next_observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation)
             reward = jnp.asarray(batch["reward"], dtype=jnp.float32)
             discount = jnp.asarray(batch["discount"], dtype=jnp.float32)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
+            # jax.debug.print("cr obs {obs}", obs=observation)
+            # jax.debug.print("cr act {obs}", obs=actions)
+            # jax.debug.print("cr n_obs {obs}", obs=next_observation)
+            # jax.debug.print("cr rew {obs}", obs=reward)
+            # jax.debug.print("cr dis {obs}", obs=discount)
+
 
             train_rng, self._rng = jax.random.split(self._rng)
             self._state_action_critic_state, critic_info = self._train_critic_step(
@@ -440,9 +440,7 @@ class DSRLLearner(Agent):
             if latest_actor_observation is None:
                 batch = self._online_data_buffer.sample()
                 batch_observation = normalize_observation_for_model(batch["observation"])
-                observation = jax.tree.map(
-                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
-                )
+                observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             else:
                 observation = latest_actor_observation
 
@@ -501,6 +499,7 @@ class DSRLLearner(Agent):
                 discount=base_discount,
                 action=act,
             )
+            r = r - 1 # Make negative rewards optional
             discount = (base_discount ** int(n_steps)) * (1.0 - float(done))
             policy_actions = np.asarray(act, dtype=np.float32).reshape(1, -1)
             real_actions = np.asarray(real_action, dtype=np.float32)
@@ -514,9 +513,7 @@ class DSRLLearner(Agent):
                     "observation": jax.tree_util.tree_map(_copy_with_batch_dim, obs),
                     "actions": policy_actions,
                     "real_actions": real_actions,
-                    "next_observation": jax.tree_util.tree_map(
-                        _copy_with_batch_dim, next_obs
-                    ),
+                    "next_observation": jax.tree_util.tree_map(_copy_with_batch_dim, next_obs),
                     "reward": np.asarray([r], dtype=np.float32),
                     "discount": np.asarray([discount], dtype=np.float32),
                     "terminated": np.asarray([terminated], dtype=np.bool_),
