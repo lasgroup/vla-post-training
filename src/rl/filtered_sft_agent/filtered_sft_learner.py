@@ -353,7 +353,7 @@ class FilteredSFTLearner(Agent):
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
-        obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations["observation"])
+        obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
         size = int(self._config.collect.resize_image)
         resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
@@ -457,9 +457,9 @@ class FilteredSFTLearner(Agent):
 
         # process elements to account for action chunks
         remove_prefix_and_crop = lambda x: {k[len("observation/") :]: v[:n_windows] for k, v in x.items()}
-        _obs = remove_prefix_and_crop(episode_data["observation"]["observation"])
-        _next_obs = remove_prefix_and_crop(episode_data["next_observation"]["observation"])
-        _actions = np.stack([episode_data["observation"]["action"][start : start + act_h] for start in range(n_windows)])
+        _obs = remove_prefix_and_crop(episode_data["observation"])
+        _next_obs = remove_prefix_and_crop(episode_data["next_observation"])
+        _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
         _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
