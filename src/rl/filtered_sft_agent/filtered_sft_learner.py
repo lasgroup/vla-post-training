@@ -50,7 +50,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
     replan_steps = config.collect.replan_steps
     env_class = config.collect.domain
     seed = config.seed
-    discount = config.rl.discount
     env_factories = []
     for i in range(env_num):
 
@@ -67,7 +66,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
             base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=replan_steps,
-                post_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
             )
             return base_env
 
@@ -174,6 +172,9 @@ def init_train_state(
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
+        # see https://arxiv.org/pdf/2501.09747, Appendix C - clipping low-magnitude actions
+        # the LIBERO dataset seems to have been filtered accordingly
+        self.post_step_action_filter = lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -459,6 +460,7 @@ class FilteredSFTLearner(Agent):
         _obs = remove_prefix_and_crop(episode_data["observation"]["observation"])
         _next_obs = remove_prefix_and_crop(episode_data["next_observation"]["observation"])
         _actions = np.stack([episode_data["observation"]["action"][start : start + act_h] for start in range(n_windows)])
+        _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
         _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]

@@ -5,6 +5,8 @@ import logging
 import math
 import numpy as np
 
+from src.rl.prefix_embedding import unpack_action_and_prefix
+
 
 class GymnasiumEnvAdapter(gym.Env):
     """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
@@ -103,13 +105,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         query_frequency: int,
-        pre_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
-        post_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-        self._pre_step_filter = pre_step_filter
-        self._post_step_filter = post_step_filter
 
     @property
     def expand_space(self, space):
@@ -174,9 +172,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # Extract the sub-action for this specific step
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
-            sub_action = self._pre_step_filter(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
-            sub_action = self._post_step_filter(sub_action)
             obs_act = {"observation": obs, "action": sub_action}
             data.append(
                 {
@@ -216,6 +212,24 @@ class QueryFrequencyWrapper(gym.Wrapper):
             stacked["truncated"],
             stacked["info"],
         )
+
+
+class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
+    """Query wrapper that ignores prefix payload when stepping the underlying env."""
+
+    def step(self, action):
+        env_action, _ = unpack_action_and_prefix(action)
+        return super().step(env_action)
+
+
+class TimeToSuccessAsRewardWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env=env)
+
+    def step(self, action):
+        obs, _, terminate, truncate, info = self.env.step(action)
+        time_to_success_reward = 0.0 if terminate else -1.0
+        return obs, time_to_success_reward, terminate, truncate, info
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):
