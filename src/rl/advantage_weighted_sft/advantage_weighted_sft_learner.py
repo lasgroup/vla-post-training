@@ -313,20 +313,24 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             q_opt_state = self._state_action_critic_state.tx.init(
                 nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
             )
+            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
             self._state_action_critic_state = dataclasses.replace(
                 self._state_action_critic_state,
                 opt_state=q_opt_state,
-                ema_params=self._state_action_critic_state.params,
+                ema_params=new_ema_state_action_critic_params,
             )
+            del new_ema_state_action_critic_params, q_opt_state
 
             v_opt_state = self._value_state.tx.init(
                 nnx.filter_state(self._value_state.params, nnx.Param)
             )
+            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
             self._value_state = dataclasses.replace(
                 self._value_state,
                 opt_state=v_opt_state,
-                ema_params=self._value_state.params,
+                ema_params=new_ema_value_params,
             )
+            del new_ema_value_params, v_opt_state
         self.training_steps += 1
         update_critic = (
             self.training_steps >= rl_config.critic_training_start_step
