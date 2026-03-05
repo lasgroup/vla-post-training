@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
 from typing import Any, Dict
 
 import numpy as np
@@ -39,18 +38,6 @@ from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
-
-
-@dataclass
-class TransitionBatch:
-    observation: Any
-    action: np.ndarray
-    next_observation: Any
-    reward: np.ndarray
-    terminated: np.ndarray
-    truncated: np.ndarray
-    done: np.ndarray
-    n_steps: np.ndarray
 
 
 def _extract_replay_observation(
@@ -175,150 +162,11 @@ def _build_replay_observation_template(
     return template
 
 
-class ReplayBuffer:
-    """Adapter around ShardedReplayBuffer with TransitionBatch API."""
+def _copy_with_batch_dim(x: Any, *, dtype: Any | None = None) -> np.ndarray:
+    arr = np.asarray(x, dtype=dtype)
+    return np.array(arr[None, ...], copy=True)
 
-    def __init__(
-        self,
-        *,
-        dummy_observation: Any,
-        flat_action_dim: int,
-        batch_size: int,
-        capacity: int = 100_000,
-        seed: int = 0,
-    ):
-        self.capacity = int(capacity)
-        self._flat_action_dim = int(flat_action_dim)
 
-        dummy_obs = jax.tree_util.tree_map(lambda x: np.asarray(x), dummy_observation)
-        dummy_data = {
-            "observation": dummy_obs,
-            "action": np.zeros((1, self._flat_action_dim), dtype=np.float32),
-            "next_observation": dummy_obs,
-            "reward": np.zeros((1,), dtype=np.float32),
-            "terminated": np.zeros((1,), dtype=np.bool_),
-            "truncated": np.zeros((1,), dtype=np.bool_),
-            "done": np.zeros((1,), dtype=np.bool_),
-            "n_steps": np.ones((1,), dtype=np.int32),
-        }
-
-        self._buffer = ShardedReplayBuffer(
-            dummy_data=dummy_data,
-            max_capacity=self.capacity,
-            batch_size=int(batch_size),
-            data_sharding=None,
-            seed=int(seed),
-            preprocess_fn=self._preprocess_insert,
-            postprocess_fn=None,
-            freeze_dict=False,
-        )
-
-    @property
-    def size(self) -> int:
-        return int(self._buffer.size)
-
-    @staticmethod
-    def _fit_vector(
-        values: Any,
-        length: int,
-        *,
-        dtype: Any,
-        fill_value: Any,
-    ) -> np.ndarray:
-        arr = np.asarray(values, dtype=dtype).reshape(-1)
-        if arr.size == length:
-            return arr
-        if arr.size == 0:
-            return np.full((length,), fill_value, dtype=dtype)
-        if arr.size == 1:
-            return np.full((length,), arr.item(), dtype=dtype)
-        if arr.size > length:
-            return arr[:length]
-        return np.pad(
-            arr,
-            (0, length - arr.size),
-            mode="constant",
-            constant_values=fill_value,
-        )
-
-    def _preprocess_insert(self, transition_batch: Dict[str, Any]) -> Dict[str, Any]:
-        obs = jax.tree_util.tree_map(lambda x: np.asarray(x), transition_batch["observation"])
-        next_obs = jax.tree_util.tree_map(
-            lambda x: np.asarray(x), transition_batch["next_observation"]
-        )
-
-        actions = np.asarray(transition_batch["action"], dtype=np.float32)
-        if actions.ndim == 1:
-            actions = actions[None, ...]
-        actions = actions.reshape(actions.shape[0], -1)
-        batch_size = int(actions.shape[0])
-
-        reward = self._fit_vector(
-            transition_batch.get("reward", 0.0),
-            batch_size,
-            dtype=np.float32,
-            fill_value=0.0,
-        )
-        terminated = self._fit_vector(
-            transition_batch.get("terminated", False),
-            batch_size,
-            dtype=np.bool_,
-            fill_value=False,
-        )
-        truncated = self._fit_vector(
-            transition_batch.get("truncated", False),
-            batch_size,
-            dtype=np.bool_,
-            fill_value=False,
-        )
-        done = self._fit_vector(
-            transition_batch.get("done", np.logical_or(terminated, truncated)),
-            batch_size,
-            dtype=np.bool_,
-            fill_value=False,
-        )
-        n_steps = self._fit_vector(
-            transition_batch.get("n_steps", 1),
-            batch_size,
-            dtype=np.int32,
-            fill_value=1,
-        )
-
-        return {
-            "observation": obs,
-            "action": actions,
-            "next_observation": next_obs,
-            "reward": reward,
-            "terminated": terminated,
-            "truncated": truncated,
-            "done": done,
-            "n_steps": n_steps,
-        }
-
-    def insert(self, transition: Dict[str, Any]) -> None:
-        batched = jax.tree_util.tree_map(lambda x: np.asarray(x)[None, ...], transition)
-        self._buffer.insert(batched)
-
-    def sample(self, batch_size: int) -> TransitionBatch:
-        if self.size == 0:
-            raise ValueError("Cannot sample from an empty replay buffer.")
-        if int(batch_size) != int(self._buffer.batch_size):
-            raise ValueError(
-                f"ReplayBuffer sample batch_size={batch_size} does not match configured "
-                f"batch_size={self._buffer.batch_size}."
-            )
-        stacked = self._buffer.sample()
-        return TransitionBatch(
-            observation=stacked["observation"],
-            action=np.asarray(stacked["action"], dtype=np.float32),
-            next_observation=stacked["next_observation"],
-            reward=np.asarray(stacked["reward"], dtype=np.float32).reshape(-1),
-            terminated=np.asarray(stacked["terminated"], dtype=np.bool_).reshape(-1),
-            truncated=np.asarray(stacked["truncated"], dtype=np.bool_).reshape(-1),
-            done=np.asarray(stacked["done"], dtype=np.bool_).reshape(-1),
-            n_steps=np.asarray(stacked["n_steps"], dtype=np.int32).reshape(-1),
-        )
-    
 class DSRLLearner(Agent):
     
     def __init__(self, 
@@ -342,13 +190,35 @@ class DSRLLearner(Agent):
         self._dummy_act = dummy_act
         self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
-        self.replay = ReplayBuffer(
-            dummy_observation=replay_dummy_obs,
-            flat_action_dim=self._action_dim,
+
+        replay_dummy_obs = jax.tree_util.tree_map(lambda x: np.asarray(x), replay_dummy_obs)
+        self._online_data_buffer = ShardedReplayBuffer(
+            dummy_data={
+                "observation": replay_dummy_obs,
+                "actions": np.zeros((1, self._action_dim), dtype=np.float32),
+                "real_actions": np.zeros(
+                    (1, *self._expected_action_shape), dtype=np.float32
+                ),
+                "next_observation": replay_dummy_obs,
+                "reward": np.zeros((1,), dtype=np.float32),
+                "discount": np.zeros((1,), dtype=np.float32),
+                "terminated": np.zeros((1,), dtype=np.bool_),
+                "truncated": np.zeros((1,), dtype=np.bool_),
+                "done": np.zeros((1,), dtype=np.bool_),
+                "n_steps": np.ones((1,), dtype=np.int32),
+            },
+            max_capacity=100_000,
             batch_size=int(getattr(self._config, "batch_size", 128)),
-            capacity=100_000,
+            data_sharding=None,
             seed=int(getattr(self._config, "seed", 0)),
+            preprocess_fn=None,
+            postprocess_fn=None,
+            freeze_dict=False,
         )
+        # Keep attribute parity with existing DSRL collection code paths.
+        self.replay = self._online_data_buffer
+        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
+        self._collection_success_episodes = 0
 
         q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(
             self._rng, 4
@@ -462,6 +332,27 @@ class DSRLLearner(Agent):
     def sample_actions(self, observations, **kwargs):
         return self._generate_actions(observations, deterministic=False, **kwargs)
 
+    def sample_online_transitions(self) -> Dict[str, Any]:
+        """Sample transitions from the shared online replay buffer interface."""
+        if self._online_data_buffer.size == 0:
+            raise ValueError(
+                "Cannot sample transitions from an empty online replay buffer."
+            )
+        batch = self._online_data_buffer.sample()
+
+        return {
+            "observation": batch["observation"],
+            "actions": np.asarray(batch["actions"], dtype=np.float32),
+            "real_actions": np.asarray(batch["real_actions"], dtype=np.float32),
+            "next_observation": batch["next_observation"],
+            "reward": np.asarray(batch["reward"], dtype=np.float32),
+            "discount": np.asarray(batch["discount"], dtype=np.float32),
+            "terminated": np.asarray(batch["terminated"], dtype=np.bool_),
+            "truncated": np.asarray(batch["truncated"], dtype=np.bool_),
+            "done": np.asarray(batch["done"], dtype=np.bool_),
+            "n_steps": np.asarray(batch["n_steps"], dtype=np.int32),
+        }
+
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
             return jax.tree.map(lambda x: x[env_id], vec)
@@ -505,31 +396,32 @@ class DSRLLearner(Agent):
         self.training_steps += 1
 
         batch_size = int(getattr(self._config, "batch_size", 128))
-        if self.replay.size < batch_size:
+        if self._online_data_buffer.size < batch_size:
             return {}
 
         info = {}
         latest_actor_observation = None
 
         if self.training_steps % self._get_critic_update_frequency() == 0:
-            batch = self.replay.sample(batch_size=batch_size)
-
-            batch_observation = normalize_observation_for_model(batch.observation)
+            if batch_size != int(self._online_data_buffer.batch_size):
+                raise ValueError(
+                    "Configured train batch_size does not match replay batch_size: "
+                    f"{batch_size} vs {self._online_data_buffer.batch_size}."
+                )
+            batch = self._online_data_buffer.sample()
+            batch_observation = normalize_observation_for_model(batch["observation"])
             batch_next_observation = normalize_observation_for_model(
-                batch.next_observation
+                batch["next_observation"]
             )
             observation = jax.tree.map(
                 lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
             )
-            actions = jnp.asarray(batch.action, dtype=jnp.float32)
+            actions = jnp.asarray(batch["actions"], dtype=jnp.float32)
             next_observation = jax.tree.map(
                 lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation
             )
-            reward = jnp.asarray(batch.reward, dtype=jnp.float32)
-            done = jnp.asarray(batch.done, dtype=jnp.float32)
-            n_steps = jnp.asarray(batch.n_steps, dtype=jnp.float32)
-            base_discount = jnp.asarray(float(self._config.discount), dtype=jnp.float32)
-            discount = jnp.power(base_discount, n_steps) * (1.0 - done)
+            reward = jnp.asarray(batch["reward"], dtype=jnp.float32)
+            discount = jnp.asarray(batch["discount"], dtype=jnp.float32)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
 
@@ -546,9 +438,11 @@ class DSRLLearner(Agent):
 
         if self.training_steps % self._get_actor_update_frequency() == 0:
             if latest_actor_observation is None:
-                batch = self.replay.sample(batch_size=batch_size)
-                batch_observation = normalize_observation_for_model(batch.observation)
-                observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
+                batch = self._online_data_buffer.sample()
+                batch_observation = normalize_observation_for_model(batch["observation"])
+                observation = jax.tree.map(
+                    lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation
+                )
             else:
                 observation = latest_actor_observation
 
@@ -578,10 +472,8 @@ class DSRLLearner(Agent):
         if not episode:
             return
 
-        def _copy_leaf(x, *, dtype=None):
-            arr = np.asarray(x, dtype=dtype)
-            return np.array(arr, copy=True)
         obs_prefix = str(self._config.collect.obs_prefix_key)
+        base_discount = float(self._config.discount)
 
         for ep in episode:
             obs = _extract_replay_observation(ep["observation"], obs_prefix=obs_prefix)
@@ -595,6 +487,9 @@ class DSRLLearner(Agent):
                 next_obs_extracted = obs
             next_obs = _finalize_replay_observation(obs, next_obs_extracted)
             act = ep.get("action", ep.get("actions"))
+            if act is None:
+                raise KeyError("Episode transition is missing `action` / `actions`.")
+            real_action = ep.get("real_action", ep.get("real_actions", act))
 
             rew = ep.get("reward", 0.0)
             term = ep.get("terminate", False)
@@ -603,20 +498,33 @@ class DSRLLearner(Agent):
                 reward=rew,
                 terminated=term,
                 truncated=trunc,
-                discount=float(self._config.discount),
+                discount=base_discount,
                 action=act,
             )
+            discount = (base_discount ** int(n_steps)) * (1.0 - float(done))
+            policy_actions = np.asarray(act, dtype=np.float32).reshape(1, -1)
+            real_actions = np.asarray(real_action, dtype=np.float32)
+            if real_actions.shape != self._expected_action_shape:
+                if int(np.prod(real_actions.shape, dtype=np.int64)) == self._action_dim:
+                    real_actions = real_actions.reshape(self._expected_action_shape)
+            real_actions = np.asarray(real_actions, dtype=np.float32)[None, ...]
 
-            self.replay.insert({
-                "observation": jax.tree_util.tree_map(_copy_leaf, obs),
-                "action": _copy_leaf(act, dtype=np.float32),
-                "next_observation": jax.tree_util.tree_map(_copy_leaf, next_obs),
-                "reward": np.float32(r),
-                "terminated": np.bool_(terminated),
-                "truncated": np.bool_(truncated),
-                "done": np.bool_(done),
-                "n_steps": np.int32(n_steps),
-            })
+            self._online_data_buffer.insert(
+                {
+                    "observation": jax.tree_util.tree_map(_copy_with_batch_dim, obs),
+                    "actions": policy_actions,
+                    "real_actions": real_actions,
+                    "next_observation": jax.tree_util.tree_map(
+                        _copy_with_batch_dim, next_obs
+                    ),
+                    "reward": np.asarray([r], dtype=np.float32),
+                    "discount": np.asarray([discount], dtype=np.float32),
+                    "terminated": np.asarray([terminated], dtype=np.bool_),
+                    "truncated": np.asarray([truncated], dtype=np.bool_),
+                    "done": np.asarray([done], dtype=np.bool_),
+                    "n_steps": np.asarray([n_steps], dtype=np.int32),
+                }
+            )
 
         self._collection_success_episodes += int(is_success)
     
