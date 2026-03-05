@@ -108,6 +108,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     td_weight_schedule: StepSchedule = StepSchedule(
         init_value=0.0, end_value=1.0, switch_step=1_000
     )
+    critic_pre_training_steps: int = 1_000
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1

@@ -1,4 +1,5 @@
 # ruff: noqa: F722
+import dataclasses
 import functools
 from typing import Any, Dict, Tuple
 import gc
@@ -32,14 +33,14 @@ from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerCo
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(
-            self,
-            config: OnlineTrainConfig,
-            dummy_obs: ObsType,
-            dummy_act: ActionType,
-            state_action_critic_def: StateActionCriticDef,
-            state_value_def: StateValueDef,
-            task_description: str,
-            debug: bool = False,
+        self,
+        config: OnlineTrainConfig,
+        dummy_obs: ObsType,
+        dummy_act: ActionType,
+        state_action_critic_def: StateActionCriticDef,
+        state_value_def: StateValueDef,
+        task_description: str,
+        debug: bool = False,
     ):
         self.task_description = task_description
         self.debug = debug
@@ -139,10 +140,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _recompute_prefix_embedding(
-            self,
-            *,
-            observation: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        *,
+        observation: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
@@ -168,9 +169,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def _online_batch_to_critic_batch(
-            self,
-            online_batch: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        online_batch: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -210,9 +211,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _sft_batch_to_actor_batch(
-            self,
-            sft_batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
+        self,
+        sft_batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
         policy_obs_dict = policy_observation.to_dict()
@@ -235,12 +236,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def _update_critics(
-            self,
-            batch: Dict[str, Any],
-            q_state: training_utils.TrainState,
-            value_state: training_utils.TrainState,
-            policy_state: training_utils.TrainState,
-            rng: at.KeyArrayLike,
+        self,
+        batch: Dict[str, Any],
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
     ) -> Tuple[
         training_utils.TrainState,
         training_utils.TrainState,
@@ -275,12 +276,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return q_state, value_state, q_info, value_info
 
     def _update_policy(
-            self,
-            batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
-            q_state: training_utils.TrainState,
-            value_state: training_utils.TrainState,
-            rng: at.KeyArrayLike,
+        self,
+        batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -300,20 +301,40 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), "Only Advantage SFT config should " \
-                                                                                "be passed to the filtered SFT agent"
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (
+            "Only Advantage SFT config should " "be passed to the filtered SFT agent"
+        )
         rl_config = self._config.rl
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
+        if rl_config.critic_pre_training_steps == self.training_steps:
+            # Reset optimizer state of the value and q function
+            q_opt_state = self._state_action_critic_state.tx.init(
+                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+            )
+            self._state_action_critic_state = dataclasses.replace(
+                self._state_action_critic_state,
+                opt_state=q_opt_state,
+                ema_params=self._state_action_critic_state.params,
+            )
+
+            v_opt_state = self._value_state.tx.init(
+                nnx.filter_state(self._value_state.params, nnx.Param)
+            )
+            self._value_state = dataclasses.replace(
+                self._value_state,
+                opt_state=v_opt_state,
+                ema_params=self._value_state.params,
+            )
         self.training_steps += 1
         update_critic = (
-                self.training_steps >= rl_config.critic_training_start_step
-                and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic_training_start_step
+            and self.training_steps % rl_config.critic_update_interval == 0
         )
         update_policy = (
-                self.training_steps >= rl_config.policy_training_start_step
-                and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy_training_start_step
+            and self.training_steps % rl_config.policy_update_interval == 0
         )
         if not update_critic and not update_policy:
             return {
@@ -324,7 +345,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         batch = next(self._data_iter)
         use_online = (
-                self._online_data_buffer.size >= self._online_data_buffer.batch_size
+            self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
 
         critic_info, actor_info = {}, {}
@@ -350,8 +371,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._value_state = value_state
 
                 critic_info = {
-                                  f"critic/q_{key}": value for key, value in q_info.items()
-                              } | {f"critic/value_{key}": value for key, value in value_info.items()}
+                    f"critic/q_{key}": value for key, value in q_info.items()
+                } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
             online_batch = self._online_batch_to_sft_batch(online_batch)
@@ -394,13 +415,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
         info = (
-                actor_info
-                | critic_info
-                | {
-                    "online_buffer_size": jnp.asarray(
-                        float(self._online_data_buffer.size), dtype=jnp.float32
-                    )
-                }
+            actor_info
+            | critic_info
+            | {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
         )
         info = jax.tree.map(np.asarray, info)
         return info
