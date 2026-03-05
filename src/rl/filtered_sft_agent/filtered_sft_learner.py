@@ -48,9 +48,9 @@ def get_env_and_agent_for_filtered_sft(env_fn, config, task_description):
 def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
     env_num = config.collect.env_num
     replan_steps = config.collect.replan_steps
-    env_class = config.domain
+    env_class = config.collect.domain
     seed = config.seed
-    discount = config.discount
+    discount = config.rl.discount
     env_factories = []
     for i in range(env_num):
 
@@ -214,8 +214,8 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
-        assert 0.0 <= self._config.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.online_ratio)))
+        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
         self._data_loader = create_data_loader(
             config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
@@ -330,19 +330,19 @@ class FilteredSFTLearner(Agent):
             }
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
-            self._config.online_buffer_size,
+            self._config.rl.buffer_capacity,
         )
 
         return ShardedReplayBuffer(
             dummy_data=dummy_data,
-            max_capacity=self._config.online_buffer_size,
+            max_capacity=self._config.rl.buffer_capacity,
             data_sharding=self._data_sharding,
             seed=self._config.seed,
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
-            load_paths=self._config.buffer_load_paths,
-            save_path=self._config.buffer_save_path,
+            load_paths=self._config.rl.buffer_load_paths,
+            save_path=self._config.rl.buffer_save_path,
         )
 
     def _process_obs_for_pi0(
@@ -447,8 +447,8 @@ class FilteredSFTLearner(Agent):
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
-        last_gamma = float(self._config.discount**act_h)
-        all_gammas = np.array([self._config.discount**i for i in range(n_steps)])
+        last_gamma = float(self._config.rl.discount**act_h)
+        all_gammas = np.array([self._config.rl.discount**i for i in range(n_steps)])
         w_gammas = all_gammas[:act_h]
         n_windows = n_steps - act_h + 1
         if n_windows <= 0:
@@ -510,7 +510,7 @@ class FilteredSFTLearner(Agent):
         self.training_steps += 1
         if self._online_data_buffer.size == 0:
             return {}
-        online_ratio = self._config.online_ratio
+        online_ratio = self._config.rl.online_ratio
         if online_ratio < 1.0:
             batch = next(self._data_iter)
         if online_ratio > 0.0:
