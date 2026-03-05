@@ -147,8 +147,14 @@ class ResNetEncoder(nnx.Module):
                 return nnx.BatchNorm(num_features, *args, **kwargs)
         elif self.norm == 'group':
             def norm_factory(num_features, *args, **kwargs):
-                # num_features is ignored by ResNetGroupNorm (or rather, handled by signature update)
-                return ResNetGroupNorm(num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
+                return ResNetGroupNorm(
+                    num_features=num_features,
+                    num_groups=4,
+                    epsilon=1e-5,
+                    dtype=self.dtype,
+                    *args,
+                    **kwargs,
+                )
         elif self.norm == 'cross':
             def norm_factory(num_features, *args, **kwargs):
                 return CrossNorm(num_features, *args, **kwargs)

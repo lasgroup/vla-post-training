@@ -90,8 +90,15 @@ class ResNetV2Encoder(nnx.Module):
                 kwargs.setdefault('momentum', 0.9)
                 return nnx.BatchNorm(num_features=num_features, *args, **kwargs)
         elif self.norm == 'groupnorm':
-            def norm_factory(*args, **kwargs):
-                return ResNetGroupNorm(num_groups=4, epsilon=1e-5, dtype=self.dtype, *args, **kwargs)
+            def norm_factory(num_features, *args, **kwargs):
+                return ResNetGroupNorm(
+                    num_features=num_features,
+                    num_groups=4,
+                    epsilon=1e-5,
+                    dtype=self.dtype,
+                    *args,
+                    **kwargs,
+                )
         else:
             raise ValueError('norm not found')
 

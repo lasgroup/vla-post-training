@@ -232,8 +232,22 @@ class CrossNorm(nnx.Module):
 
 
 class ResNetGroupNorm(nnx.Module):
-    def __init__(self, num_groups, epsilon=1e-5, dtype=jnp.float32, *, rngs: nnx.Rngs):
-        self.gn = nnx.GroupNorm(num_groups=num_groups, epsilon=epsilon, dtype=dtype, rngs=rngs)
+    def __init__(
+        self,
+        num_features: int,
+        num_groups: int,
+        epsilon=1e-5,
+        dtype=jnp.float32,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.gn = nnx.GroupNorm(
+            num_features=num_features,
+            num_groups=num_groups,
+            epsilon=epsilon,
+            dtype=dtype,
+            rngs=rngs,
+        )
 
     def __call__(self, x, use_running_average: bool = False):
         if x.ndim == 3:
