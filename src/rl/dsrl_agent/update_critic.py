@@ -63,10 +63,30 @@ def _update_train_state(
         opt_state=new_opt_state,
     )
     if state.ema_decay is not None and state.ema_params is not None:
+        def _ema_update_leaf(old, new):
+            old_dtype = getattr(old, "dtype", None)
+            if old_dtype is None:
+                return new
+            prng_key_dtype = getattr(jax.dtypes, "prng_key", None)
+            try:
+                if (
+                    prng_key_dtype is not None
+                    and jax.dtypes.issubdtype(old_dtype, prng_key_dtype)
+                ):
+                    return new
+            except Exception:
+                pass
+            try:
+                if jax.dtypes.issubdtype(old_dtype, jnp.inexact):
+                    return state.ema_decay * old + (1.0 - state.ema_decay) * new
+            except Exception:
+                pass
+            return new
+
         new_state = dataclasses.replace(
             new_state,
             ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
+                _ema_update_leaf,
                 state.ema_params,
                 new_params,
             ),
