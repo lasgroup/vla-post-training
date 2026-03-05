@@ -34,7 +34,9 @@ class LinearSchedule(_optimizer.LRScheduleConfig):
     transition_steps: int = 1000
 
     def create(self) -> optax.Schedule:
-        return optax.linear_schedule(self.init_value, self.end_value, self.transition_steps)
+        return optax.linear_schedule(
+            self.init_value, self.end_value, self.transition_steps
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -79,10 +81,9 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
     critic_inference_start_step: int = 100
-    td_weight_schedule: LinearSchedule = LinearSchedule(
-        init_value=0.0, end_value=1.0, transition_steps=1_000
-    )
+    td_weight_schedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
+
 
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):

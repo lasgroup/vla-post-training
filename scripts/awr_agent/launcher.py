@@ -28,11 +28,11 @@ DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
-DEFAULT_POLICY_UPDATE_INTERVAL = 2
+DEFAULT_POLICY_UPDATE_INTERVAL = 20
 DEFAULT_NUM_ROLLOUTS = 50
 DEFAULT_COLLECT_INTERVAL = 200
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
-DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = False
+DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 
 # ---------- Hyperparameter grid ----------
@@ -41,8 +41,8 @@ DEFAULT_BATCH_SIZE = 256
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10, 20, 50, 100],
-    "collect.use_time_to_success_as_reward": [True, False],
+    "rl.num_critic_updates_per_batch": [10, 20],
+    "collect.use_time_to_success_as_reward": [True],
     "batch_size": [32, 64, 256]
 }
 
