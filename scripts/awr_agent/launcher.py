@@ -41,9 +41,12 @@ DEFAULT_BATCH_SIZE = 256
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10, 20],
+    "rl.num_critic_updates_per_batch": [
+        10,
+    ],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [32, 64, 256]
+    "batch_size": [256],
+    "rl.policy_training_start_step": [400, 600, 800, 1000, 1500, 2000],
 }
 
 
@@ -105,6 +108,11 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
         }
         flags.update(combo)
+
+        # Keep these in sync with policy_training_start_step
+        policy_start = flags["rl.policy_training_start_step"]
+        flags["rl.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.critic_pre_training_steps"] = policy_start
 
         if "seed" in flags and "collect.seed" not in combo:
             flags["collect.seed"] = flags["seed"]
