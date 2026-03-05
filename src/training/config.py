@@ -125,6 +125,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    use_mpo_advantage_weight: bool = True
 
 
 @dataclasses.dataclass(frozen=True)

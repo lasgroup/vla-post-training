@@ -39,6 +39,18 @@ def train_step(
     value_critic = create_critic(value_state, config)
     value_critic.eval()
 
+    assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
+    group_size = config.rl.group_size
+    normalize_adv = config.rl.normalize_adv
+    use_mpo_advantage_weight = config.rl.use_mpo_advantage_weight
+    weight_clip = config.rl.weight_clip
+    beta = max(config.rl.beta, 1e-6)
+    num_steps = config.rl.num_steps
+    noise_level = config.rl.noise_level
+
+    if use_mpo_advantage_weight:
+        group_size = 1
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -51,7 +63,7 @@ def train_step(
         step_rng, noise_rng = jax.random.split(rng)
 
         def expand_and_flatten(x):
-            return jnp.repeat(x, repeats=config.rl.group_size, axis=0)
+            return jnp.repeat(x, repeats=group_size, axis=0)
 
         # Repeat action G times to get a group evaluation, [B * G, ...]
         expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
@@ -71,8 +83,8 @@ def train_step(
             rng=step_rng,
             observation=expanded_policy_obs,
             noise=noise,
-            num_steps=config.rl.num_steps,
-            noise_level=config.rl.noise_level,
+            num_steps=num_steps,
+            noise_level=noise_level,
             return_info_dict=True,
         )
 
@@ -89,35 +101,41 @@ def train_step(
             critic_reduction=config.rl.critic_reduction,
         )
         advantage = q_value - value
+        if use_mpo_advantage_weight:
+            score = advantage / beta
+            score = jnp.minimum(score, weight_clip)  # Clipping
+            score = jax.nn.softmax(score, axis=0)  # (B, )
+            score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
+        else:
+            adv = advantage
+            if normalize_adv and group_size > 1:
+                total_batch_size = adv.shape[0]
+                assert (
+                    total_batch_size % group_size == 0
+                ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
+                B = total_batch_size // group_size
+                # 4. Reshape back to (B, G) for Group Relative calculations
+                # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
+                # Get groups per sample in the batch and set the group to be the last dimension.
+                # NOTE: jnp.transpose requires a full permutation for all dimensions;
+                # swapaxes is the intended "swap last two dims" operation.
+                adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
+                log_probs = jnp.swapaxes(
+                    log_probs.reshape(B, group_size, -1), 1, 2
+                )
+                group_mean = jnp.mean(adv, axis=-1, keepdims=True)
+                group_std = jnp.std(adv, axis=-1, keepdims=True)
+                adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
+            if weight_clip is not None:
+                adv = jnp.clip(adv, -weight_clip, weight_clip)
+            score = jax.lax.stop_gradient(adv)
 
-        adv = advantage
-        if config.rl.normalize_adv and config.rl.group_size > 1:
-            total_batch_size = adv.shape[0]
-            assert (
-                total_batch_size % config.rl.group_size == 0
-            ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-            B = total_batch_size // config.rl.group_size
-            # 4. Reshape back to (B, G) for Group Relative calculations
-            # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
-            # Get groups per sample in the batch and set the group to be the last dimension.
-            # NOTE: jnp.transpose requires a full permutation for all dimensions;
-            # swapaxes is the intended "swap last two dims" operation.
-            adv = jnp.swapaxes(adv.reshape(B, config.rl.group_size, -1), 1, 2)
-            log_probs = jnp.swapaxes(
-                log_probs.reshape(B, config.rl.group_size, -1), 1, 2
-            )
-            group_mean = jnp.mean(adv, axis=-1, keepdims=True)
-            group_std = jnp.std(adv, axis=-1, keepdims=True)
-            adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
-        if config.rl.weight_clip is not None:
-            adv = jnp.clip(adv, -config.rl.weight_clip, config.rl.weight_clip)
-
-        loss = -jnp.mean(jax.lax.stop_gradient(adv) * log_probs)
+        loss = -jnp.mean(score * log_probs)
 
         info = {
             "loss": loss,
             "q_mean": jnp.mean(q_value),
-            "adv_mean": jnp.mean(adv),
+            "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(log_probs),
         }
 
