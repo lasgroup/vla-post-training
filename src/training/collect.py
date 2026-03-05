@@ -104,6 +104,9 @@ def collect_data(
     metrics = {"success_rate": success_rate}
 
     per_env_success_rates = [s / e if e > 0 else 0.0 for s, e in zip(successes_per_env, episodes_per_env)]
+    success_rate_mean = np.mean(per_env_success_rates)
+    metrics["success_rate_mean"] = success_rate_mean
+
     for i in range(env_num_multiask):
         metrics[f"Per Task/success_rate_{config.collect.task_names[i]}"] = per_env_success_rates[i]
 
