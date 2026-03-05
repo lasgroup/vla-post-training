@@ -26,10 +26,11 @@ def unwrap_dsrl_vector_observation(observations: Any) -> Any:
 
 
 def normalize_observation_for_model(observations: Any) -> Any:
-    """Convert wrapper observations to compact SAC model inputs.
+    """Convert wrapper observations to model-ready SAC inputs.
 
-    Keeps only features used by the DSRL actor/critic:
+    Keeps features used by the DSRL actor/critic:
     - `state` (flattened per-env vector)
+    - optional `image` / `wrist_image` (latest frame for chunked envs)
     - optional `prefix_embedding`
     """
     observations = unwrap_dsrl_vector_observation(observations)
@@ -37,16 +38,54 @@ def normalize_observation_for_model(observations: Any) -> Any:
         return observations
     normalized: dict[str, Any] = {}
 
-    if "state" in observations:
-        state = jnp.asarray(observations["state"], dtype=jnp.float32)
+    def _find_first(*keys: str) -> Any | None:
+        for key in keys:
+            if key in observations:
+                return observations[key]
+        return None
+
+    state_source = _find_first("pi0/state", "observation/state", "state")
+    if state_source is not None:
+        state = jnp.asarray(state_source, dtype=jnp.float32)
         # Query-frequency wrappers add a temporal/chunk axis after batch.
         # For SAC/DSRL we model Q(s, a_chunk), so keep only the latest state.
         if state.ndim >= 3:
             state = state[:, -1, ...]
+        if state.ndim == 1:
+            state = state[jnp.newaxis, ...]
         # Flatten any remaining non-batch axes (e.g. trailing singleton dims).
         if state.ndim > 2:
             state = jnp.reshape(state, (state.shape[0], -1))
         normalized["state"] = state
+
+    image_source = _find_first(
+        "image",
+        "observation/image",
+        "pi0/image",
+        "pixels",
+        "observation/pixels",
+    )
+    if image_source is not None:
+        image = jnp.asarray(image_source)
+        # Chunked envs: [B, T, H, W, C] -> keep latest frame.
+        if image.ndim >= 5:
+            image = image[:, -1, ...]
+        if image.ndim == 3:
+            image = image[jnp.newaxis, ...]
+        normalized["image"] = image
+
+    wrist_image_source = _find_first(
+        "wrist_image",
+        "observation/wrist_image",
+        "pi0/wrist_image",
+    )
+    if wrist_image_source is not None:
+        wrist_image = jnp.asarray(wrist_image_source)
+        if wrist_image.ndim >= 5:
+            wrist_image = wrist_image[:, -1, ...]
+        if wrist_image.ndim == 3:
+            wrist_image = wrist_image[jnp.newaxis, ...]
+        normalized["wrist_image"] = wrist_image
 
     # Keep optional prefix embedding for experiments that enable it.
     if PREFIX_EMBEDDING_NAME in observations:

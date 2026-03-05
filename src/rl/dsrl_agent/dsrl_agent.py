@@ -34,6 +34,7 @@ from src.rl.dsrl_agent.chunk_ops import (
     normalize_observation_for_model,
     reduce_chunk_transition,
 )
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
@@ -52,6 +53,128 @@ class TransitionBatch:
     n_steps: np.ndarray
 
 
+def _extract_replay_observation(
+    observation: Any,
+    *,
+    obs_prefix: str,
+) -> Dict[str, np.ndarray]:
+    """Convert env observation payloads into AWR-style replay observations.
+
+    Returns a dict with:
+    - `state` (required)
+    - optional `image`, `wrist_image`
+    - optional `prefix_embedding`
+    """
+    if not isinstance(observation, dict):
+        raise TypeError(
+            f"Expected dict observation for replay extraction, got {type(observation)}."
+        )
+
+    obs_dict = (
+        observation["observation"]
+        if isinstance(observation.get("observation"), dict)
+        else observation
+    )
+
+    def _get_from_obs(*keys: str) -> Any | None:
+        for key in keys:
+            if key in obs_dict:
+                return obs_dict[key]
+        return None
+
+    extracted: Dict[str, np.ndarray] = {}
+
+    image = _get_from_obs(
+        f"{obs_prefix}/image",
+        "image",
+        "observation/image",
+        "pixels",  # fallback for non-LIBERO pixel envs
+    )
+    if image is not None:
+        extracted["image"] = np.asarray(image)
+
+    wrist_image = _get_from_obs(
+        f"{obs_prefix}/wrist_image",
+        "wrist_image",
+        "observation/wrist_image",
+    )
+    if wrist_image is not None:
+        extracted["wrist_image"] = np.asarray(wrist_image)
+
+    state = _get_from_obs(
+        f"{obs_prefix}/state",
+        "state",
+        "observation/state",
+    )
+    if state is None:
+        raise KeyError(
+            "Replay extraction requires a state vector. Expected one of "
+            f"['{obs_prefix}/state', 'state', 'observation/state']."
+        )
+    extracted["state"] = np.asarray(state, dtype=np.float32)
+
+    for src in (observation, obs_dict):
+        if PREFIX_EMBEDDING_NAME in src:
+            extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
+                src[PREFIX_EMBEDDING_NAME], dtype=np.float32
+            )
+            break
+        if "prefix_rep" in src:
+            extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
+                src["prefix_rep"], dtype=np.float32
+            )
+            break
+
+    return extracted
+
+
+def _finalize_replay_observation(
+    current_obs: Dict[str, np.ndarray],
+    next_obs: Dict[str, np.ndarray] | None,
+) -> Dict[str, np.ndarray]:
+    """Fill next-observation fields from current observation when missing."""
+    if next_obs is None:
+        next_obs = {}
+
+    merged: Dict[str, np.ndarray] = {
+        "state": np.asarray(next_obs.get("state", current_obs["state"]), dtype=np.float32)
+    }
+    if "image" in next_obs or "image" in current_obs:
+        merged["image"] = np.asarray(
+            next_obs.get("image", current_obs.get("image")), dtype=np.uint8
+        )
+    if "wrist_image" in next_obs or "wrist_image" in current_obs:
+        merged["wrist_image"] = np.asarray(
+            next_obs.get("wrist_image", current_obs.get("wrist_image")), dtype=np.uint8
+        )
+    prefix = next_obs.get(PREFIX_EMBEDDING_NAME, current_obs.get(PREFIX_EMBEDDING_NAME))
+    if prefix is not None:
+        merged[PREFIX_EMBEDDING_NAME] = np.asarray(prefix, dtype=np.float32)
+    return merged
+
+
+def _build_replay_observation_template(
+    observation: Any,
+    *,
+    obs_prefix: str,
+) -> Dict[str, np.ndarray]:
+    """Build fixed-shape replay template preserving image/state modalities."""
+    extracted = _extract_replay_observation(observation, obs_prefix=obs_prefix)
+    template: Dict[str, np.ndarray] = {}
+    if "image" in extracted:
+        template["image"] = np.zeros_like(np.asarray(extracted["image"]), dtype=np.uint8)
+    if "wrist_image" in extracted:
+        template["wrist_image"] = np.zeros_like(
+            np.asarray(extracted["wrist_image"]), dtype=np.uint8
+        )
+    template["state"] = np.zeros_like(np.asarray(extracted["state"]), dtype=np.float32)
+    if PREFIX_EMBEDDING_NAME in extracted:
+        template[PREFIX_EMBEDDING_NAME] = np.zeros_like(
+            np.asarray(extracted[PREFIX_EMBEDDING_NAME]), dtype=np.float32
+        )
+    return template
+
+
 class ReplayBuffer:
     """Adapter around ShardedReplayBuffer with TransitionBatch API."""
 
@@ -67,9 +190,7 @@ class ReplayBuffer:
         self.capacity = int(capacity)
         self._flat_action_dim = int(flat_action_dim)
 
-        dummy_obs = jax.tree_util.tree_map(
-            lambda x: np.asarray(x, dtype=np.float32), dummy_observation
-        )
+        dummy_obs = jax.tree_util.tree_map(lambda x: np.asarray(x), dummy_observation)
         dummy_data = {
             "observation": dummy_obs,
             "action": np.zeros((1, self._flat_action_dim), dtype=np.float32),
@@ -121,11 +242,9 @@ class ReplayBuffer:
         )
 
     def _preprocess_insert(self, transition_batch: Dict[str, Any]) -> Dict[str, Any]:
-        obs = jax.tree_util.tree_map(
-            lambda x: np.asarray(x, dtype=np.float32), transition_batch["observation"]
-        )
+        obs = jax.tree_util.tree_map(lambda x: np.asarray(x), transition_batch["observation"])
         next_obs = jax.tree_util.tree_map(
-            lambda x: np.asarray(x, dtype=np.float32), transition_batch["next_observation"]
+            lambda x: np.asarray(x), transition_batch["next_observation"]
         )
 
         actions = np.asarray(transition_batch["action"], dtype=np.float32)
@@ -213,13 +332,18 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
-        dummy_obs = normalize_observation_for_model(dummy_obs)
+        raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
+        replay_dummy_obs = _build_replay_observation_template(
+            raw_dummy_obs,
+            obs_prefix=str(self._config.collect.obs_prefix_key),
+        )
+        dummy_obs = normalize_observation_for_model(raw_dummy_obs)
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
         self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
         self.replay = ReplayBuffer(
-            dummy_observation=dummy_obs,
+            dummy_observation=replay_dummy_obs,
             flat_action_dim=self._action_dim,
             batch_size=int(getattr(self._config, "batch_size", 128)),
             capacity=100_000,
@@ -457,33 +581,19 @@ class DSRLLearner(Agent):
         def _copy_leaf(x, *, dtype=None):
             arr = np.asarray(x, dtype=dtype)
             return np.array(arr, copy=True)
-
-        def _normalize_single_observation(obs_like: Any) -> Any:
-            """Normalize one transition observation using batched code-path.
-
-            DSRLVectorEnv emits per-step prefix reps with shape (S, E) for a single
-            env transition. Running normalization on unbatched tensors keeps that
-            full payload, which is expensive to store/sample. Add a synthetic batch
-            axis so normalize_observation_for_model() performs its pooled/batched
-            reductions, then remove that axis.
-            """
-            if isinstance(obs_like, dict):
-                batched = jax.tree_util.tree_map(
-                    lambda x: np.asarray(x)[None, ...], obs_like
-                )
-                normalized = normalize_observation_for_model(batched)
-                if isinstance(normalized, dict):
-                    return jax.tree_util.tree_map(
-                        lambda x: np.asarray(x)[0], normalized
-                    )
-                return np.asarray(normalized)[0]
-            return normalize_observation_for_model(obs_like)
+        obs_prefix = str(self._config.collect.obs_prefix_key)
 
         for ep in episode:
-            obs = _normalize_single_observation(ep["observation"])
-            next_obs = _normalize_single_observation(
-                ep.get("next_observation", ep["observation"])
-            )
+            obs = _extract_replay_observation(ep["observation"], obs_prefix=obs_prefix)
+            next_obs_raw = ep.get("next_observation", ep["observation"])
+            try:
+                next_obs_extracted = _extract_replay_observation(
+                    next_obs_raw,
+                    obs_prefix=obs_prefix,
+                )
+            except (TypeError, KeyError):
+                next_obs_extracted = obs
+            next_obs = _finalize_replay_observation(obs, next_obs_extracted)
             act = ep.get("action", ep.get("actions"))
 
             rew = ep.get("reward", 0.0)

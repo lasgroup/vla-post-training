@@ -58,6 +58,14 @@ class SACConfig:
     critic_update_frequency: int = 1
     actor_update_frequency: int = 1
     critic_ema_decay: float | None = 0.995
+    # LIBERO pixel-encoder settings (matched to old pixel_sac defaults).
+    encoder_type: str = "resnet_34_v1"
+    encoder_norm: str = "group"
+    use_spatial_softmax: bool = True
+    softmax_temperature: float = 1.0
+    image_latent_dim: int = 50
+    use_image_bottleneck: bool = True
+    use_state_branch: bool = True
     autotune_alpha: bool = True
     init_alpha: float = 1.0
     alpha_lr: float = 3e-4

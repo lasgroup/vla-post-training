@@ -3,7 +3,15 @@
 import warnings
 
 from src.rl.networks.mlp import MLP
-from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.encoders.encoders import BaseEncoder, ImageEncoder, MLPEncoder
+from src.rl.networks.encoders.cnn_encoder import CNNEncoder
+from src.rl.networks.encoders.impala_encoder import ImpalaEncoder, SmallerImpalaEncoder
+from src.rl.networks.encoders.resnet_encoderv1 import ResNet18, ResNet34, ResNetSmall
+from src.rl.networks.encoders.resnet_encoderv2 import (
+    ResNetv2_18,
+    ResNetv2_34,
+    ResNetv2_Small,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
@@ -93,6 +101,7 @@ def _build_actor_critic_defs(
     action_low: jax.Array,
     action_high: jax.Array,
     *,
+    backend: str,
     policy_distribution: str,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
     critic_encoder_hidden_dims = tuple(
@@ -105,21 +114,154 @@ def _build_actor_critic_defs(
         _get_rl_attr(config, "policy_decoder_hidden_dims", (256, 256))
     )
     critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
+    encoder_type = str(_get_rl_attr(config, "encoder_type", "resnet_34_v1")).lower()
+    encoder_norm = str(_get_rl_attr(config, "encoder_norm", "group")).lower()
+    use_spatial_softmax = bool(_get_rl_attr(config, "use_spatial_softmax", True))
+    softmax_temperature = float(_get_rl_attr(config, "softmax_temperature", 1.0))
+    image_latent_dim = int(_get_rl_attr(config, "image_latent_dim", 50))
+    use_image_bottleneck = bool(_get_rl_attr(config, "use_image_bottleneck", True))
+    use_state_branch = bool(_get_rl_attr(config, "use_state_branch", True))
+
+    def _build_image_backbone(
+        observation: ObsType,
+        image_keys: tuple[str, ...],
+        rngs: nnx.Rngs,
+    ):
+        if encoder_type == "small":
+            return CNNEncoder(
+                input_example=observation,
+                features=(32, 32, 32, 32),
+                strides=(2, 1, 1, 1),
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "impala":
+            return ImpalaEncoder(
+                input_example=observation,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "impala_small":
+            return SmallerImpalaEncoder(
+                input_example=observation,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_small":
+            return ResNetSmall(
+                input_example=observation,
+                norm=encoder_norm,
+                use_spatial_softmax=use_spatial_softmax,
+                softmax_temperature=softmax_temperature,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_18_v1":
+            return ResNet18(
+                input_example=observation,
+                norm=encoder_norm,
+                use_spatial_softmax=use_spatial_softmax,
+                softmax_temperature=softmax_temperature,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_34_v1":
+            return ResNet34(
+                input_example=observation,
+                norm=encoder_norm,
+                use_spatial_softmax=use_spatial_softmax,
+                softmax_temperature=softmax_temperature,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_small_v2":
+            v2_norm = "groupnorm" if encoder_norm == "group" else "batch"
+            return ResNetv2_Small(
+                input_example=observation,
+                norm=v2_norm,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_18_v2":
+            v2_norm = "groupnorm" if encoder_norm == "group" else "batch"
+            return ResNetv2_18(
+                input_example=observation,
+                norm=v2_norm,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        if encoder_type == "resnet_34_v2":
+            v2_norm = "groupnorm" if encoder_norm == "group" else "batch"
+            return ResNetv2_34(
+                input_example=observation,
+                norm=v2_norm,
+                image_keys=list(image_keys),
+                rngs=rngs,
+            )
+        raise ValueError(
+            f"Unsupported rl.encoder_type={encoder_type!r}. "
+            "Expected one of: "
+            "'small', 'impala', 'impala_small', "
+            "'resnet_small', 'resnet_18_v1', 'resnet_34_v1', "
+            "'resnet_small_v2', 'resnet_18_v2', 'resnet_34_v2'."
+        )
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        network_def = lambda o, rg: MLP(
-            input=o,
-            hidden_dims=critic_encoder_hidden_dims,
-            activate_final=True,
-            rngs=rg,
-        )
+        if not isinstance(observation, dict):
+            return BaseEncoder(
+                dummy_obs=observation,
+                mlp_encoder_def=None,
+                image_encoder_def=None,
+                rngs=rngs,
+            )
+
         state_vector_keys = ["state"]
-        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
+        if PREFIX_EMBEDDING_NAME in observation:
             state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
-        return MLPEncoder(
+
+        use_pixel_encoder = backend == "libero"
+        if use_pixel_encoder:
+            image_keys = tuple(
+                key for key in ("image", "wrist_image", "pixels") if key in observation
+            )
+            use_pixel_encoder = len(image_keys) > 0
+        else:
+            image_keys = ()
+
+        mlp_encoder_def = None
+        if use_state_branch or not use_pixel_encoder:
+            network_def = lambda o, rg: MLP(
+                input=o,
+                hidden_dims=critic_encoder_hidden_dims,
+                activate_final=True,
+                rngs=rg,
+            )
+            mlp_encoder_def = lambda obs, rg: MLPEncoder(
+                dummy_obs=obs,
+                encoder_def=network_def,
+                state_vector_keys=state_vector_keys,
+                rngs=rg,
+            )
+
+        image_encoder_def = None
+        if use_pixel_encoder:
+            image_backbone_def = lambda obs, rg: _build_image_backbone(
+                observation=obs,
+                image_keys=image_keys,
+                rngs=rg,
+            )
+            image_encoder_def = lambda obs, rg: ImageEncoder(
+                dummy_obs=obs,
+                encoder_def=image_backbone_def,
+                latent_dim=image_latent_dim,
+                use_bottleneck=use_image_bottleneck,
+                rngs=rg,
+            )
+
+        return BaseEncoder(
             dummy_obs=observation,
-            encoder_def=network_def,
-            state_vector_keys=state_vector_keys,
+            mlp_encoder_def=mlp_encoder_def,
+            image_encoder_def=image_encoder_def,
             rngs=rngs,
         )
 
@@ -408,7 +550,7 @@ def main(config: _config.OnlineTrainConfig):
     model_obs_batch = unwrap_dsrl_vector_observation(obs_batch)
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(
-        lambda x: jnp.asarray(x, dtype=jnp.float32)[0:1],
+        lambda x: np.asarray(x)[0:1],
         model_obs_batch,
     )
 
@@ -488,10 +630,23 @@ def main(config: _config.OnlineTrainConfig):
     
     policy_distribution = _resolve_policy_distribution(config, backend)
     logging.info("DSRL actor policy distribution: %s", policy_distribution)
+    if backend == "libero":
+        logging.info(
+            "DSRL LIBERO encoder: type=%s norm=%s spatial_softmax=%s temp=%.3f "
+            "image_latent_dim=%d bottleneck=%s state_branch=%s",
+            str(_get_rl_attr(config, "encoder_type", "resnet_34_v1")),
+            str(_get_rl_attr(config, "encoder_norm", "group")),
+            bool(_get_rl_attr(config, "use_spatial_softmax", True)),
+            float(_get_rl_attr(config, "softmax_temperature", 1.0)),
+            int(_get_rl_attr(config, "image_latent_dim", 50)),
+            bool(_get_rl_attr(config, "use_image_bottleneck", True)),
+            bool(_get_rl_attr(config, "use_state_branch", True)),
+        )
     state_action_critic_def, policy_def = _build_actor_critic_defs(
         config,
         action_low=action_low,
         action_high=action_high,
+        backend=backend,
         policy_distribution=policy_distribution,
     )
 
