@@ -28,11 +28,11 @@ DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
-DEFAULT_POLICY_UPDATE_INTERVAL = 2
-DEFAULT_NUM_ROLLOUTS = 50
-DEFAULT_COLLECT_INTERVAL = 200
-DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
-DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = False
+DEFAULT_POLICY_UPDATE_INTERVAL = 1
+DEFAULT_NUM_ROLLOUTS = 1
+DEFAULT_COLLECT_INTERVAL = 300
+DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
+DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 
 # ---------- Hyperparameter grid ----------
@@ -41,12 +41,10 @@ DEFAULT_BATCH_SIZE = 256
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [5, 10, 20],
+    "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
-    "rl.policy_training_start_step": [1000],
-    "rl.td_weight_schedule.switch_step": [1000],
-    "collect.collect_interval": [200],
+    "rl.policy_training_start_step": [300, 600, 900, 1200, 1500],
 }
 
 
@@ -106,6 +104,11 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
         }
         flags.update(combo)
+
+        # Keep these in sync with policy_training_start_step
+        policy_start = flags["rl.policy_training_start_step"]
+        flags["rl.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.critic_pre_training_steps"] = policy_start
 
         if "seed" in flags and "collect.seed" not in combo:
             flags["collect.seed"] = flags["seed"]
