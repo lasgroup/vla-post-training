@@ -530,9 +530,8 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        remove_prefix_and_crop = lambda x: {k[len("observation/") :]: v[:n_windows] for k, v in x.items()}
-        _obs = remove_prefix_and_crop(episode_data["observation"])
-        _next_obs = remove_prefix_and_crop(episode_data["next_observation"])
+        _obs = {k[len("observation/") :]: v[:n_windows] for k, v in episode_data["observation"].items()}
+        _next_obs = {k[len("observation/") :]: v[act_h-1:] for k, v in episode_data["next_observation"].items()}
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
