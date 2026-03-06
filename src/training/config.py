@@ -26,9 +26,9 @@ class CollectionConfig:
         default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"],
         metadata={
             "help": (
-                "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34') "
-                "or ranges (e.g., 'libero_90_22-56', 22 and 56 inclusive). The total number of expanded tasks "
-                "must be divisible by 4 for sharding."
+                "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34'), "
+                "ranges (e.g., 'libero_90_22-56'), and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). The total number of expanded tasks must be divisible by 4."
             )
         },
     )
@@ -36,18 +36,32 @@ class CollectionConfig:
     num_steps_wait: int = 10
 
     def __post_init__(self):
-        # Expand task ranges
+        # Expand task ranges and handle multipliers
         expanded_tasks = []
         for task in self.tasks:
-            match = re.match(r"(.+)_(\d+)-(\d+)$", task)
-            if match:
-                prefix = match.group(1)
-                start = int(match.group(2))
-                end = int(match.group(3))
+            # 1. Extract optional multiplier (e.g., "x4")
+            multiplier = 1
+            base_task = task
+            mult_match = re.search(r"x(\d+)$", task)
+            if mult_match:
+                multiplier = int(mult_match.group(1))
+                base_task = task[:mult_match.start()]
+
+            # 2. Check if the base task is a range
+            range_match = re.match(r"(.+)_(\d+)-(\d+)$", base_task)
+            sub_tasks = []
+            if range_match:
+                prefix = range_match.group(1)
+                start = int(range_match.group(2))
+                end = int(range_match.group(3))
                 for i in range(start, end + 1):
-                    expanded_tasks.append(f"{prefix}_{i}")
+                    sub_tasks.append(f"{prefix}_{i}")
             else:
-                expanded_tasks.append(task)
+                sub_tasks.append(base_task)
+            
+            # 3. Add to expanded list, repeating by the multiplier
+            for sub_task in sub_tasks:
+                expanded_tasks.extend([sub_task] * multiplier)
         
         object.__setattr__(self, 'tasks', expanded_tasks)
 
