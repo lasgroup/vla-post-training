@@ -144,6 +144,9 @@ class CollectionConfig:
     seed: int = 42
     obs_prefix_key: str = "pi0"
     store_prefix_rep: bool = False
+    eval_env_num: int = 4
+    eval_interval: int = 300
+    num_eval_rollouts: int = 32
 
 
 @dataclasses.dataclass(frozen=True)

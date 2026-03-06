@@ -20,6 +20,61 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
+def evaluate_policy(
+    agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
+):
+    num_rollouts = config.collect.num_eval_rollouts
+    total_episodes = 0
+    total_successes = 0
+
+    with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
+        obs, _ = env.reset()
+
+        while total_episodes < num_rollouts:
+            action_chunk = agent.sample_actions(
+                obs,
+                task_description=task_description,
+                batch_actions=True,
+            )
+            next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
+
+            if config.collect.add_per_step_data:
+                current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
+                current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
+            else:
+                current_terminate, current_truncate = terminate, truncate
+
+            done = np.logical_or(current_terminate, current_truncate)
+            done_indices = np.where(done)[0]
+            if len(done_indices) > 0:
+                total_episodes += len(done_indices)
+                pbar.update(len(done_indices))
+
+            for env_index in done_indices:
+                success = bool(current_terminate[env_index])
+                total_successes += int(success)
+
+                reset_out = env.reset(id=int(env_index))
+                assert isinstance(reset_out, (tuple, list)) and len(reset_out) == 2
+                env_obs = reset_out[0]
+
+                def update_state(prev_state, new_val_leaf):
+                    prev_state[env_index] = new_val_leaf[0]
+                    return prev_state
+
+                next_obs = jax.tree.map(update_state, next_obs, env_obs)
+
+            if total_episodes > 0:
+                pbar.set_postfix(SR=total_successes / total_episodes)
+
+            obs = next_obs
+
+    success_rate = (
+        float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
+    )
+    return {"eval/success_rate": success_rate}
+
+
 def collect_data(
     agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
 ):

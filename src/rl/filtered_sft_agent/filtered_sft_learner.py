@@ -51,8 +51,8 @@ def get_env_and_agent_for_filtered_sft(env_fn, config, task_description, env_cla
     return env, agent
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str):
-    env_num = config.collect.env_num
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_class: str, env_num: int | None = None):
+    env_num = env_num if env_num is not None else config.collect.env_num
     add_states = config.collect.add_states
     obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
