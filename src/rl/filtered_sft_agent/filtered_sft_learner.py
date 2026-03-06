@@ -175,7 +175,7 @@ def init_train_state(
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self._env_num_mulitask = len(config.collect.tasks)
+        self._env_num_multitask = len(config.collect.tasks) 
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -251,7 +251,7 @@ class FilteredSFTLearner(Agent):
         )
 
         # Create temporary episode storage
-        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
+        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
 
         # Create policy for data collection
         policy_checkpoint_dir = self._config.weight_loader.params_path[: -len("/params")]
@@ -428,7 +428,7 @@ class FilteredSFTLearner(Agent):
         self._checkpoint_manager.wait_until_finished()
 
     def add_data(self, step_data: StepData):
-        for i in range(self._env_num_mulitask):
+        for i in range(self._env_num_multitask):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
@@ -498,13 +498,13 @@ class FilteredSFTLearner(Agent):
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
-        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
+        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
-        self._episode_storage = [[] for _ in range(self._env_num_mulitask)]
+        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
         self._collection_success_episodes = 0
         return collected_episodes
 

@@ -36,20 +36,21 @@ def get_libero_warm_start_action():
 
 
 def make_env_libero(config, num_devices: int = 4):
+    benchmark_dict = benchmark.get_benchmark_dict()
+    warm_start_action = get_libero_warm_start_action()
+
     env_args_multitask = []
     max_steps_multitask = []
     initial_states_multitask = []
     task_descriptions = []
 
     for task in config.collect.tasks:
-        task_suite_name = "_".join(task.split("_")[:-1])
+        task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task.split("_")[-1])
         max_steps = get_max_steps_libero(task)
-        benchmark_dict = benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[task_suite_name]()
         task = task_suite.get_task(task_id)
         initial_states = get_task_init_states(task_suite, task_id)
-        warm_start_action = get_libero_warm_start_action()
         task_description = task.language
         task_bddl_file = (
             pathlib.Path(get_libero_path("bddl_files"))
