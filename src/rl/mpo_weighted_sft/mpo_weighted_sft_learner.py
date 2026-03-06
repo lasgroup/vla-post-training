@@ -106,7 +106,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         policy_sample_rng, rng = jax.random.split(rng, 2)
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         if self._config.rl.store_buffer_actions_in_batch:
-            value_action = batch[1]
+            value_action = batch["actions"]
         else:
             value_action = self._get_on_policy_action(
                 online_observation=_model.Observation.from_dict(batch["observation"]),
