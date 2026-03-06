@@ -45,7 +45,6 @@ applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "rl.n_samples": [8],
     "collect.use_time_to_success_as_reward": [True],
-    # "collect.seed": [0, 1, 2, 3, 4],
     "log_interval": [25],
 }
 
@@ -89,7 +88,6 @@ def main() -> None:
             "overwrite": True,
             "project_name": args.project_name,
             "seed": DEFAULT_SEED,
-            "collect.seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
             "collect.num_rollouts": args.num_rollouts,
@@ -105,9 +103,6 @@ def main() -> None:
 
         }
         flags.update(combo)
-
-        if "seed" in flags and "collect.seed" not in combo:
-            flags["collect.seed"] = flags["seed"]
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 

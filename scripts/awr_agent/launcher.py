@@ -92,7 +92,6 @@ def main() -> None:
             "overwrite": True,
             "project_name": args.project_name,
             "seed": DEFAULT_SEED,
-            "collect.seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
             "collect.num_rollouts": args.num_rollouts,
@@ -105,9 +104,6 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
         }
         flags.update(combo)
-
-        if "seed" in flags and "collect.seed" not in combo:
-            flags["collect.seed"] = flags["seed"]
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 
