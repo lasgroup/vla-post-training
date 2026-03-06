@@ -230,8 +230,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return policy_observation, critic_observation, actions
 
-    def save_episode(self, is_success=False, env_index=0, **kwargs):
-        return self._save_episode(env_index=env_index, **kwargs)
+    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+        assert env_index in range(len(self._episode_storage)), \
+            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        # extract episode data from storage and empty it
+        episode_data = self._episode_storage[env_index]
+        self._episode_storage[env_index] = []
+        # filtered SFT keeps only successful episodes.
+        self._save_episode_in_buffer(episode_data, task_description)
 
     @at.typecheck
     def _update_critics(
@@ -323,13 +329,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             }
 
         batch = next(self._data_iter)
+        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
-                self._online_data_buffer.size >= self._online_data_buffer.batch_size
+                self._online_data_buffer.size >= online_batch_size
         )
 
         critic_info, actor_info = {}, {}
         if use_online:
-            online_batch = self._online_data_buffer.sample()
+            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
                 if self.debug:
                     log_memory_debug(

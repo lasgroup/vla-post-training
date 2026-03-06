@@ -5,8 +5,6 @@ import logging
 import math
 import numpy as np
 
-from src.rl.prefix_embedding import unpack_action_and_prefix
-
 
 class GymnasiumEnvAdapter(gym.Env):
     """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
@@ -80,7 +78,7 @@ def _quat2axisangle(quat):
 
 
 def obs_to_pi_zero_input(
-    obs, env_class: str, task_description: str,
+    obs, env_class: str,
 ):
     if env_class == "libero":
         obs_pi_zero = {
@@ -209,7 +207,7 @@ class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
     """Query wrapper that ignores prefix payload when stepping the underlying env."""
 
     def step(self, action):
-        env_action, _ = unpack_action_and_prefix(action)
+        env_action, _ = action
         return super().step(env_action)
 
 
@@ -228,12 +226,9 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self,
         env: gym.Env,
         env_class: str,
-        task_description: str,
     ):
         super().__init__(env)
-        self.task_description = task_description
         self._env_class = env_class
-        logging.info(f"\nTask: {self.task_description}")
 
         dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
@@ -256,7 +251,6 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
-            task_description=self.task_description,
         )
 
 

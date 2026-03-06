@@ -43,7 +43,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10, 20],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [32, 64, 256]
+    "batch_size": [32, 256]
 }
 
 

@@ -55,6 +55,7 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi.training.utils as training_utils
+from src.envs import make_env
 from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
 from src.rl.advantage_weighted_sft.update_critic import (
     StateActionCriticDef,
@@ -200,14 +201,11 @@ def main(config: _config.OnlineTrainConfig):
             "from observations every update."
         )
 
-    from src.envs.libero import make_env_libero
-
-    env_fn, task_description = make_env_libero(config)
+    env_fn, task_description = make_env(config)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
-        env_class="libero",
     )
 
     prefix_embedding_shape = _infer_prefix_embedding_shape(config)
