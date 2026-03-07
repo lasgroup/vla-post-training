@@ -20,7 +20,11 @@ class Args:
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
-    benchmark_dir: str = "molmospaces/assets/benchmarks/path-to-benchmark"
+    benchmark_path: str = (
+        "/capstor/store/cscs/swissai/a143/yardas/molmo-assets/benchmarks/"
+        "molmospaces-bench-v1/ithor/FrankaPickHardBench/"
+        "FrankaPickHardBench_20260206_json_benchmark"
+    )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
     )
@@ -136,7 +140,7 @@ def run(args: Args) -> None:
     )
 
     env_cfg = MolmoSpacesGymConfig(
-        benchmark_dir=args.benchmark_dir,
+        benchmark_dir=args.benchmark_path,
         eval_config_cls=args.eval_config_cls,
         episode_sampling=args.episode_sampling,
         seed=args.seed,
