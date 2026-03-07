@@ -1,17 +1,15 @@
 import collections
 import dataclasses
 import logging
-import pathlib
 from typing import Any, Literal
 
-import imageio.v2 as imageio
 import numpy as np
 import tyro
 
-from src.molmo.molmospaces_gym_env import MolmoSpacesBenchmarkGymEnv
-from src.molmo.molmospaces_gym_env import MolmoSpacesGymConfig
+from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
+from src.envs.molmo import MolmoSpacesGymConfig
 from openpi.policies import policy_config as _policy_config
-from openpi.training import config as _config
+import src.training.config as _config
 
 
 @dataclasses.dataclass
@@ -43,11 +41,6 @@ class Args:
     # Rollout control.
     num_episodes: int = 1
     max_steps: int = 300
-
-    # Video recording.
-    record_video: bool = False
-    video_dir: str = "data/molmospaces_videos"
-    video_fps: int = 10
 
 
 def _as_uint8_hwc(image: Any) -> np.ndarray:
@@ -150,9 +143,6 @@ def run(args: Args) -> None:
         task_horizon_steps=args.task_horizon_steps,
     )
     env = MolmoSpacesBenchmarkGymEnv(env_cfg)
-    video_dir = pathlib.Path(args.video_dir)
-    if args.record_video:
-        video_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         total_success = 0
@@ -161,15 +151,10 @@ def run(args: Args) -> None:
         for episode_idx in range(args.num_episodes):
             obs, info = env.reset(seed=args.seed + episode_idx)
             action_buffer: collections.deque[np.ndarray] = collections.deque()
-            video_frames: list[np.ndarray] = []
 
             success = False
             episode_reward = 0.0
             episode_steps = 0
-            if args.record_video:
-                video_frames.append(
-                    _get_camera(obs, args.exo_camera_key, ("droid_shoulder_light_randomization",))
-                )
             for step_idx in range(args.max_steps):
                 model_input = _obs_to_openpi_input(obs, info, args)
 
@@ -183,14 +168,6 @@ def run(args: Args) -> None:
                 obs, reward, terminated, truncated, info = env.step(env_action)
                 episode_reward += float(reward)
                 episode_steps = step_idx + 1
-                if args.record_video:
-                    video_frames.append(
-                        _get_camera(
-                            obs,
-                            args.exo_camera_key,
-                            ("droid_shoulder_light_randomization",),
-                        )
-                    )
 
                 if info.get("success") is True:
                     success = True
@@ -213,15 +190,6 @@ def run(args: Args) -> None:
                 episode_reward,
                 total_success,
             )
-            if args.record_video and video_frames:
-                status = "success" if success else "failure"
-                video_path = video_dir / f"episode_{episode_idx:04d}_{status}.mp4"
-                imageio.mimwrite(
-                    video_path,
-                    video_frames,
-                    fps=args.video_fps,
-                )
-                logging.info("Saved video: %s", video_path)
 
         num_episodes = max(args.num_episodes, 1)
         logging.info(
