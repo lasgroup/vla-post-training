@@ -163,7 +163,9 @@ def run(args: Args) -> None:
                 model_input = _obs_to_openpi_input(obs, info, args)
 
                 if not action_buffer:
-                    action_chunk = np.asarray(policy.infer(model_input)["actions"])
+                    action_chunk = np.asarray(
+                        policy.infer(model_input, sharding_spec=None)["actions"]
+                    )
                     if action_chunk.ndim == 1:
                         action_chunk = action_chunk[None, :]
                     action_buffer.extend(action_chunk[: args.execute_horizon])
