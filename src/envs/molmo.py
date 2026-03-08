@@ -19,6 +19,7 @@ Example:
 
 import dataclasses
 import importlib
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +27,8 @@ import gymnasium as gym
 from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
 from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -190,3 +193,133 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             return
         self._close_active_episode()
         self._closed = True
+
+
+class _NoOpRegisteredPolicy:
+    """Minimal policy interface for policy-dependent Molmo sensors."""
+
+    def __init__(self, prompt: str) -> None:
+        self._prompt = prompt
+        self.target_poses = {"grasp": np.eye(4, dtype=np.float32)}
+        self.task = None
+
+    def reset(self) -> None:
+        return
+
+    def get_prompt(self, default_prompt: str | None = None) -> str:
+        return (default_prompt or self._prompt).lower()
+
+    def get_phase(self) -> str:
+        return "inference"
+
+    def get_all_phases(self) -> dict[str, int]:
+        return {"inference": 0}
+
+    def get_info(self) -> dict[str, Any]:
+        return {"policy_name": "openpi-online"}
+
+
+class MolmoActionAdapter(gym.ActionWrapper):
+    """Converts OpenPI action vectors into Molmo env action dictionaries."""
+
+    def __init__(
+        self,
+        env: gym.Env,
+        grasping_type: Literal["continuous", "binary"],
+        gripper_threshold: float,
+        gripper_scale: float,
+    ):
+        super().__init__(env)
+        self._grasping_type = grasping_type
+        self._gripper_threshold = float(gripper_threshold)
+        self._gripper_scale = float(gripper_scale)
+        self.action_space = gym.spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(8,),
+            dtype=np.float32,
+        )
+
+    def action(self, action):
+        if isinstance(action, dict):
+            return action
+
+        action = np.asarray(action, dtype=np.float32)
+        if action.ndim != 1 or action.shape[0] < 8:
+            raise ValueError(
+                "MolmoActionAdapter expected a 1D action vector with at least 8 dims, "
+                f"got shape {action.shape}."
+            )
+
+        if self._grasping_type == "continuous":
+            gripper = np.asarray(
+                [np.clip(action[7] * self._gripper_scale, 0.0, self._gripper_scale)],
+                dtype=np.float32,
+            )
+        elif self._grasping_type == "binary":
+            gripper = np.asarray(
+                [self._gripper_scale if action[7] > self._gripper_threshold else 0.0],
+                dtype=np.float32,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported grasping_type='{self._grasping_type}'. "
+                "Expected one of {'continuous', 'binary'}."
+            )
+
+        return {
+            "arm": np.asarray(action[:7], dtype=np.float32),
+            "gripper": gripper,
+        }
+
+
+def _resolve_task_description(config: Any) -> str:
+    if getattr(config.molmo, "task_description", None):
+        return str(config.molmo.task_description)
+
+    benchmark_dir = str(getattr(config.molmo, "benchmark_dir", "")).strip()
+    if not benchmark_dir:
+        raise ValueError(
+            "Missing required Molmo benchmark directory. "
+            "Set `--molmo.benchmark-dir` when `--domain molmo`."
+        )
+
+    try:
+        episodes = load_all_episodes(Path(benchmark_dir).expanduser().resolve())
+        if episodes and episodes[0].language.task_description:
+            return str(episodes[0].language.task_description)
+    except Exception as exc:
+        logger.warning(
+            "Could not infer Molmo task_description from benchmark_dir=%s: %s",
+            benchmark_dir,
+            exc,
+        )
+    return "do the task"
+
+
+def make_env_molmo(config, num_devices: int = 4):
+    """Build MolmoSpaces env factory for online training."""
+    _ = num_devices
+    task_description = _resolve_task_description(config)
+
+    base_env_cfg = MolmoSpacesGymConfig(
+        benchmark_dir=config.molmo.benchmark_dir,
+        eval_config_cls=config.molmo.eval_config_cls,
+        episode_sampling=config.molmo.episode_sampling,
+        seed=config.seed,
+        task_horizon_steps=config.molmo.task_horizon_steps,
+    )
+
+    def env_fn(rank: int):
+        env_cfg = dataclasses.replace(base_env_cfg, seed=int(config.seed) + int(rank))
+        env = MolmoSpacesBenchmarkGymEnv(env_cfg)
+        env.register_policy(_NoOpRegisteredPolicy(prompt=task_description))
+        env = MolmoActionAdapter(
+            env=env,
+            grasping_type=config.molmo.grasping_type,
+            gripper_threshold=config.molmo.gripper_threshold,
+            gripper_scale=config.molmo.gripper_scale,
+        )
+        return env
+
+    return env_fn, task_description

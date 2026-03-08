@@ -8,7 +8,7 @@ from openpi.training.config import (
     pi0_config,
     LeRobotLiberoDataConfig,
 )
-from typing import Sequence
+from typing import Literal, Sequence
 
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
@@ -27,6 +27,28 @@ class CollectionConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class MolmoConfig:
+    benchmark_dir: str = ""
+    eval_config_cls: str = (
+        "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
+    )
+    episode_sampling: Literal["sequential", "random"] = "sequential"
+    task_horizon_steps: int | None = None
+    # If None, the environment task description from benchmark metadata is used.
+    task_description: str | None = None
+
+    # Observation mapping from Molmo observations to OpenPI input keys.
+    exo_camera_key: str = "exo_camera_1"
+    wrist_camera_key: str = "wrist_camera"
+    gripper_obs_norm: float = 0.824033
+
+    # Action mapping from OpenPI output to Molmo env actions.
+    grasping_type: Literal["continuous", "binary"] = "binary"
+    gripper_threshold: float = 0.5
+    gripper_scale: float = 255.0
+
+
+@dataclasses.dataclass(frozen=True)
 class OnlineDataConfig(DataConfig):
     # additional LeRobot repo paths to include (keeps repos separate but concatenates them for training)
     additional_repo_paths: Sequence[str] = ()
@@ -36,7 +58,8 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
-    domain: str = "libero"
+    domain: Literal["libero", "molmo"] = "libero"
+    molmo: MolmoConfig = MolmoConfig()
     online_ratio: float = 0.5  # ratio of online vs offline data in each training batch
     online_buffer_size: int = 1024  # capacity of the online replay buffer
     discount: float = 0.99

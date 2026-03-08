@@ -12,6 +12,7 @@ from molmo_spaces.policy.learned_policy.utils import PromptSampler
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
+from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 from openpi.policies import policy_config as _policy_config
 import src.training.config as _config
 
@@ -108,23 +109,6 @@ def _as_uint8_hwc(image: Any) -> np.ndarray:
     return np.clip(image, 0, 255).astype(np.uint8)
 
 
-def _get_camera(obs: dict[str, Any], primary: str, fallback: tuple[str, ...]) -> np.ndarray:
-    if primary in obs:
-        return _as_uint8_hwc(obs[primary])
-    for key in fallback:
-        if key in obs:
-            return _as_uint8_hwc(obs[key])
-    raise KeyError(f"Missing camera key '{primary}'. Available keys: {list(obs.keys())}")
-
-
-def _get_qpos(obs: dict[str, Any]) -> dict[str, np.ndarray]:
-    if "qpos" in obs:
-        return obs["qpos"]
-    if "robot_state" in obs and "qpos" in obs["robot_state"]:
-        return obs["robot_state"]["qpos"]
-    raise KeyError("Could not find qpos in observation. Expected 'qpos' or 'robot_state/qpos'.")
-
-
 def _resolve_eval_config(eval_config_cls: str):
     if ":" not in eval_config_cls:
         raise ValueError(
@@ -139,15 +123,6 @@ def _resolve_eval_config(eval_config_cls: str):
             f"Could not resolve class '{class_name}' in module '{module_name}'."
         ) from exc
     return cls()
-
-
-def _resolve_exo_camera_key(obs: dict[str, Any], args: Args) -> str:
-    return (
-        "droid_shoulder_light_randomization"
-        if "droid_shoulder_light_randomization" in obs
-        else args.exo_camera_key
-    )
-
 
 def _resize_nearest(image: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
     src_h, src_w = image.shape[:2]
@@ -307,25 +282,13 @@ def _obs_to_openpi_input(
     args: Args,
     registered_policy: _RegisteredPolicyAdapter,
 ) -> dict[str, Any]:
-    qpos = _get_qpos(obs)
-    if "arm" not in qpos or "gripper" not in qpos:
-        raise KeyError(f"Expected qpos to contain 'arm' and 'gripper'. Got: {list(qpos.keys())}")
-
-    # Match PI_Policy camera key selection semantics exactly.
-    exo_camera_key = _resolve_exo_camera_key(obs, args)
-    wrist_camera_key = "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else args.wrist_camera_key
-    exo = _get_camera(obs, exo_camera_key, ())
-    wrist = _get_camera(obs, wrist_camera_key, ())
-
-    # PI policy path uses normalized gripper input for droid-style OpenPI configs.
-    gripper = np.clip(np.asarray(qpos["gripper"], dtype=np.float32)[0] / 0.824033, 0.0, 1.0)
-    return {
-        "observation/exterior_image_1_left": exo,
-        "observation/wrist_image_left": wrist,
-        "observation/joint_position": np.asarray(qpos["arm"][:7], dtype=np.float32),
-        "observation/gripper_position": np.asarray([gripper], dtype=np.float32),
-        "prompt": registered_policy.get_prompt(args.default_prompt),
-    }
+    return _shared_obs_to_openpi_input(
+        obs,
+        exo_camera_key=args.exo_camera_key,
+        wrist_camera_key=args.wrist_camera_key,
+        gripper_obs_norm=0.824033,
+        prompt=registered_policy.get_prompt(args.default_prompt),
+    )
 
 
 def _model_action_to_env_action(
