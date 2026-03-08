@@ -258,6 +258,16 @@ class DSRLLearner(Agent):
             sac_image_size=self._sac_image_size,
         )
         dummy_obs = normalize_observation_for_model(raw_dummy_obs)
+        # Resize image keys to match SAC image size so that network init
+        # (encoder → bottleneck) uses the same spatial dims as training data.
+        if self._sac_image_size > 0 and isinstance(dummy_obs, dict):
+            for img_key in ("image", "wrist_image"):
+                if img_key in dummy_obs:
+                    dummy_obs[img_key] = jnp.asarray(
+                        _resize_image_np(
+                            np.asarray(dummy_obs[img_key]), self._sac_image_size
+                        )
+                    )
         self._dummy_obs = dummy_obs
         self._dummy_act = dummy_act
         self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
