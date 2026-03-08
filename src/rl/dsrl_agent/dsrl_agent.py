@@ -499,7 +499,26 @@ class DSRLLearner(Agent):
                 discount=base_discount,
                 action=act,
             )
-            r = r - 1 # Make negative rewards optional
+            #r = r - 1 # Make negative rewards optional
+
+            ### DSRL Reward Definition
+            episode_len = len(episode)
+            query_freq = int(getattr(self._config.collect, "replan_steps", 1))
+            bootstrap_discount = float(self._config.discount) ** query_freq
+
+            for idx, ep in enumerate(episode):
+                # keep reduce_chunk_transition only for terminated/truncated metadata if you want
+                _, terminated, truncated, done, n_steps = reduce_chunk_transition(...)
+
+                is_last = (idx == episode_len - 1)
+                if is_success and is_last:
+                    r = 0.0
+                    discount = 0.0
+                else:
+                    r = -1.0
+                    discount = bootstrap_discount
+
+
             discount = (base_discount ** int(n_steps)) * (1.0 - float(done))
             policy_actions = np.asarray(act, dtype=np.float32).reshape(1, -1)
             real_actions = np.asarray(real_action, dtype=np.float32)

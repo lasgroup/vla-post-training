@@ -332,6 +332,26 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
     discount = float(config.discount)
     add_per_step_data = bool(config.collect.add_per_step_data)
 
+    def _expand_noise_to_horizon(noise: Any, *, target_horizon: int) -> np.ndarray:
+        noise_arr = np.asarray(noise, dtype=np.float32)
+        if noise_arr.ndim == 2:
+            noise_arr = noise_arr[:, None, :]
+        if noise_arr.ndim != 3:
+            raise ValueError(
+                "Expected compact or chunked noise with shape (B, D) or (B, H, D), "
+                f"got {tuple(noise_arr.shape)}."
+            )
+        if noise_arr.shape[1] == target_horizon:
+            return noise_arr
+        if noise_arr.shape[1] == 1:
+            return np.repeat(noise_arr, target_horizon, axis=1)
+        if noise_arr.shape[1] < target_horizon:
+            pad = np.repeat(
+                noise_arr[:, -1:, :], target_horizon - noise_arr.shape[1], axis=1
+            )
+            return np.concatenate([noise_arr, pad], axis=1)
+        return noise_arr[:, :target_horizon, :]
+
     class _DSRLVectorEnvInputCompatWrapper(gym.Wrapper):
         """Adapts env outputs to the schema expected by DSRLVectorEnv.
 
@@ -420,6 +440,29 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
         else DummyVectorEnv(env_factories)
     )
     env.seed(int(config.seed))
+
+    if isinstance(env, DSRLVectorEnv):
+        policy = getattr(env, "_policy", None)
+        target_noise_horizon = int(
+            getattr(
+                policy,
+                "action_horizon",
+                getattr(getattr(config, "model", None), "action_horizon", replan_steps),
+            )
+        )
+        raw_step = env.step
+
+        def _step_with_compact_noise_adapter(noise, id=None):
+            expanded_noise = _expand_noise_to_horizon(
+                noise, target_horizon=target_noise_horizon
+            )
+            return raw_step(expanded_noise, id=id)
+
+        env.step = _step_with_compact_noise_adapter  # type: ignore[method-assign]
+        logging.info(
+            "Installed DSRL compact-noise adapter: repeat noise to policy horizon=%d.",
+            target_noise_horizon,
+        )
     return env
 
 
@@ -537,33 +580,37 @@ def main(config: _config.OnlineTrainConfig):
             obs_action = action_from_obs[0:1]
 
     if backend == "libero":
-        # When using DSRLVectorEnv, the learner should emit policy noise
-        # (H, action_dim) expected by env.step(...), not environment actions.
+        # When using DSRLVectorEnv, the learner emits compact policy noise
+        # (1, action_dim); the launcher-side adapter expands it to full horizon.
         if isinstance(env, DSRLVectorEnv):
             policy = getattr(env, "_policy", None)
             if policy is not None:
-                action_horizon = int(getattr(policy, "action_horizon"))
+                policy_action_horizon = int(getattr(policy, "action_horizon"))
                 action_dim = int(getattr(policy, "action_dim"))
+                action_horizon = 1
                 dummy_act = jnp.zeros(
                     (1, action_horizon, action_dim), dtype=jnp.float32
                 )
                 logging.info(
-                    "Using DSRLVectorEnv policy noise shape for DSRL init: "
-                    "(horizon=%d, action_dim=%d).",
+                    "Using compact DSRL noise shape for DSRL init: "
+                    "(horizon=%d, action_dim=%d), policy_horizon=%d.",
                     action_horizon,
                     action_dim,
+                    policy_action_horizon,
                 )
             else:
-                action_horizon = int(getattr(config.model, "action_horizon", 10))
+                policy_action_horizon = int(getattr(config.model, "action_horizon", 10))
                 action_dim = int(getattr(config.model, "action_dim", 32))
+                action_horizon = 1
                 dummy_act = jnp.zeros(
                     (1, action_horizon, action_dim), dtype=jnp.float32
                 )
                 logging.warning(
-                    "DSRLVectorEnv policy not found; using model fallback noise shape "
-                    "(horizon=%d, action_dim=%d).",
+                    "DSRLVectorEnv policy not found; using compact fallback noise shape "
+                    "(horizon=%d, action_dim=%d), policy_horizon=%d.",
                     action_horizon,
                     action_dim,
+                    policy_action_horizon,
                 )
         # Otherwise (e.g. DummyVectorEnv path), use environment action chunks.
         elif obs_action is not None:

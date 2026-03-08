@@ -46,20 +46,19 @@ class OnlineDataConfig(DataConfig):
 
 @dataclasses.dataclass(frozen=True)
 class SACConfig:
-    actor_lr: float = 3e-4
+    actor_lr: float = 1e-4
     critic_lr: float = 3e-4
     # Network architecture (kept explicit for parity across scripts/experiments).
-    critic_encoder_hidden_dims: tuple[int, ...] = ()
-    critic_decoder_hidden_dims: tuple[int, ...] = (256, 256)
-    policy_decoder_hidden_dims: tuple[int, ...] = (256, 256)
-    critic_num_qs: int = 2
+    critic_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
+    policy_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
+    critic_num_qs: int = 10
     critic_reduction: str = "mean"
     backup_entropy: bool = False
     critic_update_frequency: int = 1
     actor_update_frequency: int = 1
     critic_ema_decay: float | None = 0.995
     # LIBERO pixel-encoder settings (matched to old pixel_sac defaults).
-    encoder_type: str = "resnet_34_v1"
+    encoder_type: str = "small"
     encoder_norm: str = "group"
     use_spatial_softmax: bool = True
     softmax_temperature: float = 1.0
@@ -77,7 +76,7 @@ class SACConfig:
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
-    discount: float = 0.99
+    discount: float = 0.999
     rl: SACConfig = SACConfig()
     return_prefix_rep = False
 
@@ -112,7 +111,7 @@ _CONFIGS.extend(
                 "gs://openpi-assets/checkpoints/pi05_libero/params"
             ),
             pytorch_weight_path="/path/to/your/pytorch_weight_path",
-            num_train_steps=100_000,
+            num_train_steps=500_000,
             num_workers=4,  # override default num_workers
             exp_name="test",
             resume=True,
