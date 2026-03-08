@@ -418,9 +418,9 @@ class DSRLLearner(Agent):
             discount = jnp.asarray(batch["discount"], dtype=jnp.float32)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
-            # jax.debug.print("cr obs {obs}", obs=observation)
+            # jax.debug.print("cr obs {obs}", obs=list(observation.keys()))
             # jax.debug.print("cr act {obs}", obs=actions)
-            # jax.debug.print("cr n_obs {obs}", obs=next_observation)
+            # jax.debug.print("cr n_obs {obs}", obs=list(next_observation.keys()))
             # jax.debug.print("cr rew {obs}", obs=reward)
             # jax.debug.print("cr dis {obs}", obs=discount)
 
