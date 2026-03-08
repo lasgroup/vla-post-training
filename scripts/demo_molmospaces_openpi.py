@@ -278,9 +278,17 @@ def _compose_rollout_frame(
     separator = np.full((target_h, 4, 3), 255, dtype=np.uint8)
     frame = np.concatenate([exo, separator, wrist], axis=1)
 
-    if action is not None:
-        overlay_h = max(90, frame.shape[0] // 4)
-        frame = np.concatenate([frame, _action_overlay(action, frame.shape[1], overlay_h)], axis=0)
+    # Always include the action panel so all video frames have identical shape.
+    action_for_overlay = (
+        np.asarray(action, dtype=np.float32)
+        if action is not None
+        else np.zeros(8, dtype=np.float32)
+    )
+    overlay_h = max(90, frame.shape[0] // 4)
+    frame = np.concatenate(
+        [frame, _action_overlay(action_for_overlay, frame.shape[1], overlay_h)],
+        axis=0,
+    )
 
     return _overlay_prompt_on_frame(
         frame,
