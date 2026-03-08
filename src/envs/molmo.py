@@ -136,6 +136,11 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
 
         episode = self._choose_episode()
         exp_config = self._make_eval_config()
+        # Json benchmarks are authoritative; align config scene source with the selected episode.
+        # This avoids loading a default scene dataset/split (e.g. procthor-10k/val)
+        # for episodes that were generated from another source (e.g. ithor).
+        exp_config.scene_dataset = episode.scene_dataset
+        exp_config.data_split = episode.data_split
 
         self._sampler = JsonEvalTaskSampler(exp_config, episode)
         self._task = self._sampler.sample_task(

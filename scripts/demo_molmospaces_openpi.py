@@ -29,7 +29,11 @@ class Args:
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
-    benchmark_dir: str = "molmospaces/assets/benchmarks/path-to-benchmark"
+    benchmark_path: str = (
+        "/capstor/store/cscs/swissai/a143/yardas/molmo-assets/benchmarks/"
+        "molmospaces-bench-v1/ithor/FrankaPickHardBench/"
+        "FrankaPickHardBench_20260206_json_benchmark"
+    )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
     )
@@ -378,7 +382,7 @@ def run(args: Args) -> None:
     )
 
     env_cfg = MolmoSpacesGymConfig(
-        benchmark_dir=args.benchmark_dir,
+        benchmark_dir=args.benchmark_path,
         eval_config_cls=args.eval_config_cls,
         episode_sampling=args.episode_sampling,
         seed=args.seed,
@@ -421,7 +425,9 @@ def run(args: Args) -> None:
                 model_input = _obs_to_openpi_input(obs, args, registered_policy)
 
                 if not action_buffer:
-                    action_chunk = np.asarray(policy.infer(model_input)["actions"])
+                    action_chunk = np.asarray(
+                        policy.infer(model_input, sharding_spec=None)["actions"]
+                    )
                     if action_chunk.ndim == 1:
                         action_chunk = action_chunk[None, :]
                     action_buffer.extend(action_chunk[: args.execute_horizon])
