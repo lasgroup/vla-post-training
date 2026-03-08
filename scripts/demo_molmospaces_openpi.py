@@ -2,16 +2,23 @@ import collections
 import dataclasses
 import importlib
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import tyro
 
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
+from molmo_spaces.utils.save_utils import save_frames_to_mp4
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
 from openpi.policies import policy_config as _policy_config
 import src.training.config as _config
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 
 @dataclasses.dataclass
@@ -47,6 +54,12 @@ class Args:
     # Rollout control.
     num_episodes: int = 1
     max_steps: int = 300
+
+    # Video visualization.
+    save_trajectory_video: bool = True
+    video_dir: str = "outputs/demo_videos"
+    video_text_scale: float = 0.6
+    video_text_thickness: int = 1
 
 
 class _RegisteredPolicyAdapter:
@@ -128,6 +141,159 @@ def _resolve_eval_config(eval_config_cls: str):
     return cls()
 
 
+def _resolve_exo_camera_key(obs: dict[str, Any], args: Args) -> str:
+    return (
+        "droid_shoulder_light_randomization"
+        if "droid_shoulder_light_randomization" in obs
+        else args.exo_camera_key
+    )
+
+
+def _resize_nearest(image: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+    src_h, src_w = image.shape[:2]
+    if src_h == target_h and src_w == target_w:
+        return image
+    y_idx = np.linspace(0, src_h - 1, num=target_h, dtype=np.int32)
+    x_idx = np.linspace(0, src_w - 1, num=target_w, dtype=np.int32)
+    return image[y_idx][:, x_idx]
+
+
+def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
+    src_h, src_w = image.shape[:2]
+    if src_h == target_h:
+        return image
+    target_w = max(1, int(round((target_h / float(src_h)) * src_w)))
+    return _resize_nearest(image, target_h, target_w)
+
+
+def _action_overlay(action: np.ndarray, width: int, height: int) -> np.ndarray:
+    action = np.asarray(action, dtype=np.float32)
+    dim = max(1, int(min(action.shape[0], 8)))
+    panel = np.full((height, width, 3), 20, dtype=np.uint8)
+    center = height // 2
+    panel[max(0, center - 1) : min(height, center + 1), :, :] = 90
+
+    bar_w = max(6, width // (dim * 3))
+    gap = max(2, (width - (bar_w * dim)) // (dim + 1))
+    usable_h = max(2, int(height * 0.45))
+
+    for i in range(dim):
+        v = float(np.clip(action[i], -1.0, 1.0))
+        x0 = min(width - 1, gap + i * (bar_w + gap))
+        x1 = min(width, x0 + bar_w)
+        if x1 <= x0:
+            continue
+        if v >= 0:
+            y0 = max(0, center - int(v * usable_h))
+            y1 = center
+            panel[y0:y1, x0:x1, :] = np.array([80, 200, 120], dtype=np.uint8)
+        else:
+            y0 = center
+            y1 = min(height, center + int(abs(v) * usable_h))
+            panel[y0:y1, x0:x1, :] = np.array([220, 90, 90], dtype=np.uint8)
+    return panel
+
+
+def _wrap_text_to_width(
+    text: str,
+    max_width_px: int,
+    font,
+    font_scale: float,
+    thickness: int,
+) -> list[str]:
+    if cv2 is None:
+        return [text]
+
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        candidate_w = cv2.getTextSize(candidate, font, font_scale, thickness)[0][0]
+        if candidate_w <= max_width_px:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
+def _overlay_prompt_on_frame(
+    frame: np.ndarray,
+    prompt: str,
+    *,
+    font_scale: float,
+    thickness: int,
+) -> np.ndarray:
+    if cv2 is None:
+        return frame
+
+    out = frame.copy()
+    h, w = out.shape[:2]
+    margin = 10
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    line_h = cv2.getTextSize("Ag", font, font_scale, thickness)[0][1] + 8
+    max_width = max(100, w - 2 * margin)
+    lines = _wrap_text_to_width(prompt, max_width, font, font_scale, thickness)
+
+    box_h = line_h * len(lines) + 2 * margin
+    box_h = min(box_h, h)
+
+    # Translucent black background strip at the top for readability.
+    overlay = out.copy()
+    cv2.rectangle(overlay, (0, 0), (w, box_h), (0, 0, 0), thickness=-1)
+    out = cv2.addWeighted(overlay, 0.45, out, 0.55, 0)
+
+    y = margin + line_h - 4
+    for line in lines:
+        cv2.putText(
+            out,
+            line,
+            (margin, y),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            lineType=cv2.LINE_AA,
+        )
+        y += line_h
+        if y >= h - margin:
+            break
+
+    return out
+
+
+def _compose_rollout_frame(
+    model_input: dict[str, Any],
+    prompt: str,
+    action: np.ndarray | None,
+    args: Args,
+) -> np.ndarray:
+    exo = _as_uint8_hwc(model_input["observation/exterior_image_1_left"])
+    wrist = _as_uint8_hwc(model_input["observation/wrist_image_left"])
+
+    target_h = max(exo.shape[0], wrist.shape[0])
+    exo = _resize_to_height(exo, target_h)
+    wrist = _resize_to_height(wrist, target_h)
+    separator = np.full((target_h, 4, 3), 255, dtype=np.uint8)
+    frame = np.concatenate([exo, separator, wrist], axis=1)
+
+    if action is not None:
+        overlay_h = max(90, frame.shape[0] // 4)
+        frame = np.concatenate([frame, _action_overlay(action, frame.shape[1], overlay_h)], axis=0)
+
+    return _overlay_prompt_on_frame(
+        frame,
+        prompt,
+        font_scale=args.video_text_scale,
+        thickness=args.video_text_thickness,
+    )
+
+
 def _obs_to_openpi_input(
     obs: dict[str, Any],
     args: Args,
@@ -138,11 +304,7 @@ def _obs_to_openpi_input(
         raise KeyError(f"Expected qpos to contain 'arm' and 'gripper'. Got: {list(qpos.keys())}")
 
     # Match PI_Policy camera key selection semantics exactly.
-    exo_camera_key = (
-        "droid_shoulder_light_randomization"
-        if "droid_shoulder_light_randomization" in obs
-        else args.exo_camera_key
-    )
+    exo_camera_key = _resolve_exo_camera_key(obs, args)
     wrist_camera_key = "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else args.wrist_camera_key
     exo = _get_camera(obs, exo_camera_key, ())
     wrist = _get_camera(obs, wrist_camera_key, ())
@@ -221,6 +383,8 @@ def run(args: Args) -> None:
     env = MolmoSpacesBenchmarkGymEnv(env_cfg)
     registered_policy = _RegisteredPolicyAdapter(policy, args.config_name, prompt_sampler)
     env.register_policy(registered_policy)
+    video_dir = Path(args.video_dir).expanduser()
+    video_fps = 1000.0 / float(eval_config.policy_dt_ms)
 
     try:
         total_success = 0
@@ -229,6 +393,22 @@ def run(args: Args) -> None:
         for episode_idx in range(args.num_episodes):
             obs, info = env.reset(seed=args.seed + episode_idx)
             action_buffer: collections.deque[np.ndarray] = collections.deque()
+            episode_prompt = registered_policy.get_prompt(args.default_prompt)
+            video_frames: list[np.ndarray] = []
+
+            if args.save_trajectory_video:
+                try:
+                    initial_model_input = _obs_to_openpi_input(obs, args, registered_policy)
+                    video_frames.append(
+                        _compose_rollout_frame(
+                            initial_model_input,
+                            episode_prompt,
+                            action=None,
+                            args=args,
+                        )
+                    )
+                except KeyError as exc:
+                    logging.warning("Video frame capture skipped at reset: %s", exc)
 
             success = False
             episode_reward = 0.0
@@ -244,8 +424,19 @@ def run(args: Args) -> None:
                         action_chunk = action_chunk[None, :]
                     action_buffer.extend(action_chunk[: args.execute_horizon])
 
+                raw_action = action_buffer.popleft()
+                if args.save_trajectory_video:
+                    video_frames.append(
+                        _compose_rollout_frame(
+                            model_input,
+                            episode_prompt,
+                            action=raw_action,
+                            args=args,
+                        )
+                    )
+
                 env_action = _model_action_to_env_action(
-                    action_buffer.popleft(),
+                    raw_action,
                     grasping_type=grasping_type,
                     gripper_threshold=gripper_threshold,
                     gripper_scale=args.gripper_scale,
@@ -275,6 +466,11 @@ def run(args: Args) -> None:
                 episode_reward,
                 total_success,
             )
+
+            if args.save_trajectory_video and video_frames:
+                video_path = video_dir / f"episode_{episode_idx:04d}.mp4"
+                save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
+                logging.info("Saved trajectory video with prompt overlay: %s", video_path)
 
         num_episodes = max(args.num_episodes, 1)
         logging.info(
