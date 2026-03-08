@@ -24,8 +24,8 @@ except ImportError:
 @dataclasses.dataclass
 class Args:
     # OpenPI policy selection.
-    config_name: str = "pi05_droid_jointpos"
-    checkpoint_dir: str = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
+    config_name: str = "pi05_droid_jointpos_polaris"
+    checkpoint_dir: str = "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris"
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
