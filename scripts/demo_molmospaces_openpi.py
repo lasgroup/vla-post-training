@@ -46,7 +46,7 @@ class Args:
     wrist_camera_key: str = "wrist_camera"
 
     # Action mapping from OpenPI output to MolmoSpaces action dict.
-    execute_horizon: int = 8
+    execute_horizon: int | None = None  # defaults to train_cfg.model.action_horizon
     grasping_type: str | None = None  # one of {"continuous", "binary"}; defaults to eval config
     gripper_threshold: float | None = None  # defaults to eval config
     gripper_scale: float = 255.0
@@ -358,11 +358,39 @@ def _model_action_to_env_action(
     return {"arm": arm, "gripper": gripper}
 
 
+def _resolve_execute_horizon(args: Args, train_cfg: Any) -> int:
+    model_horizon = int(getattr(train_cfg.model, "action_horizon", 0) or 0)
+    requested = args.execute_horizon
+
+    if requested is None:
+        if model_horizon <= 0:
+            raise ValueError(
+                "Could not infer execute_horizon from model config. "
+                "Please pass --execute-horizon explicitly."
+            )
+        return model_horizon
+
+    if requested <= 0:
+        raise ValueError(f"--execute-horizon must be positive, got {requested}.")
+
+    if model_horizon > 0 and requested > model_horizon:
+        logging.warning(
+            "Requested execute_horizon=%d exceeds model action_horizon=%d; using %d.",
+            requested,
+            model_horizon,
+            model_horizon,
+        )
+        return model_horizon
+
+    return requested
+
+
 def run(args: Args) -> None:
     if args.episode_sampling not in {"sequential", "random"}:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
 
     train_cfg = _config.get_config(args.config_name)
+    execute_horizon = _resolve_execute_horizon(args, train_cfg)
     policy = _policy_config.create_trained_policy(
         train_cfg,
         args.checkpoint_dir,
@@ -393,6 +421,14 @@ def run(args: Args) -> None:
     env.register_policy(registered_policy)
     video_dir = Path(args.video_dir).expanduser()
     video_fps = 1000.0 / float(eval_config.policy_dt_ms)
+    logging.info(
+        "OpenPI config=%s model_type=%s action_horizon=%s execute_horizon=%d checkpoint=%s",
+        args.config_name,
+        getattr(train_cfg.model, "model_type", "unknown"),
+        getattr(train_cfg.model, "action_horizon", "unknown"),
+        execute_horizon,
+        args.checkpoint_dir,
+    )
 
     try:
         total_success = 0
@@ -430,7 +466,7 @@ def run(args: Args) -> None:
                     )
                     if action_chunk.ndim == 1:
                         action_chunk = action_chunk[None, :]
-                    action_buffer.extend(action_chunk[: args.execute_horizon])
+                    action_buffer.extend(action_chunk[:execute_horizon])
 
                 raw_action = action_buffer.popleft()
                 if args.save_trajectory_video:
