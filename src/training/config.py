@@ -36,6 +36,7 @@ class CollectionConfig:
     num_steps_wait: int = 10
     add_per_step_data: bool = True
     obs_prefix_key: str = "pi0"
+    env_max_reward: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,6 +71,9 @@ class SACConfig:
     alpha_lr: float = 3e-4
     target_entropy: str | float = "auto"
     policy_distribution: str = "tanh_normal"
+    sac_image_size: int = 64
+    random_crop_padding: int = 4
+    warmup_gaussian_noise: bool = True
 
 
 @dataclasses.dataclass(frozen=True)

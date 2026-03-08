@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import functools
+import logging
 from typing import Any, Dict
 
 import numpy as np
+import PIL.Image
 import jax
 import jax.numpy as jnp
 import flax.nnx as nnx
@@ -39,17 +41,77 @@ from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Image helpers
+# ---------------------------------------------------------------------------
+
+def _resize_image_np(img: np.ndarray, target_size: int) -> np.ndarray:
+    """Resize a single HxWxC uint8 image to target_size x target_size."""
+    if img.ndim == 3:
+        h, w = img.shape[0], img.shape[1]
+        if h == target_size and w == target_size:
+            return img
+        return np.array(
+            PIL.Image.fromarray(img).resize((target_size, target_size)),
+            dtype=img.dtype,
+        )
+    # Handle (1, H, W, C) or similar leading dims by recursing.
+    if img.ndim == 4:
+        return np.stack([_resize_image_np(img[i], target_size) for i in range(img.shape[0])])
+    return img
+
+
+def _get_sac_image_size(config: OnlineTrainConfig) -> int:
+    rl = getattr(config, "rl", None)
+    return int(getattr(rl, "sac_image_size", 64))
+
+
+def _get_random_crop_padding(config: OnlineTrainConfig) -> int:
+    rl = getattr(config, "rl", None)
+    return int(getattr(rl, "random_crop_padding", 4))
+
+
+# ---------------------------------------------------------------------------
+# JAX augmentation (random crop matching reference's batched_random_crop)
+# ---------------------------------------------------------------------------
+
+def _random_crop_single(rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
+    """Random crop with edge-replicated padding for a single (H, W, C) image."""
+    crop_from = jax.random.randint(rng, (2,), 0, 2 * padding + 1)
+    crop_from = jnp.concatenate([crop_from, jnp.zeros((1,), dtype=jnp.int32)])
+    padded = jnp.pad(
+        img,
+        ((padding, padding), (padding, padding), (0, 0)),
+        mode="edge",
+    )
+    return jax.lax.dynamic_slice(padded, crop_from, img.shape)
+
+
+def _batched_random_crop(rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
+    """Random crop with edge padding for a (B, H, W, C) batch."""
+    keys = jax.random.split(rng, imgs.shape[0])
+    return jax.vmap(lambda k, i: _random_crop_single(k, i, padding))(keys, imgs)
+
+
+# ---------------------------------------------------------------------------
+# Observation extraction (replay-buffer format)
+# ---------------------------------------------------------------------------
 
 def _extract_replay_observation(
     observation: Any,
     *,
     obs_prefix: str,
+    sac_image_size: int = 0,
 ) -> Dict[str, np.ndarray]:
-    """Convert env observation payloads into AWR-style replay observations.
+    """Convert env observation payloads into replay observations.
 
     Returns a dict with:
-    - `state` (required)
-    - optional `image`, `wrist_image`
+    - ``state`` (required)
+    - optional ``image``, ``wrist_image`` (resized to *sac_image_size* when > 0)
+
     - optional `prefix_embedding`
     """
     if not isinstance(observation, dict):
@@ -75,10 +137,13 @@ def _extract_replay_observation(
         f"{obs_prefix}/image",
         "image",
         "observation/image",
-        "pixels",  # fallback for non-LIBERO pixel envs
+        "pixels",
     )
     if image is not None:
-        extracted["image"] = np.asarray(image)
+        img = np.asarray(image)
+        if sac_image_size > 0:
+            img = _resize_image_np(img, sac_image_size)
+        extracted["image"] = np.asarray(img, dtype=np.uint8)
 
     wrist_image = _get_from_obs(
         f"{obs_prefix}/wrist_image",
@@ -86,7 +151,10 @@ def _extract_replay_observation(
         "observation/wrist_image",
     )
     if wrist_image is not None:
-        extracted["wrist_image"] = np.asarray(wrist_image)
+        wimg = np.asarray(wrist_image)
+        if sac_image_size > 0:
+            wimg = _resize_image_np(wimg, sac_image_size)
+        extracted["wrist_image"] = np.asarray(wimg, dtype=np.uint8)
 
     state = _get_from_obs(
         f"{obs_prefix}/state",
@@ -100,17 +168,18 @@ def _extract_replay_observation(
         )
     extracted["state"] = np.asarray(state, dtype=np.float32)
 
-    for src in (observation, obs_dict):
-        if PREFIX_EMBEDDING_NAME in src:
-            extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
-                src[PREFIX_EMBEDDING_NAME], dtype=np.float32
-            )
-            break
-        if "prefix_rep" in src:
-            extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
-                src["prefix_rep"], dtype=np.float32
-            )
-            break
+    # Remove for testing
+    # for src in (observation, obs_dict):
+    #     if PREFIX_EMBEDDING_NAME in src:
+    #         extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
+    #             src[PREFIX_EMBEDDING_NAME], dtype=np.float32
+    #         )
+    #         break
+    #     if "prefix_rep" in src:
+    #         extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
+    #             src["prefix_rep"], dtype=np.float32
+    #         )
+    #         break
 
     return extracted
 
@@ -134,9 +203,10 @@ def _finalize_replay_observation(
         merged["wrist_image"] = np.asarray(
             next_obs.get("wrist_image", current_obs.get("wrist_image")), dtype=np.uint8
         )
-    prefix = next_obs.get(PREFIX_EMBEDDING_NAME, current_obs.get(PREFIX_EMBEDDING_NAME))
-    if prefix is not None:
-        merged[PREFIX_EMBEDDING_NAME] = np.asarray(prefix, dtype=np.float32)
+    # Remove for testing
+    # prefix = next_obs.get(PREFIX_EMBEDDING_NAME, current_obs.get(PREFIX_EMBEDDING_NAME))
+    # if prefix is not None:
+    #     merged[PREFIX_EMBEDDING_NAME] = np.asarray(prefix, dtype=np.float32)
     return merged
 
 
@@ -144,21 +214,16 @@ def _build_replay_observation_template(
     observation: Any,
     *,
     obs_prefix: str,
+    sac_image_size: int = 0,
 ) -> Dict[str, np.ndarray]:
     """Build fixed-shape replay template preserving image/state modalities."""
-    extracted = _extract_replay_observation(observation, obs_prefix=obs_prefix)
+    extracted = _extract_replay_observation(observation, obs_prefix=obs_prefix, sac_image_size=sac_image_size,)
     template: Dict[str, np.ndarray] = {}
     if "image" in extracted:
         template["image"] = np.zeros_like(np.asarray(extracted["image"]), dtype=np.uint8)
     if "wrist_image" in extracted:
-        template["wrist_image"] = np.zeros_like(
-            np.asarray(extracted["wrist_image"]), dtype=np.uint8
-        )
+        template["wrist_image"] = np.zeros_like(np.asarray(extracted["wrist_image"]), dtype=np.uint8)
     template["state"] = np.zeros_like(np.asarray(extracted["state"]), dtype=np.float32)
-    if PREFIX_EMBEDDING_NAME in extracted:
-        template[PREFIX_EMBEDDING_NAME] = np.zeros_like(
-            np.asarray(extracted[PREFIX_EMBEDDING_NAME]), dtype=np.float32
-        )
     return template
 
 
@@ -167,9 +232,13 @@ def _copy_with_batch_dim(x: Any, *, dtype: Any | None = None) -> np.ndarray:
     return np.array(arr[None, ...], copy=True)
 
 
+# ---------------------------------------------------------------------------
+# DSRLLearner
+# ---------------------------------------------------------------------------
+
 class DSRLLearner(Agent):
-    
-    def __init__(self, 
+
+    def __init__(self,
         config: OnlineTrainConfig,
         dummy_obs: ObsType,
         dummy_act: ActionType,
@@ -180,10 +249,13 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
+        self._sac_image_size = _get_sac_image_size(config)
+        self._crop_padding = _get_random_crop_padding(config)
         raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
         replay_dummy_obs = _build_replay_observation_template(
             raw_dummy_obs,
             obs_prefix=str(self._config.collect.obs_prefix_key),
+            sac_image_size=self._sac_image_size,
         )
         dummy_obs = normalize_observation_for_model(raw_dummy_obs)
         self._dummy_obs = dummy_obs
@@ -220,9 +292,12 @@ class DSRLLearner(Agent):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
-        q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(
-            self._rng, 4
-        )
+        # Gaussian noise flag: use random noise instead of untrained policy
+        # for the very first data collection round (matching reference i==0).
+        rl_cfg = getattr(self._config, "rl", None)
+        self._use_random_noise = bool(getattr(rl_cfg, "warmup_gaussian_noise", True))
+
+        q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(self._rng, 4)
         self._state_action_critic_state, self._state_action_critic_state_sharding = init_state_action_critic_train_state(
                 self._config,
                 q_init_rng,
@@ -256,7 +331,7 @@ class DSRLLearner(Agent):
             policy.eval()
             dist = policy(obs)
             return dist.sample(seed=rng)
-        
+
         def _eval_policy_actions(params, obs):
             policy = nnx.merge(self._policy_state.model_def, params)
             policy.eval()
@@ -280,6 +355,17 @@ class DSRLLearner(Agent):
         self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
+
+        logger.info(
+            "DSRLLearner init: action_dim=%d, sac_image_size=%d, crop_padding=%d, "
+            "target_entropy=%.3f, warmup_noise=%s",
+            self._action_dim, self._sac_image_size, self._crop_padding,
+            self._target_entropy, self._use_random_noise,
+        )
+
+    # ------------------------------------------------------------------
+    # Action sampling
+    # ------------------------------------------------------------------
 
     def _sample_action(
         self,
@@ -316,6 +402,20 @@ class DSRLLearner(Agent):
         if batch_actions is None:
             batch_actions = True
         rng, self._rng = jax.random.split(self._rng)
+
+        # Gaussian noise for first collection round
+        if self._use_random_noise and not deterministic:
+            # Infer the output shape from observations batch dimension.
+            obs_leaves = jax.tree_util.tree_leaves(observations)
+            if obs_leaves:
+                batch_dim = np.asarray(obs_leaves[0]).shape[0]
+            else:
+                batch_dim = 1
+            noise = np.asarray(jax.random.normal(rng, (batch_dim, self._action_dim)),dtype=np.float32,)
+            if batch_actions:
+                noise = normalize_action_batch_shape(noise, self._expected_action_shape)
+            return noise
+
         return np.asarray(
             self._sample_action(
                 observations=observations,
@@ -392,12 +492,45 @@ class DSRLLearner(Agent):
         )
         return alpha_info
 
+    # ------------------------------------------------------------------
+    # Image augmentation applied to observation dicts at training time
+    # ------------------------------------------------------------------
+
+    def _augment_images(self, obs_dict: Dict[str, jax.Array], rng: jax.Array) -> tuple[Dict[str, jax.Array], jax.Array]:
+        """Apply random crop augmentation to image keys (matching reference)."""
+        if self._crop_padding <= 0:
+            return obs_dict, rng
+        augmented = dict(obs_dict)
+        for img_key in ("image", "wrist_image"):
+            if img_key not in augmented:
+                continue
+            img = augmented[img_key]
+            # Only augment spatial images (B, H, W, C) where H, W > 1.
+            if img.ndim == 4 and img.shape[1] > 1 and img.shape[2] > 1:
+                rng, crop_rng = jax.random.split(rng)
+                augmented[img_key] = _batched_random_crop(
+                    crop_rng, img, padding=self._crop_padding
+                )
+        return augmented, rng
+
+    # ------------------------------------------------------------------
+    # Training update
+    # ------------------------------------------------------------------
+
     def update(self):
         self.training_steps += 1
 
+        # After first real update, disable Gaussian noise exploration.
         batch_size = int(getattr(self._config, "batch_size", 128))
         if self._online_data_buffer.size < batch_size:
             return {}
+
+        if self._use_random_noise:
+            self._use_random_noise = False
+            logger.info(
+                "Disabling warmup Gaussian noise (buffer size=%d >= batch_size=%d).",
+                self._online_data_buffer.size, batch_size,
+            )
 
         info = {}
         latest_actor_observation = None
@@ -411,19 +544,21 @@ class DSRLLearner(Agent):
             batch = self._online_data_buffer.sample()
             batch_observation = normalize_observation_for_model(batch["observation"])
             batch_next_observation = normalize_observation_for_model(batch["next_observation"])
+
+            # Convert to jax arrays.
             observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
-            actions = jnp.asarray(batch["actions"], dtype=jnp.float32)
             next_observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation)
+
+            # Random crop augmentation (matching reference)
+            aug_rng, self._rng = jax.random.split(self._rng)
+            observation, aug_rng = self._augment_images(observation, aug_rng)
+            next_observation, aug_rng = self._augment_images(next_observation, aug_rng)
+
+            actions = jnp.asarray(batch["actions"], dtype=jnp.float32)
             reward = jnp.asarray(batch["reward"], dtype=jnp.float32)
             discount = jnp.asarray(batch["discount"], dtype=jnp.float32)
 
             critic_batch = (observation, actions, next_observation, reward, discount)
-            # jax.debug.print("cr obs {obs}", obs=list(observation.keys()))
-            # jax.debug.print("cr act {obs}", obs=actions)
-            # jax.debug.print("cr n_obs {obs}", obs=list(next_observation.keys()))
-            # jax.debug.print("cr rew {obs}", obs=reward)
-            # jax.debug.print("cr dis {obs}", obs=discount)
-
 
             train_rng, self._rng = jax.random.split(self._rng)
             self._state_action_critic_state, critic_info = self._train_critic_step(
@@ -441,6 +576,9 @@ class DSRLLearner(Agent):
                 batch = self._online_data_buffer.sample()
                 batch_observation = normalize_observation_for_model(batch["observation"])
                 observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
+                # Augment the actor batch too.
+                aug_rng, self._rng = jax.random.split(self._rng)
+                observation, _ = self._augment_images(observation, aug_rng)
             else:
                 observation = latest_actor_observation
 
@@ -462,8 +600,20 @@ class DSRLLearner(Agent):
 
         info.setdefault("alpha/value", self._current_alpha())
         return info
-        
+
+    # ------------------------------------------------------------------
+    # Episode saving with sparse -1/0 reward (matching reference)
+    # ------------------------------------------------------------------
+
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
+        """Process a completed episode and insert transitions into the replay buffer.
+
+        Uses the DSRL sparse reward scheme from the reference implementation:
+        - Every step gets reward = -1
+        - Last step of a *successful* episode gets reward = 0
+        - Discount = gamma^query_freq for non-terminal steps
+        - Discount = 0 for the terminal step of a successful episode
+        """
         episode = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
 
@@ -471,55 +621,62 @@ class DSRLLearner(Agent):
             return
 
         obs_prefix = str(self._config.collect.obs_prefix_key)
-        base_discount = float(self._config.discount)
+        query_freq = int(getattr(self._config.collect, "replan_steps", 1))
+        bootstrap_discount = float(self._config.discount) ** query_freq
+        episode_len = len(episode)
 
-        for ep in episode:
-            obs = _extract_replay_observation(ep["observation"], obs_prefix=obs_prefix)
+        # Reward-threshold success detection
+        # is_success = (reward == env_max_reward)
+        # Override the terminated-based flag with a reward check when possible.
+        env_max_reward = float(getattr(self._config.collect, "env_max_reward", 0.0))
+        if env_max_reward > 0 and episode:
+            final_ep = episode[-1]
+            final_reward = np.asarray(
+                final_ep.get("reward", 0.0), dtype=np.float32
+            ).reshape(-1)
+            is_success = bool(np.max(final_reward) >= env_max_reward)
+
+        for idx, ep in enumerate(episode):
+            # --- Extract observations (resized, no prefix embedding) ---
+            obs = _extract_replay_observation(
+                ep["observation"],
+                obs_prefix=obs_prefix,
+                sac_image_size=self._sac_image_size,
+            )
             next_obs_raw = ep.get("next_observation", ep["observation"])
             try:
                 next_obs_extracted = _extract_replay_observation(
                     next_obs_raw,
                     obs_prefix=obs_prefix,
+                    sac_image_size=self._sac_image_size,
                 )
             except (TypeError, KeyError):
                 next_obs_extracted = obs
             next_obs = _finalize_replay_observation(obs, next_obs_extracted)
+
             act = ep.get("action", ep.get("actions"))
             if act is None:
                 raise KeyError("Episode transition is missing `action` / `actions`.")
             real_action = ep.get("real_action", ep.get("real_actions", act))
 
-            rew = ep.get("reward", 0.0)
-            term = ep.get("terminate", False)
-            trunc = ep.get("truncate", False)
-            r, terminated, truncated, done, n_steps = reduce_chunk_transition(
-                reward=rew,
-                terminated=term,
-                truncated=trunc,
-                discount=base_discount,
+            # --- FIX 1: Sparse -1/0 reward (matching reference exactly) ---
+            is_last = (idx == episode_len - 1)
+            if is_success and is_last:
+                r = 0.0
+                discount = 0.0  # Terminal success: no bootstrapping.
+            else:
+                r = -1.0
+                discount = bootstrap_discount  # gamma^query_freq
+
+            # Extract metadata for logging (terminated/truncated/done).
+            _, terminated, truncated, done, n_steps = reduce_chunk_transition(
+                reward=ep.get("reward", 0.0),
+                terminated=ep.get("terminate", False),
+                truncated=ep.get("truncate", False),
+                discount=float(self._config.discount),
                 action=act,
             )
-            #r = r - 1 # Make negative rewards optional
 
-            ### DSRL Reward Definition
-            episode_len = len(episode)
-            query_freq = int(getattr(self._config.collect, "replan_steps", 1))
-            bootstrap_discount = float(self._config.discount) ** query_freq
-
-            for idx, ep in enumerate(episode):
-                # keep reduce_chunk_transition only for terminated/truncated metadata if you want
-                _, terminated, truncated, done, n_steps = reduce_chunk_transition(...)
-
-                is_last = (idx == episode_len - 1)
-                if is_success and is_last:
-                    r = 0.0
-                    discount = 0.0
-                else:
-                    r = -1.0
-                    discount = bootstrap_discount
-
-
-            discount = (base_discount ** int(n_steps)) * (1.0 - float(done))
             policy_actions = np.asarray(act, dtype=np.float32).reshape(1, -1)
             real_actions = np.asarray(real_action, dtype=np.float32)
             if real_actions.shape != self._expected_action_shape:
@@ -543,7 +700,7 @@ class DSRLLearner(Agent):
             )
 
         self._collection_success_episodes += int(is_success)
-    
+
     def start_data_collection(self, step: int | None = None):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
