@@ -59,6 +59,7 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self._next_episode_idx = 0
         self._sampler: JsonEvalTaskSampler | None = None
         self._task = None
+        self._registered_policy: Any | None = None
         self._closed = False
 
         # Minimal placeholder spaces for v1.
@@ -111,12 +112,25 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         if self._closed:
             raise RuntimeError("Environment is closed.")
 
+    def register_policy(self, policy: Any | None) -> None:
+        """Register a policy object for policy-dependent sensors.
+
+        The object should be task-registerable (i.e., compatible with
+        BaseMujocoTask.register_policy) and ideally expose policy-sensor methods
+        such as get_phase/get_all_phases/get_info plus a reset method.
+        """
+        self._registered_policy = policy
+        if self._task is not None and policy is not None:
+            self._task.register_policy(policy)
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-        del options
         self._ensure_open()
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
+
+        if options and "registered_policy" in options:
+            self.register_policy(options["registered_policy"])
 
         self._close_active_episode()
 
@@ -136,6 +150,9 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
                 "MolmoSpacesBenchmarkGymEnv requires n_batch=1, got "
                 f"n_batch={self._task.env.n_batch}."
             )
+
+        if self._registered_policy is not None:
+            self._task.register_policy(self._registered_policy)
 
         observations, infos = self._task.reset()
         if not observations:
