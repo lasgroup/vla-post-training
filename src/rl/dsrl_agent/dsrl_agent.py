@@ -386,6 +386,13 @@ class DSRLLearner(Agent):
         batch_actions: bool = True,
     ) -> np.ndarray:
         processed_obs = normalize_observation_for_model(observations)
+        # Resize images to SAC resolution (e.g. 64×64) to match network init.
+        if self._sac_image_size > 0 and isinstance(processed_obs, dict):
+            for img_key in ("image", "wrist_image"):
+                if img_key in processed_obs:
+                    processed_obs[img_key] = _resize_image_np(
+                        np.asarray(processed_obs[img_key]), self._sac_image_size
+                    )
         obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), processed_obs)
 
         if deterministic:
