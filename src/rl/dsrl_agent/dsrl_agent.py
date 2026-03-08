@@ -58,8 +58,8 @@ def _resize_image_np(img: np.ndarray, target_size: int) -> np.ndarray:
             PIL.Image.fromarray(img).resize((target_size, target_size)),
             dtype=img.dtype,
         )
-    # Handle (1, H, W, C) or similar leading dims by recursing.
-    if img.ndim == 4:
+    # Handle arbitrary leading dims (batch, temporal, etc.) by recursing.
+    if img.ndim >= 4:
         return np.stack([_resize_image_np(img[i], target_size) for i in range(img.shape[0])])
     return img
 

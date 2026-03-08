@@ -216,8 +216,8 @@ def _build_actor_critic_defs(
             )
 
         state_vector_keys = ["state"]
-        if PREFIX_EMBEDDING_NAME in observation:
-            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+        # if PREFIX_EMBEDDING_NAME in observation:
+        #     state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
 
         use_pixel_encoder = backend == "libero"
         if use_pixel_encoder:
