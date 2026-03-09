@@ -227,7 +227,18 @@ def _worker(
         return None
 
     parent.close()
-    env = env_fn_wrapper.data()
+    import traceback as _tb, sys as _sys, faulthandler as _fh, os as _os
+    # Dump C-level stack trace on segfault/abort to stderr
+    _fh.enable(file=_sys.stderr, all_threads=True)
+    _worker_pid = _os.getpid()
+    print(f"[ENV WORKER pid={_worker_pid}] starting", file=_sys.stderr, flush=True)
+    try:
+        env = env_fn_wrapper.data()
+    except Exception:
+        print(f"[ENV WORKER pid={_worker_pid}] env creation failed:\n{_tb.format_exc()}", file=_sys.stderr, flush=True)
+        p.close()
+        return
+    print(f"[ENV WORKER pid={_worker_pid}] env created successfully", file=_sys.stderr, flush=True)
     try:
         while True:
             try:
@@ -289,6 +300,11 @@ def _worker(
                 raise NotImplementedError
     except KeyboardInterrupt:
         p.close()
+    except Exception:
+        print(f"[ENV WORKER pid={_worker_pid}] unhandled exception:\n{_tb.format_exc()}", file=_sys.stderr, flush=True)
+        p.close()
+    finally:
+        print(f"[ENV WORKER pid={_worker_pid}] exiting", file=_sys.stderr, flush=True)
 
 
 class DummyEnvWorker(EnvWorker):

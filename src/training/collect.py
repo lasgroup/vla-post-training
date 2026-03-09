@@ -7,7 +7,7 @@ import tqdm_loggable.auto as tqdm
 
 
 def _shift_window(
-    obs_act: dict[str, Any], next_obs_act: dict[str, Any]
+    observation: dict[str, Any], next_observation: dict[str, Any]
 ) -> dict[str, Any]:
     def move_obs(curr, nxt):
         # curr shape: (E, H, D) -> keep last step: (E, 1, D)
@@ -17,13 +17,7 @@ def _shift_window(
         # Result shape: (E, H, D), aligned with action chunk rollout.
         return np.concatenate([last_step, next_steps], axis=1)
 
-    shifted_observation = jax.tree.map(
-        move_obs, obs_act["observation"], next_obs_act["observation"]
-    )
-    shifted_obs_act = {}
-    for key, val in next_obs_act.items():
-        shifted_obs_act[key] = shifted_observation if key == "observation" else val
-    return shifted_obs_act
+    return jax.tree.map(move_obs, observation, next_observation)
 
 
 def collect_data(
@@ -48,11 +42,12 @@ def collect_data(
                 task_descriptions=task_descriptions,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
-            aligned_obs = _shift_window(obs_act=obs, next_obs_act=next_obs)
+            aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
 
             step_data = {
                 "observation": aligned_obs,
                 "next_observation": next_obs,
+                "action": action_chunk[:, :config.collect.replan_steps],
                 "reward": reward,
                 "terminate": terminate,
                 "truncate": truncate,

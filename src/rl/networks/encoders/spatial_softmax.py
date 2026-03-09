@@ -1,0 +1,38 @@
+import flax.nnx as nnx
+import jax.numpy as jnp
+
+
+class SpatialSoftmax(nnx.Module):
+    def __init__(self, height: int, width: int, channel: int, pos_x: jnp.ndarray, pos_y: jnp.ndarray,
+                 temperature: float | None = None, log_heatmap: bool = False, *, rngs: nnx.Rngs):
+        self.height = height
+        self.width = width
+        self.channel = channel
+        self.pos_x = pos_x
+        self.pos_y = pos_y
+        self.temperature_val = temperature
+        self.log_heatmap = log_heatmap
+
+        if self.temperature_val == -1:
+            self.temperature = nnx.Param(jnp.ones((1,), dtype=jnp.float32))
+        else:
+            self.temperature = None
+
+    def __call__(self, feature):
+        if self.temperature_val == -1:
+            temperature = self.temperature.value
+        else:
+            temperature = 1.
+
+        # print(temperature)
+        assert len(feature.shape) == 4
+        batch_size, num_featuremaps = feature.shape[0], feature.shape[3]
+        feature = feature.transpose(0, 3, 1, 2).reshape(batch_size, num_featuremaps, self.height * self.width)
+
+        softmax_attention = nnx.softmax(feature / temperature)
+        expected_x = jnp.sum(self.pos_x * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
+        expected_y = jnp.sum(self.pos_y * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
+        expected_xy = jnp.concatenate([expected_x, expected_y], axis=1)
+
+        expected_xy = jnp.reshape(expected_xy, [batch_size, 2 * num_featuremaps])
+        return expected_xy

@@ -142,12 +142,14 @@ def test_sample_action_filters_keys_and_resizes_images(monkeypatch):
         train_state,
         noise_level=0.0,
         num_steps=None,
+        batch_actions=True,
     ):
         captured["observations"] = observations
         captured["rng"] = rng
         captured["train_state"] = train_state
         captured["noise_level"] = noise_level
         captured["num_steps"] = num_steps
+        captured["batch_actions"] = batch_actions
         return jnp.array([1.0, 2.0], dtype=jnp.float32)
 
     lrn._sample_action = fake_sample_action
