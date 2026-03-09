@@ -21,15 +21,15 @@ def _shift_window(
 
 
 def collect_data(
-    agent: Agent, env: BaseVectorEnv, task_descriptions: list[str], config, step: int
+    agent: Agent, env: BaseVectorEnv, task_description: list[str], config, step: int
 ):
     agent.start_data_collection(step=step)
-    env_num_multiask = len(config.collect.tasks)
 
     total_episodes = 0
     total_successes = 0
-    episodes_per_env = [0] * env_num_multiask
-    successes_per_env = [0] * env_num_multiask
+    tasks = set(task_description)
+    episodes_per_task = {k: 0 for k in tasks}
+    successes_per_task = {k: 0 for k in tasks}
     
     num_rollouts = config.collect.num_rollouts
 
@@ -39,7 +39,7 @@ def collect_data(
         while total_episodes < num_rollouts:
             action_chunk = agent.sample_actions(
                 obs,
-                task_descriptions=task_descriptions,
+                task_description=task_description,
             )
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
             aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
@@ -66,13 +66,13 @@ def collect_data(
             for env_index in done_indices:
                 success = bool(current_terminate[env_index])
                 total_successes += int(success)
-                successes_per_env[env_index] += int(success)
-                episodes_per_env[env_index] += 1
+                successes_per_task[task_description[env_index]] += int(success)
+                episodes_per_task[task_description[env_index]] += 1
 
                 agent.save_episode(
                     is_success=success,
                     env_index=int(env_index),
-                    task_description=task_descriptions[env_index], 
+                    task_description=task_description[env_index],
                 )
 
                 reset_out = env.reset(id=int(env_index))
@@ -92,17 +92,6 @@ def collect_data(
 
     collected_episodes = agent.end_data_collection(step=step)
 
-    success_rate = (
-        float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
-    )
-
-    metrics = {"success_rate": success_rate}
-
-    per_env_success_rates = [s / e if e > 0 else 0.0 for s, e in zip(successes_per_env, episodes_per_env)]
-    success_rate_mean = np.mean(per_env_success_rates)
-    metrics["success_rate_mean"] = success_rate_mean
-
-    for i in range(env_num_multiask):
-        metrics[f"Per Task/success_rate_{config.collect.task_names[i]}"] = per_env_success_rates[i]
-
+    metrics = {"success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
+    metrics.update({f"success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
     return metrics, collected_episodes

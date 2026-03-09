@@ -132,13 +132,13 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
 @dataclasses.dataclass(frozen=True)
 class CollectionConfig:
     collect_interval: int = 200
-    env_num: int = 4 # Currently not used as we create one env per task
+    env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
     num_rollouts: int = 50
     domain: str = "libero"
     tasks: list[str] = dataclasses.field(
-        default_factory=lambda: ["libero_90_59", "libero_90_60", "libero_90_61", "libero_90_62"],
+        default_factory=lambda: ["libero_90_59x4"],
         metadata={
             "help": (
                 "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34'), "
@@ -181,36 +181,7 @@ class CollectionConfig:
                 expanded_tasks.extend([sub_task] * multiplier)
         
         object.__setattr__(self, 'tasks', expanded_tasks)
-
-        # Check divisibility by 4
-        num_tasks = len(self.tasks)
-        if num_tasks % 4 != 0:
-            raise ValueError(
-                f"Invalid number of tasks: {num_tasks}. "
-                f"The task count must be a multiple of 4 (e.g., {((num_tasks // 4) + 1) * 4}) "
-                "because the current sharding implementation does not support "
-                "non-uniform task distributions across devices yet."
-            )
-
-        # Count occurrences of each base task
-        counts = {}
-        for task in expanded_tasks:
-            counts[task] = counts.get(task, 0) + 1
-
-        # Generate task_names
-        task_name_counters = {}
-        task_names = []
-        for task in expanded_tasks:
-            if counts[task] == 1:
-                # Unique task → keep original
-                task_names.append(task)
-            else:
-                # Multiple instances → add index
-                idx = task_name_counters.get(task, 0)
-                task_names.append(f"{task}_{idx}")
-                task_name_counters[task] = idx + 1
-
-        object.__setattr__(self, 'task_names', task_names)
+        assert len(self.tasks) == self.env_num, f"Total number of tasks ({len(self.tasks)}) must match env_num ({self.env_num})."
 
 
 @dataclasses.dataclass(frozen=True)

@@ -40,16 +40,15 @@ from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_descriptions: list[str]):
-    env_num_multiask = len(config.collect.tasks)
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str]):
+    env_num = config.collect.env_num
     replan_steps = config.collect.replan_steps
     env_class = config.collect.domain
     seed = config.seed
     env_factories = []
-    for i in range(env_num_multiask):
+    for i in range(env_num):
 
         def _make_env(rank=i):
-            task_index = rank 
             # Create the base environment
             base_env = env_fn(rank)
             if config.collect.use_time_to_success_as_reward:
@@ -58,7 +57,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_descriptions: list[str]):
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
-                task_description=task_descriptions[task_index],
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -76,7 +74,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_descriptions: list[str]):
 
     env = (
         SubprocVectorEnv(env_factories)
-        if env_num_multiask > 1
+        if env_num > 1
         else DummyVectorEnv(env_factories)
     )
     # This sets the seed for all environment all at once to be [seed, seed + i, ..., seed + num_envs]
@@ -183,7 +181,6 @@ def _get_post_step_action_filter(domain: str):
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self._env_num_multitask = len(config.collect.tasks) 
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
@@ -260,7 +257,7 @@ class FilteredSFTLearner(Agent):
         )
 
         # Create temporary episode storage
-        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
+        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 
         def _get_prefix_rep_with_model_fn(m: _model.BaseModel, observation: _model.Observation):
             prefix_rep = m.get_prefix_rep(observation)
@@ -367,7 +364,7 @@ class FilteredSFTLearner(Agent):
     def _process_obs_for_pi0(
         self,
         observations: Dict,
-        task_descriptions: list[str],
+        task_description: list[str],
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
@@ -375,7 +372,7 @@ class FilteredSFTLearner(Agent):
         size = int(self._config.collect.resize_image)
         resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
-        obs["prompt"] = task_descriptions
+        obs["prompt"] = task_description
         return obs
 
     def _sample_action(
@@ -417,11 +414,11 @@ class FilteredSFTLearner(Agent):
 
     def _generate_actions(
         self, observations: np.ndarray | Dict,
-        task_descriptions: list[str],
+        task_description: list[str],
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
-            observations, task_descriptions=task_descriptions 
+            observations, task_description=task_description
         )
         actions = self._sample_action(
             observations=processed_obs,
@@ -461,7 +458,7 @@ class FilteredSFTLearner(Agent):
         self._checkpoint_manager.wait_until_finished()
 
     def add_data(self, step_data: StepData):
-        for i in range(self._env_num_multitask):
+        for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
     def _attach_prefix_embeddings_to_episode_data(
@@ -580,13 +577,13 @@ class FilteredSFTLearner(Agent):
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
-        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
+        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
-        self._episode_storage = [[] for _ in range(self._env_num_multitask)]
+        self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
         return collected_episodes
 

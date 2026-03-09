@@ -55,11 +55,11 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    env_fn, task_descriptions = make_env(config)
+    env_fn, task_description = make_env(config)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
-        task_descriptions=task_descriptions,
+        task_description=task_description,
     )
     agent = FilteredSFTLearner(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
@@ -98,7 +98,7 @@ def main(config: _config.OnlineTrainConfig):
                 agent=agent,
                 env=env,
                 config=config,
-                task_descriptions=task_descriptions,
+                task_description=task_description,
                 step=step,
             )
             wandb.log(collect_info, step=step)
