@@ -21,12 +21,16 @@ def _shift_window(
 
 
 def collect_data(
-    agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
+    agent: Agent, env: BaseVectorEnv, task_description: list[str], config, step: int
 ):
     agent.start_data_collection(step=step)
 
     total_episodes = 0
     total_successes = 0
+    tasks = set(task_description)
+    episodes_per_task = {k: 0 for k in tasks}
+    successes_per_task = {k: 0 for k in tasks}
+    
     num_rollouts = config.collect.num_rollouts
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
@@ -62,10 +66,13 @@ def collect_data(
             for env_index in done_indices:
                 success = bool(current_terminate[env_index])
                 total_successes += int(success)
+                successes_per_task[task_description[env_index]] += int(success)
+                episodes_per_task[task_description[env_index]] += 1
+
                 agent.save_episode(
                     is_success=success,
                     env_index=int(env_index),
-                    task_description=task_description,
+                    task_description=task_description[env_index],
                 )
 
                 reset_out = env.reset(id=int(env_index))
@@ -85,7 +92,6 @@ def collect_data(
 
     collected_episodes = agent.end_data_collection(step=step)
 
-    success_rate = (
-        float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
-    )
-    return {"success_rate": success_rate}, collected_episodes
+    metrics = {"success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
+    metrics.update({f"success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
+    return metrics, collected_episodes

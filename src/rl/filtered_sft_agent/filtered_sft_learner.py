@@ -40,7 +40,7 @@ from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str):
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str]):
     env_num = config.collect.env_num
     replan_steps = config.collect.replan_steps
     env_class = config.collect.domain
@@ -366,7 +366,7 @@ class FilteredSFTLearner(Agent):
     def _process_obs_for_pi0(
         self,
         observations: Dict,
-        task_description: str,
+        task_description: list[str],
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
@@ -419,7 +419,7 @@ class FilteredSFTLearner(Agent):
 
     def _generate_actions(
         self, observations: np.ndarray | Dict,
-        task_description: str,
+        task_description: list[str],
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
