@@ -24,7 +24,7 @@ import optax
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig
-from src.rl.dsrl_agent.update_critic import (
+from src.rl.dsrl.update_critic import (
     flatten_action_horizon,
     get_critic_reduction,
     summarize_critic_values,

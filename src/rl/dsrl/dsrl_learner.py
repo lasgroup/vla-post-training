@@ -29,7 +29,7 @@ from src.rl.dsrl.update_critic import (
     init_state_action_critic_train_state,
     train_q_step,
 )
-from src.rl.dsrl.chunk_ops import (
+from src.rl.dsrl.chunk_obs import (
     expected_chunk_action_shape,
     normalize_action_batch_shape,
     normalize_observation_for_model,

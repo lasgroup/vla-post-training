@@ -56,8 +56,8 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 from src.rl.dsrl.dsrl_learner import DSRLLearner
-from src.rl.dsrl.chunk_ops import unwrap_dsrl_vector_observation
-from src.env.dsrl_vector_env import DSRLVectorEnv
+from src.rl.dsrl.chunk_obs import unwrap_dsrl_vector_observation
+from src.envs.dsrl_vector_env import DSRLVectorEnv
 from src.rl.dsrl.update_critic import StateActionCriticDef
 from src.rl.dsrl.update_actor import PolicyDef
 from src.rl.networks.rl_networks import Policy
@@ -305,11 +305,11 @@ def _build_actor_critic_defs(
 
 def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
     env_num = int(config.collect.env_num)
-    add_states = bool(config.collect.add_states)
-    obs_prefix_key = str(config.collect.obs_prefix_key)
+    add_states = True                                   #bool(config.collect.add_states)
+    obs_prefix_key = "pi0"                              #str(config.collect.obs_prefix_key)
     replan_steps = int(config.collect.replan_steps)
-    discount = float(config.discount)
-    add_per_step_data = bool(config.collect.add_per_step_data)
+    discount = 0.999                                    #float(config.discount)
+    add_per_step_data = True                            #bool(config.collect.add_per_step_data)
 
     def _expand_noise_to_horizon(noise: Any, *, target_horizon: int) -> np.ndarray:
         noise_arr = np.asarray(noise, dtype=np.float32)
