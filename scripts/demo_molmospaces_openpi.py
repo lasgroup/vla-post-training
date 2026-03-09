@@ -31,7 +31,7 @@ class Args:
 
     # MolmoSpaces benchmark/env setup.
     benchmark_path: str = (
-        "/capstor/store/cscs/swissai/a143/yardas/molmo-assets/benchmarks/"
+        "/capstor/store/cscs/swissai/a143/molmo-assets/benchmarks/"
         "molmospaces-bench-v1/ithor/FrankaPickHardBench/"
         "FrankaPickHardBench_20260206_json_benchmark"
     )
