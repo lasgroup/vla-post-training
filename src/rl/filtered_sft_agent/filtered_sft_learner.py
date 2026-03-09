@@ -57,6 +57,8 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str]):
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
+                task_description=task_description,
+                molmo_config=getattr(config, "molmo", None),
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -389,8 +391,11 @@ class FilteredSFTLearner(Agent):
         )
         model = nnx.merge(train_state.model_def, params)
         model.eval()
-        assert "observation/state" in observations, "Observation must contain 'observation/state' key to infer batch size."
-        batch_size = observations["observation/state"].shape[0] if observations["observation/state"].ndim > 1 else 1
+        first_obs = next(iter(observations.values()), None)
+        if first_obs is None:
+            raise ValueError("Observation dictionary is empty.")
+        first_obs = np.asarray(first_obs)
+        batch_size = first_obs.shape[0] if first_obs.ndim > 1 else 1
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )

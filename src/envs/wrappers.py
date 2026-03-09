@@ -1,9 +1,11 @@
-from typing import Any, Dict, List, Callable
+from typing import Any, Dict, List
 import gymnasium as gym
 import jax
 import logging
 import math
 import numpy as np
+
+from src.envs.molmo_openpi import obs_to_openpi_input
 
 
 class GymnasiumEnvAdapter(gym.Env):
@@ -78,12 +80,18 @@ def _quat2axisangle(quat):
 
 
 def obs_to_pi_zero_input(
-    obs, env_class: str,
+    obs,
+    env_class: str,
+    molmo_config: Any | None = None,
 ):
     if env_class == "libero":
         obs_pi_zero = {
-            "observation/image": np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
-            "observation/wrist_image": np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]),
+            "observation/image": np.ascontiguousarray(
+                obs["agentview_image"][::-1, ::-1]
+            ),
+            "observation/wrist_image": np.ascontiguousarray(
+                obs["robot0_eye_in_hand_image"][::-1, ::-1]
+            ),
             "observation/state": np.concatenate(
                 (
                     obs["robot0_eef_pos"],
@@ -93,8 +101,35 @@ def obs_to_pi_zero_input(
                 dtype=np.float32,
             ),
         }
+    elif env_class == "molmo":
+        base_obs = obs_to_openpi_input(
+            obs,
+            exo_camera_key=getattr(molmo_config, "exo_camera_key", "exo_camera_1"),
+            wrist_camera_key=getattr(molmo_config, "wrist_camera_key", "wrist_camera"),
+            gripper_obs_norm=float(getattr(molmo_config, "gripper_obs_norm", 0.824033)),
+        )
+        # Keep both key layouts so either LeRobot-DROID (no "observation/" prefix
+        # after buffer stripping) or RLDS-DROID (with prefix) transforms can consume
+        # collected online trajectories.
+        obs_pi_zero = dict(base_obs)
+        obs_pi_zero.update(
+            {
+                "observation/observation/exterior_image_1_left": base_obs[
+                    "observation/exterior_image_1_left"
+                ],
+                "observation/observation/wrist_image_left": base_obs[
+                    "observation/wrist_image_left"
+                ],
+                "observation/observation/joint_position": base_obs[
+                    "observation/joint_position"
+                ],
+                "observation/observation/gripper_position": base_obs[
+                    "observation/gripper_position"
+                ],
+            }
+        )
     else:
-        raise NotImplementedError()
+        raise NotImplementedError
     return obs_pi_zero
 
 
@@ -226,9 +261,14 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self,
         env: gym.Env,
         env_class: str,
+        task_description: str,
+        molmo_config: Any | None = None,
     ):
         super().__init__(env)
         self._env_class = env_class
+        self._molmo_config = molmo_config
+        self.task_description = task_description
+        logging.info(f"\nTask: {self.task_description}")
 
         dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
@@ -251,6 +291,7 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
+            molmo_config=self._molmo_config,
         )
 
 
@@ -273,9 +314,9 @@ class SetInitialStateWrapper(gym.Wrapper):
         self._init_states = initial_states
 
     def _set_init_state(self):
-        assert hasattr(
-            self.env, "set_init_state"
-        ), "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        assert hasattr(self.env, "set_init_state"), (
+            "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        )
         random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
         init_state = self._init_states[random_index]
         return self.env.set_init_state(init_state)

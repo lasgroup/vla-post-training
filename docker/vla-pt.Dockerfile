@@ -53,8 +53,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY openpi/src/openpi/models_pytorch/transformers_replace/ /tmp/transformers_replace/
 RUN /.venv/bin/python -c "import transformers; print(transformers.__file__)" | xargs dirname | xargs -I{} cp -r /tmp/transformers_replace/* {} && rm -rf /tmp/transformers_replace
 
-# Add openpi, openpi-client to PATH
-ENV PYTHONPATH=/app:/app/openpi/packages/openpi-client/src:/app/openpi/src:/app/openpi/packages/openpi-client
+# Add openpi, openpi-client, MolmoSpaces to PATH
+ENV PYTHONPATH=/app:/app/openpi/packages/openpi-client/src:/app/openpi/src:/app/openpi/packages/openpi-client:/app/molmospaces
 
 # Setup macros for robosuite
 RUN uv run /.venv/lib/python3.11/site-packages/robosuite/scripts/setup_macros.py
