@@ -254,7 +254,7 @@ class DSRLLearner(Agent):
         raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
         replay_dummy_obs = _build_replay_observation_template(
             raw_dummy_obs,
-            obs_prefix=str(self._config.collect.obs_prefix_key),
+            obs_prefix="pi0", # str(self._config.collect.obs_prefix_key)
             sac_image_size=self._sac_image_size,
         )
         dummy_obs = normalize_observation_for_model(raw_dummy_obs)
@@ -637,9 +637,9 @@ class DSRLLearner(Agent):
         if not episode:
             return
 
-        obs_prefix = str(self._config.collect.obs_prefix_key)
+        obs_prefix = "pi0"#str(self._config.collect.obs_prefix_key)
         query_freq = int(getattr(self._config.collect, "replan_steps", 1))
-        bootstrap_discount = float(self._config.discount) ** query_freq
+        bootstrap_discount = float(self._config.rl.discount) ** query_freq
         episode_len = len(episode)
 
         # Reward-threshold success detection
@@ -690,7 +690,7 @@ class DSRLLearner(Agent):
                 reward=ep.get("reward", 0.0),
                 terminated=ep.get("terminate", False),
                 truncated=ep.get("truncate", False),
-                discount=float(self._config.discount),
+                discount=float(self._config.rl.discount),
                 action=act,
             )
 

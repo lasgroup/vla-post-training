@@ -66,7 +66,7 @@ from src.rl.networks.decoders.policies.learned_std_normal_policy import LearnedS
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.envs.libero import make_env_libero
-from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
+from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper, Pi0ObservationWrapperDSRL, QueryFrequencyWrapperDSRL
 
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
@@ -94,6 +94,7 @@ def _build_actor_critic_defs(
     policy_decoder_hidden_dims = tuple(_get_rl_attr(config.rl, "policy_decoder_hidden_dims", (256, 256)))
     critic_num_qs = int(_get_rl_attr(config.rl, "critic_num_qs", 2))
     encoder_type = str(_get_rl_attr(config.rl, "encoder_type", "resnet_34_v1")).lower()
+    encoder_type = "small"
     encoder_norm = str(_get_rl_attr(config.rl, "encoder_norm", "group")).lower()
     use_spatial_softmax = bool(_get_rl_attr(config.rl, "use_spatial_softmax", True))
     softmax_temperature = float(_get_rl_attr(config.rl, "softmax_temperature", 1.0))
@@ -394,14 +395,14 @@ def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
 
         def _make_env(rank=i):
             base_env = env_fn(rank)
-            base_env = Pi0ObservationWrapper(
+            base_env = Pi0ObservationWrapperDSRL(
                 env=base_env,
                 env_class="libero",
                 task_description=task_description,
                 add_states=add_states,
                 pi0_obs_prefix=obs_prefix_key,
             )
-            base_env = QueryFrequencyWrapper(
+            base_env = QueryFrequencyWrapperDSRL(
                 env=base_env,
                 query_frequency=replan_steps,
                 discount=discount,
@@ -520,7 +521,7 @@ def main(config: _config.OnlineTrainConfig):
             "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
             "from observations every update."
         )
-    backend = getattr(config.collect, "env_backend", "dmc")
+    backend = "libero"#getattr(config.collect, "env_backend", "dmc")
     env, task_description = _build_training_env(config)
     _configure_dsrl_vector_env(env, task_description=task_description)
 

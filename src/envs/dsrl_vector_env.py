@@ -293,6 +293,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
+        self._last_obs = None
 
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
@@ -364,6 +365,40 @@ class DSRLVectorEnv(SubprocVectorEnv):
             processed_obs["prompt"] = task_description
         return processed_obs
 
+    def _resolve_reset_ids(
+        self, id: Optional[Union[int, List[int], np.ndarray]]
+    ) -> List[int]:
+        return [int(i) for i in self._wrap_id(id)]
+
+    def _update_last_obs_cache(
+        self,
+        reset_ids: List[int],
+        reset_obs_with_prefix: Any,
+    ) -> None:
+        # Full reset (or first reset): replace cache directly.
+        if self._last_obs is None or len(reset_ids) == self.env_num:
+            self._last_obs = reset_obs_with_prefix
+            return
+
+        id_index = np.asarray(reset_ids, dtype=np.int32)
+
+        def _scatter_update(prev_leaf, new_leaf):
+            prev = np.asarray(prev_leaf).copy()
+            prev[id_index] = np.asarray(new_leaf)
+            return prev
+
+        try:
+            self._last_obs = jax.tree_util.tree_map(
+                _scatter_update, self._last_obs, reset_obs_with_prefix
+            )
+        except Exception as exc:
+            logging.warning(
+                "Failed to merge partial reset into _last_obs cache; replacing cache. "
+                "This may temporarily change batch shape. Error: %s",
+                exc,
+            )
+            self._last_obs = reset_obs_with_prefix
+
     def reset(
         self,
         id: Optional[Union[int, List[int], np.ndarray]] = None,
@@ -372,49 +407,48 @@ class DSRLVectorEnv(SubprocVectorEnv):
         """Reset the state of some envs and return initial observations.
         Perform a dummy step to get the prefix representation.
         """        
+        reset_ids = self._resolve_reset_ids(id)
         reset_returns = super().reset(id, **kwargs)
         if isinstance(reset_returns, tuple):
             obs, info = reset_returns
-            processed_obs = self._process_obs_for_pi0(
-                obs, task_description="dummy"
-            )
-            dummy_noise = jnp.zeros((len(obs["observation"]["state"]), self._policy.action_horizon, self._policy.action_dim))
-            outputs = self._policy.infer_with_model(
-                model=self.model,
-                obs=processed_obs, # Use processed obs
-                noise=dummy_noise,
-                return_prefix_rep=True,
-                sharding_spec=self._policy_sharding_spec,
-            )
-            prefix_rep = outputs["prefix_rep"]
-            
-            if isinstance(obs, dict):
-                obs["prefix_rep"] = np.array(prefix_rep)
-                self._last_obs = obs # Track last obs
-                return obs, info
-            self._last_obs = np.concatenate([obs, prefix_rep], axis=1) # Track last obs
-            return self._last_obs, info
+            returns_info = True
         else:
             obs = reset_returns
-            processed_obs = self._process_obs_for_pi0(
-                obs, task_description="dummy"
+            info = None
+            returns_info = False
+
+        processed_obs = self._process_obs_for_pi0(
+            obs, task_description="dummy"
+        )
+        dummy_noise = jnp.zeros(
+            (
+                len(obs["observation"]["state"]),
+                self._policy.action_horizon,
+                self._policy.action_dim,
             )
-            dummy_noise = jnp.zeros((len(obs["observation"]["state"]), self._policy.action_horizon, self._policy.action_dim))
-            outputs = self._policy.infer_with_model(
-                model=self.model,
-                obs=processed_obs, # Use processed obs
-                noise=dummy_noise,
-                return_prefix_rep=True,
-                sharding_spec=self._policy_sharding_spec,
-            )
-            prefix_rep = outputs["prefix_rep"]
-            
-            if isinstance(obs, dict):
-                 obs["prefix_rep"] = np.array(prefix_rep)
-                 self._last_obs = obs # Track last obs
-                 return obs
-            self._last_obs = np.concatenate([obs, prefix_rep], axis=1) # Track last obs
-            return self._last_obs
+        )
+        outputs = self._policy.infer_with_model(
+            model=self.model,
+            obs=processed_obs,  # Use processed obs
+            noise=dummy_noise,
+            return_prefix_rep=True,
+            sharding_spec=self._policy_sharding_spec,
+        )
+        prefix_rep = outputs["prefix_rep"]
+
+        if isinstance(obs, dict):
+            obs_with_prefix = dict(obs)
+            obs_with_prefix["prefix_rep"] = np.array(prefix_rep)
+        else:
+            obs_with_prefix = np.concatenate([obs, prefix_rep], axis=1)
+
+        # Keep a full-batch cache for policy inference in step(), even when reset(id=...)
+        # returns only a subset.
+        self._update_last_obs_cache(reset_ids, obs_with_prefix)
+
+        if returns_info:
+            return obs_with_prefix, info
+        return obs_with_prefix
 
     def step(
         self,
