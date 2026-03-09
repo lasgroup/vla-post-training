@@ -42,7 +42,8 @@ import wandb
 import openpi.training.utils as training_utils
 
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
-    get_env_and_agent_for_filtered_sft,
+    FilteredSFTLearner,
+    filtered_sft_wrap_env,
 )
 from src.envs import make_env
 import src.training.config as _config
@@ -55,11 +56,12 @@ def main(config: _config.OnlineTrainConfig):
     logging.info(f"Running on: {platform.node()}")
 
     env_fn, task_description = make_env(config)
-    env, agent = get_env_and_agent_for_filtered_sft(
+    env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
     )
+    agent = FilteredSFTLearner(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     batch = next(iter(agent._data_loader))

@@ -43,11 +43,11 @@ def test_full_transitions_mode():
     query_freq = 3
     env = MockEnv()
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq)
+    assert wrapped.observation_space.shape == (query_freq, 1)
 
     # Mock action: (3, 1) array
     action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
+    obs, reward, term, trunc, info = wrapped.step(action)
 
     # Check shapes: they should all have the first dimension as query_freq
     assert obs.shape == (query_freq, 1)
@@ -65,10 +65,9 @@ def test_early_termination():
     wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq)
 
     action = np.zeros((query_freq, 1))
-    obs_act, reward, term, trunc, info = wrapped.step(action)
-    obs = obs_act["observation"]
+    obs, reward, term, trunc, info = wrapped.step(action)
 
-    # It should have broken early at step 5
-    assert len(obs) == 5
+    # The wrapper pads to query_freq after early termination.
+    assert len(obs) == query_freq
     assert term[-1] == True
     assert reward.sum() == 5.0

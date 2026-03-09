@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Callable
+from typing import Any
 import gymnasium as gym
 import jax
 import logging
@@ -80,13 +80,18 @@ def _quat2axisangle(quat):
 
 
 def obs_to_pi_zero_input(
-    obs, env_class: str, task_description: str,
+    obs,
+    env_class: str,
     molmo_config: Any | None = None,
 ):
     if env_class == "libero":
         obs_pi_zero = {
-            "observation/image": np.ascontiguousarray(obs["agentview_image"][::-1, ::-1]),
-            "observation/wrist_image": np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1]),
+            "observation/image": np.ascontiguousarray(
+                obs["agentview_image"][::-1, ::-1]
+            ),
+            "observation/wrist_image": np.ascontiguousarray(
+                obs["robot0_eye_in_hand_image"][::-1, ::-1]
+            ),
             "observation/state": np.concatenate(
                 (
                     obs["robot0_eef_pos"],
@@ -133,13 +138,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         query_frequency: int,
-        pre_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
-        post_step_filter: Callable[[np.ndarray], np.ndarray] = lambda x: x,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-        self._pre_step_filter = pre_step_filter
-        self._post_step_filter = post_step_filter
 
     @property
     def expand_space(self, space):
@@ -169,27 +170,19 @@ class QueryFrequencyWrapper(gym.Wrapper):
         obs_space = jax.tree_util.tree_map(
             self.expand_space, self.env.observation_space
         )
-        act_space = self.action_space
-        return gym.spaces.Dict({"observation": obs_space, "action": act_space})
+        return obs_space
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # 1. Reset the underlying environment
         obs, info = self.env.reset(seed=seed, options=options)
-        # 2. Get a single-step dummy action template from the INNER env
-        initial_action = jax.tree_util.tree_map(
-            lambda space: np.zeros(space.shape, dtype=space.dtype),
-            self.env.action_space,
-        )
-        # 3. Construct the joint observation dict
-        wrapped_obs = {"observation": obs, "action": initial_action}
 
         # We tile the initial observation to fill the buffer.
-        wrapped_obs = jax.tree_util.tree_map(
+        obs = jax.tree_util.tree_map(
             lambda x: np.repeat(x[None, ...], self._query_frequency, axis=0),
-            wrapped_obs,
+            obs,
         )
 
-        return wrapped_obs, info
+        return obs, info
 
     def step(self, action):
         """
@@ -204,13 +197,10 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # Extract the sub-action for this specific step
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
-            sub_action = self._pre_step_filter(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
-            sub_action = self._post_step_filter(sub_action)
-            obs_act = {"observation": obs, "action": sub_action}
             data.append(
                 {
-                    "obs": obs_act,
+                    "observation": obs,
                     "reward": reward,
                     "terminated": terminated,
                     "truncated": truncated,
@@ -225,7 +215,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
                 for _ in range(i + 1, self._query_frequency):
                     data.append(
                         {
-                            "obs": obs_act,
+                            "observation": obs,
                             "reward": 0.0,
                             "terminated": terminated,
                             "truncated": truncated,
@@ -240,12 +230,30 @@ class QueryFrequencyWrapper(gym.Wrapper):
         stacked = jax.tree.map(lambda *xs: np.stack(xs), *data)
         # Returns the dictionary where every leaf has shape (query_freq, ...)
         return (
-            stacked["obs"],
+            stacked["observation"],
             stacked["reward"],
             stacked["terminated"],
             stacked["truncated"],
             stacked["info"],
         )
+
+
+class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
+    """Query wrapper that ignores prefix payload when stepping the underlying env."""
+
+    def step(self, action):
+        env_action, _ = action
+        return super().step(env_action)
+
+
+class TimeToSuccessAsRewardWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env=env)
+
+    def step(self, action):
+        obs, _, terminate, truncate, info = self.env.step(action)
+        time_to_success_reward = 0.0 if terminate else -1.0
+        return obs, time_to_success_reward, terminate, truncate, info
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):
@@ -257,9 +265,9 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         molmo_config: Any | None = None,
     ):
         super().__init__(env)
-        self.task_description = task_description
         self._env_class = env_class
         self._molmo_config = molmo_config
+        self.task_description = task_description
         logging.info(f"\nTask: {self.task_description}")
 
         dummy_obs, _ = env.reset()
@@ -283,7 +291,6 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
-            task_description=self.task_description,
             molmo_config=self._molmo_config,
         )
 
@@ -307,9 +314,9 @@ class SetInitialStateWrapper(gym.Wrapper):
         self._init_states = initial_states
 
     def _set_init_state(self):
-        assert hasattr(
-            self.env, "set_init_state"
-        ), "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        assert hasattr(self.env, "set_init_state"), (
+            "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        )
         random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
         init_state = self._init_states[random_index]
         return self.env.set_init_state(init_state)
