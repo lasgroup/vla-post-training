@@ -381,6 +381,9 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         if id is not None:
              raise NotImplementedError("Partially stepping ResidualRLVectorEnv is not supported yet because of state tracking complexity.")
 
+        clip_range = self._config.collect.residual_action_clip_range
+        residual_action = np.clip(residual_action, clip_range[0], clip_range[1])
+
         base_action = self._last_obs["base_action"]
         actions = base_action + residual_action
         
