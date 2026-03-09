@@ -34,7 +34,8 @@ DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_EVAL_ENV_NUM = 32
+DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
@@ -48,7 +49,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
-    "rl.policy_training_start_step": [900, 1200],
+    "rl.policy_training_start_step": [900],
 }
 
 
@@ -85,6 +86,7 @@ def main() -> None:
     parser.add_argument(
         "--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL
     )
+    parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
     parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
@@ -110,6 +112,7 @@ def main() -> None:
             "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "batch_size": DEFAULT_BATCH_SIZE,
+            "collect.env_num": args.train_env_num,
             "collect.eval_env_num": args.eval_env_num,
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
