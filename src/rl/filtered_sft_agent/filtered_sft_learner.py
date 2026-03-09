@@ -1504,11 +1504,26 @@ class FilteredSFTLearner(Agent):
             if online_ratio >= 1.0:
                 batch = online_batch
             elif online_ratio > 0:
+                # Mix online and offline into a fixed-size batch instead of
+                # concatenating (which would double the batch and OOM).
+                first_leaf = jax.tree.leaves(batch)[0]
+                batch_size = first_leaf.shape[0]
+                n_online = min(
+                    int(batch_size * online_ratio),
+                    jax.tree.leaves(online_batch)[0].shape[0],
+                )
+                n_offline = batch_size - n_online
                 batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x, y], axis=0),
+                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
                     batch,
                     online_batch,
                 )
+                # The online batch may be replicated (PartitionSpec()) while
+                # the SFT batch is sharded. Re-shard the mixed result to
+                # match the data sharding expected by _train_step.
+                batch = jax.device_put(batch, self._data_sharding)
+                del online_batch
+                gc.collect()
         train_rng, self._rng = jax.random.split(self._rng)
         train_state = self._train_state
         with sharding.set_mesh(self._mesh):
