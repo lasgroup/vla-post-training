@@ -37,8 +37,8 @@ from src.training.data_loader import create_data_loader
 from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
-from src.rl.dsrl_agent.dsrl_vector_env_config import EnvConfig
-from src.rl.dsrl_agent.dsrl_vector_env_config import _env_config
+from src.rl.residual_rl_agent.residual_rl_vector_env_config import EnvConfig
+from src.rl.residual_rl_agent.residual_rl_vector_env_config import _env_config
 
 gym_old_venv_step_type = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 gym_new_venv_step_type = Tuple[
@@ -144,8 +144,8 @@ def init_train_state(
     return train_state, state_sharding
 
 
-class DSRLVectorEnv(SubprocVectorEnv):
-    """Vectorized environment wrapper based on subprocess for DSRL."""
+class ResidualRLVectorEnv(SubprocVectorEnv):
+    """Vectorized environment wrapper based on subprocess for ResidualRL."""
     def __init__(self, env_fns: List[Callable[[], gym.Env]], **kwargs: Any) -> None:
         super().__init__(env_fns, **kwargs)
         self._config = _env_config
@@ -215,6 +215,11 @@ class DSRLVectorEnv(SubprocVectorEnv):
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
+        self._clear_base_actions()
+
+    def _clear_base_actions(self):
+        self._base_actions = None
+        self._query_count = 0
 
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
@@ -286,6 +291,46 @@ class DSRLVectorEnv(SubprocVectorEnv):
             processed_obs["prompt"] = task_description
         return processed_obs
 
+    def _infer_policy_batch_size(self, observations: Dict[str, Any]) -> int:
+        """Infer policy batch size from processed observation tensors."""
+        state = observations.get("observation/state")
+        if state is not None:
+            state_arr = np.asarray(state)
+            return int(state_arr.shape[0]) if state_arr.ndim > 1 else 1
+
+        for image_key in ("observation/image", "observation/wrist_image"):
+            image = observations.get(image_key)
+            if image is None:
+                continue
+            image_arr = np.asarray(image)
+            return int(image_arr.shape[0]) if image_arr.ndim >= 4 else 1
+
+        obs_leaves = jax.tree_util.tree_leaves(observations)
+        if not obs_leaves:
+            raise ValueError("No observation leaves found for policy inference.")
+        first_leaf = np.asarray(obs_leaves[0])
+        return int(first_leaf.shape[0]) if first_leaf.ndim > 1 else 1
+    
+    def _sample_base_actions(self, obs):
+        processed_obs = self._process_obs_for_pi0(
+            obs, task_description="dummy"
+        )
+        
+        # Vector envs expect a batch dimension for actions. Policy inference
+        # unbatches when batch_size == 1, so add it back for single-env runs.
+        batch_size = self._infer_policy_batch_size(processed_obs)
+        rng, self._rng = jax.random.split(self._rng)
+        noise = jax.random.normal(
+            rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
+        )
+        base_actions = self._policy.infer_with_model(
+            model=self.model,
+            obs=processed_obs,
+            noise=noise,
+            sharding_spec=self._policy_sharding_spec,
+        )["actions"]
+        return base_actions
+
     def reset(
         self,
         id: Optional[Union[int, List[int], np.ndarray]] = None,
@@ -295,92 +340,67 @@ class DSRLVectorEnv(SubprocVectorEnv):
         Perform a dummy step to get the prefix representation.
         """        
         reset_returns = super().reset(id, **kwargs)
+        self._clear_base_actions()
         if isinstance(reset_returns, tuple):
             obs, info = reset_returns
-            processed_obs = self._process_obs_for_pi0(
-                obs, task_description="dummy"
-            )
-            dummy_noise = jnp.zeros((len(obs["observation"]["state"]), self._policy.action_horizon, self._policy.action_dim))
-            outputs = self._policy.infer_with_model(
-                model=self.model,
-                obs=processed_obs, # Use processed obs
-                noise=dummy_noise,
-                return_prefix_rep=True,
-                sharding_spec=self._policy_sharding_spec,
-            )
-            prefix_rep = outputs["prefix_rep"]
-            
+            print("[reset: sample base actions]")
+            self._base_actions = self._sample_base_actions(obs)
+            base_action = self._base_actions[:, [0]]
             if isinstance(obs, dict):
-                obs["prefix_rep"] = np.array(prefix_rep)
+                obs["base_action"] = base_action
                 self._last_obs = obs # Track last obs
                 return obs, info
-            self._last_obs = np.concatenate([obs, prefix_rep], axis=1) # Track last obs
+            self._last_obs = np.concatenate([obs, base_action], axis=1) # Track last obs
             return self._last_obs, info
         else:
             obs = reset_returns
-            processed_obs = self._process_obs_for_pi0(
-                obs, task_description="dummy"
-            )
-            dummy_noise = jnp.zeros((len(obs["observation"]["state"]), self._policy.action_horizon, self._policy.action_dim))
-            outputs = self._policy.infer_with_model(
-                model=self.model,
-                obs=processed_obs, # Use processed obs
-                noise=dummy_noise,
-                return_prefix_rep=True,
-                sharding_spec=self._policy_sharding_spec,
-            )
-            prefix_rep = outputs["prefix_rep"]
-            
+            print("[reset: sample base actions]")
+            self._base_actions = self._sample_base_actions(obs)
+            base_action = self._base_actions[:, [0]]
             if isinstance(obs, dict):
-                obs["prefix_rep"] = np.array(prefix_rep)
+                obs["base_action"] = base_action
                 self._last_obs = obs # Track last obs
-                return obs
-            self._last_obs = np.concatenate([obs, prefix_rep], axis=1) # Track last obs
+                return obs, info
+            self._last_obs = np.concatenate([obs, base_action], axis=1) # Track last obs
             return self._last_obs
 
     def step(
         self,
-        noise: np.ndarray,
+        residual_action: np.ndarray,
         id: Optional[Union[int, List[int], np.ndarray]] = None,
     ) -> Union[gym_old_venv_step_type, gym_new_venv_step_type]:
-        """Run one timestep of the environment with the given the DSRL policy noise.
-        The noise is passed to the base policy's infer_with_model method.
+        """Run one timestep of the environment with the given the ResidualRL policy residual action.
 
         Args:
-            noise: The noise to take in the environment.
+            residual_action: The residual action to take in the environment.
             id: The id of the environment to take the action in.
 
         Returns:
             The observations with prefix representation, rewards, dones, and infos.
         """
         if id is not None:
-             raise NotImplementedError("Partially stepping DSRLVectorEnv is not supported yet because of state tracking complexity.")
+             raise NotImplementedError("Partially stepping ResidualRLVectorEnv is not supported yet because of state tracking complexity.")
 
-        # Use the stored _last_obs
-        processed_obs = self._process_obs_for_pi0(
-             self._last_obs, task_description="dummy"
-        )
-        
-        # Vector envs expect a batch dimension for actions. Policy inference
-        # unbatches when batch_size == 1, so add it back for single-env runs.
-        outputs = self._policy.infer_with_model(
-            model=self.model,
-            obs=processed_obs,
-            noise=noise,
-            return_prefix_rep=True,
-            sharding_spec=self._policy_sharding_spec,
-        )
-        actions = outputs["actions"]
-        prefix_rep = outputs["prefix_rep"]
+        base_action = self._last_obs["base_action"]
+        actions = base_action + residual_action
         
         return_stacks = super().step(actions, id)
         obs_stack = return_stacks[0]
         
+        self._query_count += 1
+        if self._query_count == self._policy.action_horizon:
+            self._clear_base_actions()
+            print("[step: sample base actions]")
+            self._base_actions = self._sample_base_actions(self._last_obs)
+
+        next_base_action = self._base_actions[:, [self._query_count]]
+        
         if isinstance(obs_stack, dict):
-            obs_stack["prefix_rep"] = np.array(prefix_rep)
+            obs_stack["base_action"] = next_base_action
             self._last_obs = obs_stack
             return (obs_stack, *return_stacks[1:]) # type: ignore
              
-        obs_stack = np.concatenate([obs_stack, prefix_rep], axis=1)
+        obs_stack = np.concatenate([obs_stack, next_base_action], axis=1)
         self._last_obs = obs_stack
+        
         return (obs_stack, *return_stacks[1:])  # type: ignore
