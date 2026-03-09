@@ -8,7 +8,7 @@ from openpi.training.config import (
     pi0_config,
     LeRobotLiberoDataConfig,
 )
-from typing import Sequence
+from typing import Literal, Sequence
 
 import openpi.training.optimizer as _optimizer
 import optax
@@ -129,13 +129,36 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class MolmoConfig:
+    benchmark_dir: str = ""
+    eval_config_cls: str = (
+        "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
+    )
+    episode_sampling: Literal["sequential", "random"] = "sequential"
+    task_horizon_steps: int | None = None
+    # If None, the environment task description from benchmark metadata is used.
+    task_description: str | None = None
+
+    # Observation mapping from Molmo observations to OpenPI input keys.
+    exo_camera_key: str = "exo_camera_1"
+    wrist_camera_key: str = "wrist_camera"
+    gripper_obs_norm: float = 0.824033
+
+    # Action mapping from OpenPI output to Molmo env actions.
+    grasping_type: Literal["continuous", "binary"] = "binary"
+    gripper_threshold: float = 0.5
+    gripper_scale: float = 255.0
+
+
+@dataclasses.dataclass(frozen=True)
 class CollectionConfig:
     collect_interval: int = 200
     env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
     num_rollouts: int = 50
-    domain: str = "libero"
+    domain: Literal["libero", "molmo"] = "libero"
+    molmo: MolmoConfig = MolmoConfig()
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
