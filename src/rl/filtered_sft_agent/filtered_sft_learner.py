@@ -170,12 +170,18 @@ def init_train_state(
     return train_state, state_sharding
 
 
+def _get_post_step_action_filter(domain: str):
+    if domain == "libero":
+        # see https://arxiv.org/pdf/2501.09747, Appendix C - clipping low-magnitude actions
+        # the LIBERO dataset seems to have been filtered accordingly
+        return lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
+    return lambda x: x
+
+
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        # see https://arxiv.org/pdf/2501.09747, Appendix C - clipping low-magnitude actions
-        # the LIBERO dataset seems to have been filtered accordingly
-        self.post_step_action_filter = lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
+        self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
