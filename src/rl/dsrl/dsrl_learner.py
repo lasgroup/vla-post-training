@@ -33,9 +33,7 @@ from src.rl.dsrl.chunk_obs import (
     expected_chunk_action_shape,
     normalize_action_batch_shape,
     normalize_observation_for_model,
-    reduce_chunk_transition,
 )
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
@@ -137,6 +135,8 @@ def _extract_replay_observation(
         f"{obs_prefix}/image",
         "image",
         "observation/image",
+        "observation/exterior_image_1_left",
+        "exterior_image_1_left",
         "pixels",
     )
     if image is not None:
@@ -149,6 +149,8 @@ def _extract_replay_observation(
         f"{obs_prefix}/wrist_image",
         "wrist_image",
         "observation/wrist_image",
+        "observation/wrist_image_left",
+        "wrist_image_left",
     )
     if wrist_image is not None:
         wimg = np.asarray(wrist_image)
@@ -161,6 +163,23 @@ def _extract_replay_observation(
         "state",
         "observation/state",
     )
+    if state is None:
+        joint_position = _get_from_obs(
+            "observation/joint_position",
+            "joint_position",
+        )
+        gripper_position = _get_from_obs(
+            "observation/gripper_position",
+            "gripper_position",
+        )
+        if joint_position is not None and gripper_position is not None:
+            state = np.concatenate(
+                [
+                    np.asarray(joint_position, dtype=np.float32),
+                    np.asarray(gripper_position, dtype=np.float32),
+                ],
+                axis=-1,
+            )
     if state is None:
         raise KeyError(
             "Replay extraction requires a state vector. Expected one of "
@@ -246,6 +265,10 @@ class DSRLLearner(Agent):
         policy_def: PolicyDef,
         task_description: str,):
         self._config = config
+        if bool(getattr(self._config.collect, "store_prefix_rep", False)):
+            raise ValueError(
+                "DSRL does not support collect.store_prefix_rep=True in this integration path."
+            )
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
@@ -274,28 +297,25 @@ class DSRLLearner(Agent):
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
 
         replay_dummy_obs = jax.tree_util.tree_map(lambda x: np.asarray(x), replay_dummy_obs)
+        rl_cfg = getattr(self._config, "rl", None)
         self._online_data_buffer = ShardedReplayBuffer(
             dummy_data={
                 "observation": replay_dummy_obs,
                 "actions": np.zeros((1, self._action_dim), dtype=np.float32),
-                "real_actions": np.zeros(
-                    (1, *self._expected_action_shape), dtype=np.float32
-                ),
                 "next_observation": replay_dummy_obs,
                 "reward": np.zeros((1,), dtype=np.float32),
+                "mc_return": np.zeros((1,), dtype=np.float32),
                 "discount": np.zeros((1,), dtype=np.float32),
-                "terminated": np.zeros((1,), dtype=np.bool_),
-                "truncated": np.zeros((1,), dtype=np.bool_),
-                "done": np.zeros((1,), dtype=np.bool_),
-                "n_steps": np.ones((1,), dtype=np.int32),
             },
-            max_capacity=100_000,
+            max_capacity=int(getattr(rl_cfg, "buffer_capacity", 100_000)),
             batch_size=int(getattr(self._config, "batch_size", 128)),
             data_sharding=None,
             seed=int(getattr(self._config, "seed", 0)),
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
+            load_paths=list(getattr(rl_cfg, "buffer_load_paths", ())),
+            save_path=getattr(rl_cfg, "buffer_save_path", None),
         )
         # Keep attribute parity with existing DSRL collection code paths.
         self.replay = self._online_data_buffer
@@ -460,14 +480,10 @@ class DSRLLearner(Agent):
         return {
             "observation": batch["observation"],
             "actions": np.asarray(batch["actions"], dtype=np.float32),
-            "real_actions": np.asarray(batch["real_actions"], dtype=np.float32),
             "next_observation": batch["next_observation"],
             "reward": np.asarray(batch["reward"], dtype=np.float32),
+            "mc_return": np.asarray(batch["mc_return"], dtype=np.float32),
             "discount": np.asarray(batch["discount"], dtype=np.float32),
-            "terminated": np.asarray(batch["terminated"], dtype=np.bool_),
-            "truncated": np.asarray(batch["truncated"], dtype=np.bool_),
-            "done": np.asarray(batch["done"], dtype=np.bool_),
-            "n_steps": np.asarray(batch["n_steps"], dtype=np.int32),
         }
 
     def add_data(self, step_data: StepData):
@@ -653,6 +669,18 @@ class DSRLLearner(Agent):
             ).reshape(-1)
             is_success = bool(np.max(final_reward) >= env_max_reward)
 
+        rewards = np.full((episode_len,), -1.0, dtype=np.float32)
+        discounts = np.full((episode_len,), bootstrap_discount, dtype=np.float32)
+        if is_success and episode_len > 0:
+            rewards[-1] = 0.0
+            discounts[-1] = 0.0
+
+        mc_returns = np.zeros((episode_len,), dtype=np.float32)
+        running_return = np.float32(0.0)
+        for idx in reversed(range(episode_len)):
+            running_return = rewards[idx] + discounts[idx] * running_return
+            mc_returns[idx] = running_return
+
         for idx, ep in enumerate(episode):
             # --- Extract observations (resized, no prefix embedding) ---
             obs = _extract_replay_observation(
@@ -674,45 +702,16 @@ class DSRLLearner(Agent):
             act = ep.get("action", ep.get("actions"))
             if act is None:
                 raise KeyError("Episode transition is missing `action` / `actions`.")
-            real_action = ep.get("real_action", ep.get("real_actions", act))
-
-            # --- FIX 1: Sparse -1/0 reward (matching reference exactly) ---
-            is_last = (idx == episode_len - 1)
-            if is_success and is_last:
-                r = 0.0
-                discount = 0.0  # Terminal success: no bootstrapping.
-            else:
-                r = -1.0
-                discount = bootstrap_discount  # gamma^query_freq
-
-            # Extract metadata for logging (terminated/truncated/done).
-            _, terminated, truncated, done, n_steps = reduce_chunk_transition(
-                reward=ep.get("reward", 0.0),
-                terminated=ep.get("terminate", False),
-                truncated=ep.get("truncate", False),
-                discount=float(self._config.rl.discount),
-                action=act,
-            )
-
             policy_actions = np.asarray(act, dtype=np.float32).reshape(1, -1)
-            real_actions = np.asarray(real_action, dtype=np.float32)
-            if real_actions.shape != self._expected_action_shape:
-                if int(np.prod(real_actions.shape, dtype=np.int64)) == self._action_dim:
-                    real_actions = real_actions.reshape(self._expected_action_shape)
-            real_actions = np.asarray(real_actions, dtype=np.float32)[None, ...]
 
             self._online_data_buffer.insert(
                 {
                     "observation": jax.tree_util.tree_map(_copy_with_batch_dim, obs),
                     "actions": policy_actions,
-                    "real_actions": real_actions,
                     "next_observation": jax.tree_util.tree_map(_copy_with_batch_dim, next_obs),
-                    "reward": np.asarray([r], dtype=np.float32),
-                    "discount": np.asarray([discount], dtype=np.float32),
-                    "terminated": np.asarray([terminated], dtype=np.bool_),
-                    "truncated": np.asarray([truncated], dtype=np.bool_),
-                    "done": np.asarray([done], dtype=np.bool_),
-                    "n_steps": np.asarray([n_steps], dtype=np.int32),
+                    "reward": np.asarray([rewards[idx]], dtype=np.float32),
+                    "mc_return": np.asarray([mc_returns[idx]], dtype=np.float32),
+                    "discount": np.asarray([discounts[idx]], dtype=np.float32),
                 }
             )
 

@@ -45,6 +45,19 @@ def normalize_observation_for_model(observations: Any) -> Any:
         return None
 
     state_source = _find_first("pi0/state", "observation/state", "state")
+    if state_source is None:
+        joint_position = _find_first(
+            "observation/joint_position",
+            "joint_position",
+        )
+        gripper_position = _find_first(
+            "observation/gripper_position",
+            "gripper_position",
+        )
+        if joint_position is not None and gripper_position is not None:
+            joint_arr = jnp.asarray(joint_position, dtype=jnp.float32)
+            gripper_arr = jnp.asarray(gripper_position, dtype=jnp.float32)
+            state_source = jnp.concatenate([joint_arr, gripper_arr], axis=-1)
     if state_source is not None:
         state = jnp.asarray(state_source, dtype=jnp.float32)
         # Query-frequency wrappers add a temporal/chunk axis after batch.
@@ -64,6 +77,8 @@ def normalize_observation_for_model(observations: Any) -> Any:
         "pi0/image",
         "pixels",
         "observation/pixels",
+        "observation/exterior_image_1_left",
+        "exterior_image_1_left",
     )
     if image_source is not None:
         image = jnp.asarray(image_source)
@@ -78,6 +93,8 @@ def normalize_observation_for_model(observations: Any) -> Any:
         "wrist_image",
         "observation/wrist_image",
         "pi0/wrist_image",
+        "observation/wrist_image_left",
+        "wrist_image_left",
     )
     if wrist_image_source is not None:
         wrist_image = jnp.asarray(wrist_image_source)

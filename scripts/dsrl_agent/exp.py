@@ -42,12 +42,10 @@ if mp.current_process().name != "MainProcess":
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 
-import gc
 import platform
 from typing import Any
 
 import flax.nnx as nnx
-import gymnasium as gym
 from flax.training import common_utils
 import jax
 import jax.numpy as jnp
@@ -64,14 +62,15 @@ from src.rl.networks.rl_networks import Policy
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.policies.learned_std_normal_policy import LearnedStdNormalPolicyDecoder, LearnedStdTanhNormalPolicyDecoder
 from src.rl.networks.rl_networks import ObsType, ActionType, StateActionCritic
-from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
-from src.envs.libero import make_env_libero
-from src.envs.wrappers import Pi0ObservationWrapper, QueryFrequencyWrapper, Pi0ObservationWrapperDSRL, QueryFrequencyWrapperDSRL
-
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.envs import make_env
+from src.envs.wrappers import (
+    Pi0ObservationWrapper,
+    QueryFrequencyWrapper,
+    TimeToSuccessAsRewardWrapper,
+)
 import src.training.config as _config
 from src.training.collect import collect_data
-from src.training.utils import init_logging, init_wandb, log_images
+from src.training.utils import init_logging, init_wandb
 
 
 def _get_rl_attr(config: _config.OnlineTrainConfig, name: str, default: Any) -> Any:
@@ -89,18 +88,17 @@ def _build_actor_critic_defs(
     backend: str,
     policy_distribution: str,
 ) -> tuple[StateActionCriticDef, PolicyDef]:
-    critic_encoder_hidden_dims = tuple(_get_rl_attr(config.rl, "critic_encoder_hidden_dims", ()))
-    critic_decoder_hidden_dims = tuple(_get_rl_attr(config.rl, "critic_decoder_hidden_dims", (256, 256)))
-    policy_decoder_hidden_dims = tuple(_get_rl_attr(config.rl, "policy_decoder_hidden_dims", (256, 256)))
-    critic_num_qs = int(_get_rl_attr(config.rl, "critic_num_qs", 2))
-    encoder_type = str(_get_rl_attr(config.rl, "encoder_type", "resnet_34_v1")).lower()
-    encoder_type = "small"
-    encoder_norm = str(_get_rl_attr(config.rl, "encoder_norm", "group")).lower()
-    use_spatial_softmax = bool(_get_rl_attr(config.rl, "use_spatial_softmax", True))
-    softmax_temperature = float(_get_rl_attr(config.rl, "softmax_temperature", 1.0))
-    image_latent_dim = int(_get_rl_attr(config.rl, "image_latent_dim", 50))
-    use_image_bottleneck = bool(_get_rl_attr(config.rl, "use_image_bottleneck", True))
-    use_state_branch = bool(_get_rl_attr(config.rl, "use_state_branch", True))
+    critic_encoder_hidden_dims = tuple(_get_rl_attr(config, "critic_encoder_hidden_dims", ()))
+    critic_decoder_hidden_dims = tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", (256, 256)))
+    policy_decoder_hidden_dims = tuple(_get_rl_attr(config, "policy_decoder_hidden_dims", (256, 256)))
+    critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
+    encoder_type = str(_get_rl_attr(config, "encoder_type", "resnet_34_v1")).lower()
+    encoder_norm = str(_get_rl_attr(config, "encoder_norm", "group")).lower()
+    use_spatial_softmax = bool(_get_rl_attr(config, "use_spatial_softmax", True))
+    softmax_temperature = float(_get_rl_attr(config, "softmax_temperature", 1.0))
+    image_latent_dim = int(_get_rl_attr(config, "image_latent_dim", 50))
+    use_image_bottleneck = bool(_get_rl_attr(config, "use_image_bottleneck", True))
+    use_state_branch = bool(_get_rl_attr(config, "use_state_branch", True))
 
     def _build_image_backbone(
         observation: ObsType,
@@ -304,226 +302,88 @@ def _build_actor_critic_defs(
     return state_action_critic_def, policy_def
 
 
-def _wrap_dsrl_env_for_libero(env_fn, config, task_description: str):
+def _normalize_task_descriptions(
+    task_description: list[str] | str,
+    env_num: int,
+) -> list[str]:
+    if isinstance(task_description, str):
+        return [task_description for _ in range(env_num)]
+    if not task_description:
+        return ["" for _ in range(env_num)]
+    if len(task_description) == env_num:
+        return [str(x) for x in task_description]
+    if len(task_description) == 1:
+        return [str(task_description[0]) for _ in range(env_num)]
+    return [str(task_description[i % len(task_description)]) for i in range(env_num)]
+
+
+def _get_pre_step_action_filter(domain: str):
+    if domain == "libero":
+        # Keep LIBERO near-zero clipping used by current DSRL rollouts.
+        return lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
+    return lambda x: x
+
+
+def _wrap_dsrl_env(env_fn, config, task_description: list[str]):
     env_num = int(config.collect.env_num)
-    add_states = True                                   #bool(config.collect.add_states)
-    obs_prefix_key = "pi0"                              #str(config.collect.obs_prefix_key)
     replan_steps = int(config.collect.replan_steps)
-    discount = 0.999                                    #float(config.discount)
-    add_per_step_data = True                            #bool(config.collect.add_per_step_data)
-
-    def _expand_noise_to_horizon(noise: Any, *, target_horizon: int) -> np.ndarray:
-        noise_arr = np.asarray(noise, dtype=np.float32)
-        if noise_arr.ndim == 2:
-            noise_arr = noise_arr[:, None, :]
-        if noise_arr.ndim != 3:
-            raise ValueError(
-                "Expected compact or chunked noise with shape (B, D) or (B, H, D), "
-                f"got {tuple(noise_arr.shape)}."
-            )
-        if noise_arr.shape[1] == target_horizon:
-            return noise_arr
-        if noise_arr.shape[1] == 1:
-            return np.repeat(noise_arr, target_horizon, axis=1)
-        if noise_arr.shape[1] < target_horizon:
-            pad = np.repeat(
-                noise_arr[:, -1:, :], target_horizon - noise_arr.shape[1], axis=1
-            )
-            return np.concatenate([noise_arr, pad], axis=1)
-        return noise_arr[:, :target_horizon, :]
-
-    class _DSRLVectorEnvInputCompatWrapper(gym.Wrapper):
-        """Adapts env outputs to the schema expected by DSRLVectorEnv.
-
-        DSRLVectorEnv expects observations shaped as:
-          {"observation": <obs_dict>, "action": <action_chunk>}
-        """
-
-        def __init__(self, env: gym.Env):
-            super().__init__(env)
-            self._last_action_chunk: np.ndarray | None = None
-            self._action_horizon = int(
-                getattr(getattr(config, "model", None), "action_horizon", replan_steps)
-            )
-            self._action_dim = self._infer_action_dim()
-
-        def _infer_action_dim(self) -> int:
-            # Avoid QueryFrequencyWrapper.action_space (currently broken). Read
-            # single-step action dims from the unwrapped/base env instead.
-            default_dim = int(getattr(config.collect, "libero_action_dim", 7))
-            base_env = getattr(self.env, "unwrapped", None)
-            if base_env is not None:
-                base_action_space = getattr(base_env, "action_space", None)
-                if (
-                    base_action_space is not None
-                    and hasattr(base_action_space, "shape")
-                    and base_action_space.shape is not None
-                    and len(base_action_space.shape) > 0
-                ):
-                    return int(base_action_space.shape[-1])
-                action_dim_attr = getattr(base_env, "action_dim", None)
-                if action_dim_attr is not None:
-                    return int(action_dim_attr)
-            return default_dim
-
-        def _wrap_obs(self, obs: dict[str, Any], action_chunk: np.ndarray) -> dict[str, Any]:
-            return {
-                "observation": obs,
-                "action": np.asarray(action_chunk, dtype=np.float32),
-            }
-
-        def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-            obs, info = self.env.reset(seed=seed, options=options)
-            action_template = np.zeros(
-                (self._action_horizon, self._action_dim), dtype=np.float32
-            )
-            self._last_action_chunk = action_template
-            return self._wrap_obs(obs, action_template), info
-
-        def step(self, action):
-            obs, reward, terminated, truncated, info = self.env.step(action)
-            action_chunk = np.asarray(action, dtype=np.float32)
-            if action_chunk.ndim == 1:
-                action_chunk = np.repeat(
-                    action_chunk[None, ...], self._action_horizon, axis=0
-                )
-            self._last_action_chunk = action_chunk
-            return self._wrap_obs(obs, action_chunk), reward, terminated, truncated, info
+    env_class = str(config.collect.domain)
+    pre_step_action_filter = _get_pre_step_action_filter(env_class)
 
     env_factories = []
     for i in range(env_num):
+        task_desc_i = task_description[i]
 
-        def _make_env(rank=i):
+        def _make_env(rank=i, task_description_single=task_desc_i):
             base_env = env_fn(rank)
-            base_env = Pi0ObservationWrapperDSRL(
+            if config.collect.use_time_to_success_as_reward:
+                base_env = TimeToSuccessAsRewardWrapper(base_env)
+            base_env = Pi0ObservationWrapper(
                 env=base_env,
-                env_class="libero",
-                task_description=task_description,
-                add_states=add_states,
-                pi0_obs_prefix=obs_prefix_key,
+                env_class=env_class,
+                task_description=task_description_single,
+                molmo_config=getattr(config, "molmo", None),
             )
-            base_env = QueryFrequencyWrapperDSRL(
+            base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=replan_steps,
-                discount=discount,
-                store_full_transitions=add_per_step_data,
-                pre_step_filter=lambda x: np.where(np.abs(x) < 0.0011, 0.0, x),
+                pre_step_filter=pre_step_action_filter,
             )
-            base_env = _DSRLVectorEnvInputCompatWrapper(base_env)
             return base_env
 
         env_factories.append(_make_env)
 
-    env = (
-        DSRLVectorEnv(env_factories)
-        if env_num > 1
-        else DummyVectorEnv(env_factories)
+    env = DSRLVectorEnv(
+        env_factories,
+        config=config,
+        task_description=task_description,
     )
     env.seed(int(config.seed))
-
-    if isinstance(env, DSRLVectorEnv):
-        policy = getattr(env, "_policy", None)
-        target_noise_horizon = int(
-            getattr(
-                policy,
-                "action_horizon",
-                getattr(getattr(config, "model", None), "action_horizon", replan_steps),
-            )
-        )
-        raw_step = env.step
-
-        def _step_with_compact_noise_adapter(noise, id=None):
-            expanded_noise = _expand_noise_to_horizon(
-                noise, target_horizon=target_noise_horizon
-            )
-            return raw_step(expanded_noise, id=id)
-
-        env.step = _step_with_compact_noise_adapter  # type: ignore[method-assign]
-        logging.info(
-            "Installed DSRL compact-noise adapter: repeat noise to policy horizon=%d.",
-            target_noise_horizon,
-        )
     return env
 
 
-### TODO: Adapt this to new environment gen
 def _build_training_env(config: _config.OnlineTrainConfig):
-    env_fn, task_description = make_env_libero(config)
-    env = _wrap_dsrl_env_for_libero(
+    env_fn, task_description = make_env(config)
+    task_description = _normalize_task_descriptions(
+        task_description,
+        int(config.collect.env_num),
+    )
+    env = _wrap_dsrl_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
     )
     return env, task_description
 
-
-
-def _configure_dsrl_vector_env(
-    env: Any,
-    *,
-    task_description: str | None = None,
-) -> None:
-    """Adjust runtime settings for DSRLVectorEnv in online collection.
-
-    During collection we reset individual env ids; that produces batch size 1
-    observations. A batch-sharded policy spec (PartitionSpec("batch")) fails
-    for these partial resets when device count > 1. Use replicated sharding.
-    """
-    if not isinstance(env, DSRLVectorEnv):
-        return
-    sharding_spec = getattr(env, "_policy_sharding_spec", None)
-    if sharding_spec is None:
-        return
-    env._policy_sharding_spec = jax.sharding.NamedSharding(
-        sharding_spec.mesh,
-        jax.sharding.PartitionSpec(),
-    )
-    if task_description is not None:
-        env._task_description = str(task_description)
-
-    # DSRLVectorEnv currently passes task_description="dummy" to its own
-    # _process_obs_for_pi0(...) in reset()/step(). Patch the instance method
-    # at call-site to use the real task language without editing the wrapper.
-    if not getattr(env, "_task_description_patch_applied", False):
-        original_process_obs_for_pi0 = env._process_obs_for_pi0
-
-        def _process_obs_for_pi0_with_task(observations, task_description=None):
-            resolved_task_description = task_description
-            if resolved_task_description in (None, "", "dummy"):
-                resolved_task_description = getattr(
-                    env, "_task_description", task_description
-                )
-            processed_obs = original_process_obs_for_pi0(
-                observations,
-                task_description=resolved_task_description,
-            )
-            prompt = processed_obs.get("prompt")
-            if prompt is not None and not isinstance(prompt, str):
-                prompt_arr = np.asarray(prompt)
-                if prompt_arr.size == 0:
-                    processed_obs["prompt"] = str(resolved_task_description or "")
-                else:
-                    processed_obs["prompt"] = str(prompt_arr.reshape(-1)[0])
-            return processed_obs
-
-        env._process_obs_for_pi0 = _process_obs_for_pi0_with_task
-        env._task_description_patch_applied = True
-
-    logging.info(
-        "Configured DSRLVectorEnv policy sharding/prompt handling for per-env resets."
-    )
-
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
-    if bool(getattr(config, "return_prefix_rep", False)):
-        logging.info(
-            "return_prefix_rep is enabled, but AWR critics recompute prefix embeddings "
-            "from observations every update."
+    if bool(getattr(config.collect, "store_prefix_rep", False)):
+        raise ValueError(
+            "DSRL does not support collect.store_prefix_rep=True in this integration path."
         )
-    backend = "libero"#getattr(config.collect, "env_backend", "dmc")
+    backend = str(config.collect.domain)
     env, task_description = _build_training_env(config)
-    _configure_dsrl_vector_env(env, task_description=task_description)
 
     # Dummy observation and action
     reset_out = env.reset()
@@ -537,84 +397,24 @@ def main(config: _config.OnlineTrainConfig):
         lambda x: np.asarray(x)[0:1],
         model_obs_batch,
     )
-
-    obs_action = None
-    if isinstance(obs_batch, dict) and obs_batch.get("action") is not None:
-        action_from_obs = np.asarray(obs_batch["action"], dtype=np.float32)
-        if action_from_obs.ndim >= 2:
-            obs_action = action_from_obs[0:1]
-
-    if backend == "libero":
-        # When using DSRLVectorEnv, the learner emits compact policy noise
-        # (1, action_dim); the launcher-side adapter expands it to full horizon.
-        if isinstance(env, DSRLVectorEnv):
-            policy = getattr(env, "_policy", None)
-            if policy is not None:
-                policy_action_horizon = int(getattr(policy, "action_horizon"))
-                action_dim = int(getattr(policy, "action_dim"))
-                action_horizon = 1
-                dummy_act = jnp.zeros(
-                    (1, action_horizon, action_dim), dtype=jnp.float32
-                )
-                logging.info(
-                    "Using compact DSRL noise shape for DSRL init: "
-                    "(horizon=%d, action_dim=%d), policy_horizon=%d.",
-                    action_horizon,
-                    action_dim,
-                    policy_action_horizon,
-                )
-            else:
-                policy_action_horizon = int(getattr(config.model, "action_horizon", 10))
-                action_dim = int(getattr(config.model, "action_dim", 32))
-                action_horizon = 1
-                dummy_act = jnp.zeros(
-                    (1, action_horizon, action_dim), dtype=jnp.float32
-                )
-                logging.warning(
-                    "DSRLVectorEnv policy not found; using compact fallback noise shape "
-                    "(horizon=%d, action_dim=%d), policy_horizon=%d.",
-                    action_horizon,
-                    action_dim,
-                    policy_action_horizon,
-                )
-        # Otherwise (e.g. DummyVectorEnv path), use environment action chunks.
-        elif obs_action is not None:
-            dummy_act = jnp.asarray(obs_action, dtype=jnp.float32)
-            logging.info(
-                "Using action chunk from reset observation for DSRL init: shape=%s",
-                tuple(np.asarray(dummy_act).shape),
-            )
-        else:
-            action_dim = None
-            env_action_dim = env.get_env_attr("action_dim", id=0)[0]
-            if env_action_dim is not None:
-                action_dim = int(env_action_dim)
-                logging.info("Using env action_dim=%d for DSRL init.", action_dim)
-            if action_dim is None:
-                warmup_action = env.get_env_attr("_warm_up_action", id=0)[0]
-                if warmup_action is not None:
-                    action_dim = int(np.asarray(warmup_action).reshape(-1).shape[0])
-                    logging.info(
-                        "Using warm-up action length=%d for DSRL init.", action_dim
-                    )
-            if action_dim is None:
-                action_dim = int(getattr(config.collect, "libero_action_dim", 7))
-            action_horizon = int(config.collect.replan_steps)
-            dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
-            logging.warning(
-                "Reset observation has no action chunk; using env/config fallback "
-                "(horizon=%d, action_dim=%d).",
-                action_horizon,
-                action_dim,
-            )
-        # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
-        action_low = jnp.asarray(-1.0, dtype=jnp.float32)
-        action_high = jnp.asarray(1.0, dtype=jnp.float32)
-    else:
-        action_space = env.action_space[0]
-        dummy_act = jnp.asarray(action_space.sample(), dtype=jnp.float32)[None, ...]
-        action_low = jnp.asarray(action_space.low, dtype=jnp.float32)
-        action_high = jnp.asarray(action_space.high, dtype=jnp.float32)
+    action_dim = int(
+        getattr(env, "policy_action_dim", int(getattr(config.model, "action_dim", 32)))
+    )
+    policy_action_horizon = int(
+        getattr(env, "policy_action_horizon", int(getattr(config.model, "action_horizon", 10)))
+    )
+    action_horizon = 1
+    dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
+    logging.info(
+        "Using compact DSRL latent-noise shape for init: "
+        "(horizon=%d, action_dim=%d), policy_horizon=%d.",
+        action_horizon,
+        action_dim,
+        policy_action_horizon,
+    )
+    # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
+    action_low = jnp.asarray(-1.0, dtype=jnp.float32)
+    action_high = jnp.asarray(1.0, dtype=jnp.float32)
     
     policy_distribution = "tanh_normal"
     logging.info("DSRL actor policy distribution: %s", policy_distribution)
