@@ -96,6 +96,7 @@ def evaluate_policy(
         metrics["eval/mean_success_episode_length"] = float(
             np.mean(successful_episode_lengths)
         )
+    metrics["eval/total_collected_episodes"] = agent.total_collected_episodes
     return metrics
 
 
@@ -171,6 +172,7 @@ def collect_data(
             obs = next_obs
 
     collected_episodes = agent.end_data_collection(step=step)
+    agent.total_collected_episodes += total_episodes
 
     success_rate = (
         float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
