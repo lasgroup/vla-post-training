@@ -130,6 +130,10 @@ def train_step(
                 adv = jnp.clip(adv, -weight_clip, weight_clip)
             score = jax.lax.stop_gradient(adv)
 
+        # Expand score (B*G,) to (B*G, 1, 1) to broadcast with log_probs (B*G, action_horizon, num_steps)
+        if score.ndim == 1:
+            score = score[:, jnp.newaxis, jnp.newaxis]
+
         loss = -jnp.mean(score * log_probs)
 
         info = {
