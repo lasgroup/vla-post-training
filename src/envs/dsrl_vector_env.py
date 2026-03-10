@@ -266,7 +266,6 @@ class DSRLVectorEnv(SubprocVectorEnv):
         current_obs = jax.tree_util.tree_map(_select_latest, observations)
 
         processed_obs: dict[str, Any] = {}
-        prompt_in_obs = False
 
         for key, val in current_obs.items():
             obs_key = None
@@ -285,9 +284,6 @@ class DSRLVectorEnv(SubprocVectorEnv):
             ):
                 obs_key = f"observation/{key}"
             elif key == "prompt":
-                prompt_in_obs = True
-                prompt_arr = np.asarray(val).reshape(-1)
-                processed_obs["prompt"] = [str(x) for x in prompt_arr]
                 continue
 
             if obs_key is None:
@@ -303,8 +299,10 @@ class DSRLVectorEnv(SubprocVectorEnv):
                 )
             processed_obs[obs_key] = val
 
-        if not prompt_in_obs:
-            processed_obs["prompt"] = self._task_prompts_for_ids(env_ids)
+        # OpenPI tokenization expects a scalar prompt in this inference path.
+        processed_obs["prompt"] = (
+            str(self._task_description[0]) if self._task_description else ""
+        )
         return processed_obs
 
     @staticmethod
@@ -395,7 +393,8 @@ class DSRLVectorEnv(SubprocVectorEnv):
         *,
         batch_size: int,
     ) -> np.ndarray:
-        prefix = np.asarray(prefix_rep)
+        # Ensure collect/reset merge can assign into per-env slots.
+        prefix = np.array(prefix_rep, copy=True)
         if prefix.ndim == 0:
             prefix = prefix.reshape(1, 1)
         if batch_size <= 0:

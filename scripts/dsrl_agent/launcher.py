@@ -33,7 +33,8 @@ DEFAULT_SEED = 0
 applicable_configs: Dict[str, List[Any]] = {
     "collect.collect_interval": [2500],
     "collect.env_num": [4],
-    "num_rollouts": [25],
+    "collect.num_rollouts": [25],
+    "num_train_steps": [500_000]
 }
 
 
@@ -84,3 +85,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# uv run scripts/dsrl_agent/launcher.py --dry

@@ -507,5 +507,3 @@ def main(config: _config.OnlineTrainConfig):
 
 if __name__ == "__main__":
     main(_config.cli())
-
-# uv run /users/$USER/vla-post-training/scripts/train_online_with_dsrl.py pi05_libero_online --exp-name=my_experiment 
