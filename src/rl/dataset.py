@@ -1,5 +1,6 @@
 from typing import Dict, Iterable, Optional, Tuple, Union
 
+import h5py
 import numpy as np
 from gymnasium.utils import seeding
 
@@ -7,6 +8,24 @@ from gymnasium.utils import seeding
 DataType = Union[np.ndarray, Dict[str, "DataType"]]
 DatasetDict = Dict[str, DataType]
 from flax.core import frozen_dict
+
+
+def write_nested(group: h5py.Group, data: dict):
+    """Recursively write nested dicts/arrays into HDF5 groups/datasets."""
+    for k, v in data.items():
+        if isinstance(v, dict):
+            write_nested(group.create_group(k), v)
+        else:
+            group.create_dataset(k, data=np.asarray(v), compression="gzip", chunks=True)
+
+
+def read_nested(group: h5py.Group) -> dict:
+    """Recursively read HDF5 groups/datasets into nested dicts/arrays."""
+    result = {}
+    for k in group.keys():
+        item = group[k]
+        result[k] = read_nested(item) if isinstance(item, h5py.Group) else item[()]
+    return result
 
 
 def concat_recursive(batches):

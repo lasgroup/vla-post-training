@@ -66,6 +66,7 @@ def create_torch_dataset(
 
 def create_data_loader(
     config: _config.TrainConfig,
+    batch_size: int,
     *,
     sharding: jax.sharding.Sharding | None = None,
     shuffle: bool = False,
@@ -93,7 +94,7 @@ def create_data_loader(
         data_config,
         model_config=config.model,
         action_horizon=config.model.action_horizon,
-        batch_size=config.batch_size,
+        batch_size=batch_size,
         sharding=sharding,
         shuffle=shuffle,
         num_batches=num_batches,

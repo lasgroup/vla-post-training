@@ -85,8 +85,7 @@ def test_early_termination():
     """Verify the wrapper handles the environment ending mid-query."""
     query_freq = 10  # Long query
     env = MockEnv()  # MockEnv ends at step 5
-    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq,
-                                    discount=1.0, store_full_transitions=True)
+    wrapped = QueryFrequencyWrapper(env, query_frequency=query_freq)
 
     action = np.zeros((query_freq, 1))
     obs, reward, term, trunc, info = wrapped.step(action)

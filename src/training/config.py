@@ -8,7 +8,8 @@ from openpi.training.config import (
     pi0_config,
     LeRobotLiberoDataConfig,
 )
-from typing import Sequence
+from typing import Literal, Sequence
+import re
 
 import openpi.training.optimizer as _optimizer
 import optax
@@ -134,9 +135,19 @@ class CollectionConfig:
     env_num: int = 4
     env_resolution: int = 256
     resize_image: int = 224
-    add_states: bool = True
     num_rollouts: int = 50
-    tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
+    domain: Literal["libero", "molmo"] = "libero"
+    molmo: MolmoConfig = MolmoConfig()
+    tasks: list[str] = dataclasses.field(
+        default_factory=lambda: ["libero_90_59x4"],
+        metadata={
+            "help": (
+                "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34'), "
+                "ranges (e.g., 'libero_90_22-56'), and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). The total number of expanded tasks must be divisible by 4."
+            )
+        },
+    )
     replan_steps: int = 5
     num_steps_wait: int = 10
     add_per_step_data: bool = True

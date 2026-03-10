@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Callable
+from typing import Any, Dict, List
 import gymnasium as gym
 import jax
 import logging
@@ -79,25 +79,20 @@ def _quat2axisangle(quat):
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
-def obs_to_img(obs, env_class: str = "libero"):
-    """Convert raw observation to resized image for DSRL actor/critic"""
-    if env_class == "libero":
-        curr_image = obs["agentview_image"][::-1, ::-1]
-    else:
-        raise NotImplementedError()
-    return curr_image
-
-
 def obs_to_pi_zero_input(
-    obs, env_class: str, task_description: str, *, include_prompt: bool = True
+    obs,
+    env_class: str,
+    molmo_config: Any | None = None,
 ):
     if env_class == "libero":
-        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
         obs_pi_zero = {
-            "image": img,
-            "wrist_image": wrist_img,
-            "state": np.concatenate(
+            "observation/image": np.ascontiguousarray(
+                obs["agentview_image"][::-1, ::-1]
+            ),
+            "observation/wrist_image": np.ascontiguousarray(
+                obs["robot0_eye_in_hand_image"][::-1, ::-1]
+            ),
+            "observation/state": np.concatenate(
                 (
                     obs["robot0_eef_pos"],
                     _quat2axisangle(obs["robot0_eef_quat"]),
@@ -106,25 +101,36 @@ def obs_to_pi_zero_input(
                 dtype=np.float32,
             ),
         }
-        if include_prompt:
-            obs_pi_zero["prompt"] = np.asarray(str(task_description))
-    else:
-        raise NotImplementedError()
-    return obs_pi_zero
-
-
-def obs_to_qpos(obs, env_class):
-    if env_class == "libero":
-        qpos = np.concatenate(
-            (
-                obs["robot0_eef_pos"],
-                _quat2axisangle(obs["robot0_eef_quat"]),
-                obs["robot0_gripper_qpos"],
-            )
+    elif env_class == "molmo":
+        base_obs = obs_to_openpi_input(
+            obs,
+            exo_camera_key=getattr(molmo_config, "exo_camera_key", "exo_camera_1"),
+            wrist_camera_key=getattr(molmo_config, "wrist_camera_key", "wrist_camera"),
+            gripper_obs_norm=float(getattr(molmo_config, "gripper_obs_norm", 0.824033)),
+        )
+        # Keep both key layouts so either LeRobot-DROID (no "observation/" prefix
+        # after buffer stripping) or RLDS-DROID (with prefix) transforms can consume
+        # collected online trajectories.
+        obs_pi_zero = dict(base_obs)
+        obs_pi_zero.update(
+            {
+                "observation/observation/exterior_image_1_left": base_obs[
+                    "observation/exterior_image_1_left"
+                ],
+                "observation/observation/wrist_image_left": base_obs[
+                    "observation/wrist_image_left"
+                ],
+                "observation/observation/joint_position": base_obs[
+                    "observation/joint_position"
+                ],
+                "observation/observation/gripper_position": base_obs[
+                    "observation/gripper_position"
+                ],
+            }
         )
     else:
-        raise NotImplementedError()
-    return qpos
+        raise NotImplementedError
+    return obs_pi_zero
 
 
 class QueryFrequencyWrapper(gym.Wrapper):
@@ -208,7 +214,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # Extract the sub-action for this specific step
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
-            sub_action = self._pre_step_filter(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
             data.append(
                 {
@@ -262,7 +267,22 @@ class QueryFrequencyWrapper(gym.Wrapper):
             last_trunc = bool(stacked["truncated"][-1])
             last_info = jax.tree.map(lambda x: x[-1], stacked["info"])
 
-            return last_obs, discounted_reward, last_term, last_trunc, last_info
+class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
+    """Query wrapper that ignores prefix payload when stepping the underlying env."""
+
+    def step(self, action):
+        env_action, _ = action
+        return super().step(env_action)
+
+
+class TimeToSuccessAsRewardWrapper(gym.Wrapper):
+    def __init__(self, env: gym.Env):
+        super().__init__(env=env)
+
+    def step(self, action):
+        obs, _, terminate, truncate, info = self.env.step(action)
+        time_to_success_reward = 0.0 if terminate else -1.0
+        return obs, time_to_success_reward, terminate, truncate, info
 
 
 class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
@@ -290,35 +310,22 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         env: gym.Env,
         env_class: str,
         task_description: str,
-        add_states: bool = True,
-        include_prompt_in_obs: bool = False,
-        pi0_obs_prefix: str = "pi0",
+        molmo_config: Any | None = None,
     ):
         super().__init__(env)
-        self.task_description = task_description
         self._env_class = env_class
-        self._add_states = add_states
-        self._include_prompt_in_obs = include_prompt_in_obs
-        self._pi0_obs_prefix = pi0_obs_prefix
+        self._molmo_config = molmo_config
+        self.task_description = task_description
         logging.info(f"\nTask: {self.task_description}")
 
-        # produced by the helper functions (obs_to_img, etc.)
-        if getattr(env, "observation_space", None) is not None and hasattr(
-            env.observation_space, "sample"
-        ):
-            dummy_obs = env.observation_space.sample()
-        else:
-            reset_out = env.reset()
-            dummy_obs = (
-                reset_out[0] if isinstance(reset_out, (tuple, list)) else reset_out
-            )
+        dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
         spaces = {}
         for key, val in final_obs.items():
             if "prompt" in key:
                 spaces[key] = gym.spaces.Text(max_length=256_000)
                 continue
-            if "image" in key or "pixels" in key:
+            if "image" in key:
                 low, high = 0, 255
             else:
                 low, high = -np.inf, np.inf
@@ -329,24 +336,11 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self.observation_space = gym.spaces.Dict(spaces)
 
     def observation(self, observation):
-        curr_image = obs_to_img(observation, env_class=self._env_class)
-        qpos = obs_to_qpos(observation, env_class=self._env_class)
-        obs_dict = {"pixels": curr_image[np.newaxis, ..., np.newaxis]}
-        if self._add_states:
-            obs_dict["state"] = qpos[np.newaxis, ..., np.newaxis]
-
-        # Do not inject prompt into env observations; prompt should be provided via default_prompt.
-        obs_pi_zero = obs_to_pi_zero_input(
+        return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
-            task_description=self.task_description,
-            include_prompt=self._include_prompt_in_obs,
+            molmo_config=self._molmo_config,
         )
-        obs_pi_zero = {
-            f"{self._pi0_obs_prefix}/{key}": val for key, val in obs_pi_zero.items()
-        }
-        obs_dict = obs_dict | obs_pi_zero
-        return obs_dict
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):
@@ -368,9 +362,9 @@ class SetInitialStateWrapper(gym.Wrapper):
         self._init_states = initial_states
 
     def _set_init_state(self):
-        assert hasattr(
-            self.env, "set_init_state"
-        ), "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        assert hasattr(self.env, "set_init_state"), (
+            "The environment must have a set_init_state method to use SetInitialStateWrapper"
+        )
         random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
         init_state = self._init_states[random_index]
         return self.env.set_init_state(init_state)

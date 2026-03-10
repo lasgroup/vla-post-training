@@ -1,4 +1,9 @@
 # ruff: noqa: E402
+
+# uncomment to force determinism
+# import os
+# os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " --xla_gpu_deterministic_ops=true"
+
 # suppress Numba FNV hashing warnings
 import warnings
 
@@ -40,6 +45,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     filtered_sft_wrap_env,
 )
+from src.envs import make_env
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.utils import init_logging, init_wandb, log_images
@@ -56,7 +62,6 @@ def main(config: _config.OnlineTrainConfig):
         env_fn=env_fn,
         config=config,
         task_description=task_description,
-        env_class="libero",
     )
 
     eval_env = filtered_sft_wrap_env(

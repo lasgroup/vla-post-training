@@ -56,6 +56,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     add_states = config.collect.add_states
     obs_prefix_key = config.collect.obs_prefix_key
     replan_steps = config.collect.replan_steps
+    env_class = config.collect.domain
     seed = config.seed
     discount = config.rl.discount
     add_per_step_data = config.collect.add_per_step_data
@@ -74,8 +75,7 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
-                add_states=add_states,
-                pi0_obs_prefix=obs_prefix_key,
+                molmo_config=getattr(config, "molmo", None),
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -104,20 +104,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: str, env_clas
     )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     # re-use training seed
     return env
-
-
-def _pad_actions_to_horizon(actions: np.ndarray, action_horizon: int) -> np.ndarray:
-    """Pad or truncate actions to match the policy action horizon."""
-    actions = np.asarray(actions)
-    if actions.ndim == 2:
-        actions = actions[None, ...]
-    if actions.shape[1] < action_horizon:
-        pad = action_horizon - actions.shape[1]
-        last = actions[:, -1:, :]
-        actions = np.concatenate([actions, np.repeat(last, pad, axis=1)], axis=1)
-    elif actions.shape[1] > action_horizon:
-        actions = actions[:, :action_horizon, :]
-    return actions
 
 
 def _load_weights_and_validate(
@@ -205,6 +191,14 @@ def init_train_state(
     return train_state, state_sharding
 
 
+def _get_post_step_action_filter(domain: str):
+    if domain == "libero":
+        # see https://arxiv.org/pdf/2501.09747, Appendix C - clipping low-magnitude actions
+        # the LIBERO dataset seems to have been filtered accordingly
+        return lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
+    return lambda x: x
+
+
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
@@ -249,14 +243,13 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
+        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
         self._data_loader = create_data_loader(
-            config, sharding=self._data_sharding, shuffle=True
+            config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
         self._data_iter = iter(self._data_loader)
         self._collection_success_episodes = 0
-        # batch = next(data_iter)
-        # logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-        # log_images(batch)
 
         # Initialize train state.
         self._train_state, self._train_state_sharding = init_train_state(
@@ -319,6 +312,10 @@ class FilteredSFTLearner(Agent):
                     "containing 'params' (e.g. .../openpi-assets/checkpoints/pi05_libero)."
                 )
 
+        self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
+
+        # Create policy for data collection
+        policy_checkpoint_dir = self._config.weight_loader.params_path[: -len("/params")]
         self._policy = policy_config.create_trained_policy(
             self._config,
             policy_checkpoint_dir,
@@ -394,7 +391,8 @@ class FilteredSFTLearner(Agent):
         *,
         prefix_embedding_template: np.ndarray | None = None,
     ) -> ShardedReplayBuffer:
-        train_config = self._config
+
+        # prepare transforms for preprocessing episode data into model input format
         data_config = self._data_loader.data_config()
 
         token_transform: (
@@ -432,7 +430,7 @@ class FilteredSFTLearner(Agent):
                 _transforms.Normalize(
                     data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
                 ),
-                *non_token_model_transforms,
+                *non_token_transforms,
             ]
         )
         next_obs_pre_token_transform = _transforms.compose(
@@ -449,7 +447,9 @@ class FilteredSFTLearner(Agent):
             data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
         )
 
-        obs_spec, act_spec = train_config.model.inputs_spec(batch_size=1)
+        # prepare dummy data for initializing the replay buffer
+        # TODO: this might need to be updated to store prefixes
+        obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
         obs_spec_dict = obs_spec.to_dict()
 
         def _zeros_like_spec(spec, *, override_dtype=None):
@@ -834,6 +834,10 @@ class FilteredSFTLearner(Agent):
                 "discount": transition_discount,
                 "mc_return": transition_mc_return,
             }
+        logging.info(
+            "Initializing online replay buffer (capacity=%d)",
+            self._config.rl.buffer_capacity,
+        )
 
         return ShardedReplayBuffer(
             dummy_data={
@@ -851,12 +855,14 @@ class FilteredSFTLearner(Agent):
             preprocess_fn=_preprocess_insert,
             postprocess_fn=None,
             freeze_dict=False,
+            load_paths=self._config.rl.buffer_load_paths,
+            save_path=self._config.rl.buffer_save_path,
         )
 
     def _process_obs_for_pi0(
         self,
         observations: Dict,
-        task_description: str | None = None,
+        task_description: list[str],
     ) -> Dict[str, Any]:
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
@@ -992,7 +998,8 @@ class FilteredSFTLearner(Agent):
         actions = np.asarray(sampled_actions)
         if actions.ndim == 2:
             actions = actions[np.newaxis, ...]
-        return actions
+
+        return (actions, prefix) if return_prefix_rep else actions
 
     def _generate_actions(
         self, observations: np.ndarray | Dict, **kwargs
@@ -1036,21 +1043,6 @@ class FilteredSFTLearner(Agent):
             online_batch["actions"],
         )
 
-    def sample_online_transitions(self) -> Dict[str, Any]:
-        """Sample transitions stored in the online replay buffer."""
-        if self._online_data_buffer.size == 0:
-            raise ValueError(
-                "Cannot sample transitions from an empty online replay buffer."
-            )
-        batch = self._online_data_buffer.sample()
-        return {
-            "observation": batch["observation"],
-            "actions": batch["actions"],
-            "next_observation": batch["next_observation"],
-            "reward": batch["reward"],
-            "discount": batch["discount"],
-        }
-
     def save_checkpoint(self, step: int | None = None):
         if step is None:
             step = self.training_steps
@@ -1060,11 +1052,8 @@ class FilteredSFTLearner(Agent):
         self._checkpoint_manager.wait_until_finished()
 
     def add_data(self, step_data: StepData):
-        def get_env_value(vec, env_id):
-            return jax.tree.map(lambda x: x[env_id], vec)
-
         for i in range(self._config.collect.env_num):
-            self._episode_storage[i].append(get_env_value(step_data, i))
+            self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
     def _broadcast_prefix_embedding(
         self, prefix_embedding: Any, observation: Dict[str, Any]
@@ -1224,9 +1213,47 @@ class FilteredSFTLearner(Agent):
                 f"env_index={env_index} is out of range for {len(self._episode_storage)} environments."
             )
 
-        # Extract episode data from storage
+        - Replaces each `ep["action"]` payload with pure actions.
+        - Writes the unpacked prefix embedding to `ep["observation"]`.
+        - Writes the shifted prefix embedding to `ep["next_observation"]`
+          using the next step's payload.
+        - Computes the final next-observation prefix with the current model.
+        """
+
+        # TODO: this function is untested
+        # TODO: check if last observation needs to be taken
+        next_observation = jax.tree.map(lambda x: x[[-1]], episode_data[-1]["next_observation"])
+        processed_obs = self._process_obs_for_pi0(next_observation, task_description)
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
+        inputs = self._policy._input_transform(processed_obs)
+        # TODO: check if batch dim needs to be added
+        observation = _model.Observation.from_dict(inputs)
+        next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
+        # TODO: check if this check and cast is necessary
+        if next_prefix.ndim >= 3 and next_prefix.shape[0] == 1:
+            next_prefix = next_prefix[0]
+        next_prefix = np.asarray(next_prefix, dtype=np.float32)
+
+        for idx in reversed(range(len(episode_data))):
+            ep = episode_data[idx]
+            ep["action"], prefix = ep["action"]
+            horizon = ep["observation"]['state'].shape[0]
+            ep["observation"][PREFIX_EMBEDDING_NAME] = np.repeat(prefix[None, ...], horizon, axis=0)
+            ep["next_observation"][PREFIX_EMBEDDING_NAME] = np.repeat(next_prefix[None, ...], horizon, axis=0)
+            next_prefix = prefix
+
+    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+
+        assert env_index in range(len(self._episode_storage)), \
+            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
-        # Empty the storage now for the next episode
         self._episode_storage[env_index] = []
 
         task_description = kwargs.get("task_description")
@@ -1498,8 +1525,17 @@ class FilteredSFTLearner(Agent):
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
-        if use_online:
-            online_batch_raw = self._online_data_buffer.sample()
+        if not update_policy:
+            return {"online_buffer_size": self._online_data_buffer.size}
+
+        if self._online_data_buffer.size == 0:
+            return {}
+        online_ratio = self._config.rl.online_ratio
+        if online_ratio < 1.0:
+            batch = next(self._data_iter)
+        if online_ratio > 0.0:
+            online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
+            online_batch_raw = self._online_data_buffer.sample(batch_size=online_batch_size)
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
             # online_ratio controls whether we fully switch to online data or mix by
             # simple concatenation along the batch dimension.
@@ -1529,7 +1565,6 @@ class FilteredSFTLearner(Agent):
                 del online_batch
                 gc.collect()
         train_rng, self._rng = jax.random.split(self._rng)
-        train_state = self._train_state
         with sharding.set_mesh(self._mesh):
             train_state, info = self._train_step(train_rng, train_state, batch)
         self._train_state = train_state
