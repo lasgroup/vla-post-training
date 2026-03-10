@@ -53,6 +53,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [1.0],
 }
 
 

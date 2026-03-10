@@ -45,6 +45,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     # "collect.seed": [0, 1, 2, 3, 4],
     "log_interval": [25],
+    "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [1.0],
 }
 
 
