@@ -24,8 +24,11 @@ def evaluate_policy(
     agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
 ):
     num_rollouts = config.collect.num_eval_rollouts
+    replan_steps = config.collect.replan_steps
     total_episodes = 0
     total_successes = 0
+    env_step_counts = np.zeros(env.env_num, dtype=np.int32)
+    successful_episode_lengths = []
 
     with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
         obs, _ = env.reset()
@@ -39,9 +42,22 @@ def evaluate_policy(
             next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
 
             if config.collect.add_per_step_data:
-                current_terminate = jax.tree.map(lambda x: x[:, -1], terminate)
-                current_truncate = jax.tree.map(lambda x: x[:, -1], truncate)
+                # terminate/truncate shape: (E, H) where H = replan_steps.
+                # On early termination, the wrapper pads the remaining sub-steps
+                # with the terminal flag, so argmax gives the first True index.
+                done_per_step = np.logical_or(terminate, truncate)
+                # Number of actual env steps taken per environment this chunk:
+                # If no done, all replan_steps were executed.
+                # If done at sub-step i, then i+1 steps were executed.
+                any_done = done_per_step[:, -1]  # True if episode ended this chunk
+                first_done_idx = np.argmax(done_per_step, axis=1)  # first True index
+                steps_this_chunk = np.where(any_done, first_done_idx + 1, replan_steps)
+                env_step_counts += steps_this_chunk
+
+                current_terminate = terminate[:, -1]
+                current_truncate = truncate[:, -1]
             else:
+                env_step_counts += replan_steps
                 current_terminate, current_truncate = terminate, truncate
 
             done = np.logical_or(current_terminate, current_truncate)
@@ -53,6 +69,9 @@ def evaluate_policy(
             for env_index in done_indices:
                 success = bool(current_terminate[env_index])
                 total_successes += int(success)
+                if success:
+                    successful_episode_lengths.append(int(env_step_counts[env_index]))
+                env_step_counts[env_index] = 0
 
                 reset_out = env.reset(id=int(env_index))
                 assert isinstance(reset_out, (tuple, list)) and len(reset_out) == 2
@@ -72,7 +91,12 @@ def evaluate_policy(
     success_rate = (
         float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
     )
-    return {"eval/success_rate": success_rate}
+    metrics = {"eval/success_rate": success_rate}
+    if successful_episode_lengths:
+        metrics["eval/mean_success_episode_length"] = float(
+            np.mean(successful_episode_lengths)
+        )
+    return metrics
 
 
 def collect_data(
