@@ -125,6 +125,8 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 ]
                 policy_batch = jax.tree.map(lambda x: x[indices], batch)
                 policy_batch = jax.device_put(policy_batch, self._data_sharding)
+            else:
+                policy_batch = jax.device_put(batch, self._data_sharding)
 
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
