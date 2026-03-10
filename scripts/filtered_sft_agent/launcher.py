@@ -30,7 +30,6 @@ DEFAULT_LOG_INTERVAL = 50
 DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_BATCH_SIZE = 256
-# Use 4 envs for sharding
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
@@ -46,7 +45,7 @@ applicable_configs: Dict[str, List[Any]] = {
     # "collect.seed": [0, 1, 2, 3, 4],
     "log_interval": [25],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [1.0],
+    "rl.online_ratio": [0.5, 1.0],
 }
 
 
