@@ -1485,11 +1485,15 @@ class FilteredSFTLearner(Agent):
             self.training_steps >= rl_config.policy_training_start_step
             and self.training_steps % rl_config.policy_update_interval == 0
         )
+        online_buffer_size = jnp.asarray(
+            float(self._online_data_buffer.size), dtype=jnp.float32
+        )
         if not update_policy:
             return {
-                "online_buffer_size": jnp.asarray(
-                    float(self._online_data_buffer.size), dtype=jnp.float32
-                )
+                "online_buffer_size": online_buffer_size,
+                "grad_norm": jnp.asarray(float("nan"), dtype=jnp.float32),
+                "loss": jnp.asarray(float("nan"), dtype=jnp.float32),
+                "param_norm": jnp.asarray(float("nan"), dtype=jnp.float32),
             }
         use_online = (
             self._online_data_buffer.size >= self._online_data_buffer.batch_size
@@ -1529,4 +1533,5 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             train_state, info = self._train_step(train_rng, train_state, batch)
         self._train_state = train_state
+        info["online_buffer_size"] = online_buffer_size
         return info
