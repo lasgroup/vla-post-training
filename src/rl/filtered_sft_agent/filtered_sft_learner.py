@@ -971,12 +971,14 @@ class FilteredSFTLearner(Agent):
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
+        num_devices = len(jax.devices())
+        sharding_spec = self._policy_sharding_spec if batch_size % num_devices == 0 else None
         sampled_actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
             noise=noise,
             return_prefix_rep=return_prefix_rep,
-            sharding_spec=self._policy_sharding_spec,
+            sharding_spec=sharding_spec,
         )["actions"]
         if not batch_actions:
             return sampled_actions
