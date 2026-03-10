@@ -83,6 +83,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_inference_start_step: int = 100
     td_weight_schedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
+    critic_pre_training_steps: int = 1_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -124,7 +125,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
     noise_level: float = 0.3
-    normalize_adv: bool = True
+    normalize_adv: bool = False
     use_mpo_advantage_weight: bool = True
 
 
