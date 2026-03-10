@@ -56,7 +56,7 @@ import wandb
 
 import openpi.training.utils as training_utils
 from src.rl.best_of_n.best_of_n_learner import BestofNLearner
-from src.rl.advantage_weighted_sft.update_critic import (
+from src.rl.best_of_n.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
