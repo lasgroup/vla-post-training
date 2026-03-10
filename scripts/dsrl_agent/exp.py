@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 # suppress Numba FNV hashing warnings
 import warnings
+from collections import deque
 
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.encoders import BaseEncoder, ImageEncoder, MLPEncoder
@@ -375,6 +376,36 @@ def _build_training_env(config: _config.OnlineTrainConfig):
     )
     return env, task_description
 
+class DSRLCollectNoShiftAdapter:
+    def __init__(self, inner):
+        self._inner = inner
+        self._pending_obs = deque()
+
+    def sample_actions(self, observations, **kwargs):
+        snap = jax.tree_util.tree_map(lambda x: np.array(x, copy=True), observations)
+        self._pending_obs.append(snap)
+        return self._inner.sample_actions(observations, **kwargs)
+
+    def add_data(self, step_data):
+        if self._pending_obs:
+            patched = dict(step_data)
+            patched["observation"] = self._pending_obs.popleft()
+            return self._inner.add_data(patched)
+        return self._inner.add_data(step_data)
+
+    def start_data_collection(self, *args, **kwargs):
+        self._pending_obs.clear()
+        return self._inner.start_data_collection(*args, **kwargs)
+
+    def end_data_collection(self, *args, **kwargs):
+        self._pending_obs.clear()
+        return self._inner.end_data_collection(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -444,6 +475,7 @@ def main(config: _config.OnlineTrainConfig):
                         state_action_critic_def=state_action_critic_def,
                         policy_def=policy_def,
                         task_description=task_description)
+    agent = DSRLCollectNoShiftAdapter(agent)
     
     init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 

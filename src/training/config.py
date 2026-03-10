@@ -132,6 +132,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
 class DSRLLearnerConfig(RLAlgorithmConfig):
     actor_lr: float = 1e-4
     critic_lr: float = 3e-4
+    alpha_lr: float = 3e-4
     # Network architecture (kept explicit for parity across scripts/experiments).
     critic_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
     policy_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
@@ -150,7 +151,6 @@ class DSRLLearnerConfig(RLAlgorithmConfig):
     use_state_branch: bool = True
     autotune_alpha: bool = True
     init_alpha: float = 1.0
-    alpha_lr: float = 3e-4
     target_entropy: str | float = "auto"
     policy_distribution: str = "tanh_normal"
     sac_image_size: int = 64
