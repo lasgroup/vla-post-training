@@ -149,7 +149,7 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self._query_frequency = query_frequency
         self._pre_step_filter = pre_step_filter or (lambda x: x)
 
-    #@property
+    @property
     def expand_space(self, space):
         # We define a function to expand a single space leaf (e.g., a Box)
         if isinstance(space, gym.spaces.Box):
