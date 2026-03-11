@@ -1,4 +1,5 @@
 # ruff: noqa: F722
+import dataclasses
 import functools
 from typing import Any, Dict, Tuple
 import gc
@@ -361,6 +362,30 @@ class BestofNLearner(FilteredSFTLearner):
         assert isinstance(self._config.rl, BestofNLearnerConfig), "Only BestofN config should " \
                                                                                 "be passed to the best-of-N agent"
         rl_config = self._config.rl
+
+        if rl_config.critic_pre_training_steps == self.training_steps:
+            # Reset optimizer state of the value and q function
+            q_opt_state = self._state_action_critic_state.tx.init(
+                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+            )
+            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
+            self._state_action_critic_state = dataclasses.replace(
+                self._state_action_critic_state,
+                opt_state=q_opt_state,
+                ema_params=new_ema_state_action_critic_params,
+            )
+            del new_ema_state_action_critic_params, q_opt_state
+
+            v_opt_state = self._value_state.tx.init(
+                nnx.filter_state(self._value_state.params, nnx.Param)
+            )
+            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
+            self._value_state = dataclasses.replace(
+                self._value_state,
+                opt_state=v_opt_state,
+                ema_params=new_ema_value_params,
+            )
+            del new_ema_value_params, v_opt_state
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
@@ -377,7 +402,6 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             }
 
-        batch = next(self._data_iter) # TODO Ralf: Use the offline data for critic updates.
         use_online = (
                 self._online_data_buffer.size >= self._online_data_buffer.batch_size
         )
@@ -409,31 +433,6 @@ class BestofNLearner(FilteredSFTLearner):
                               } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
-            online_batch = self._online_batch_to_sft_batch(online_batch)
-            online_ratio = rl_config.online_ratio
-            if online_ratio >= 1.0:
-                batch = online_batch
-            elif online_ratio > 0:
-                # Mix online and offline into a fixed-size batch instead of
-                # concatenating (which would double the batch and OOM).
-                first_leaf = jax.tree.leaves(batch)[0]
-                batch_size = first_leaf.shape[0]
-                n_online = min(
-                    int(batch_size * online_ratio),
-                    jax.tree.leaves(online_batch)[0].shape[0],
-                )
-                n_offline = batch_size - n_online
-                batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
-                    batch,
-                    online_batch,
-                )
-                # The online batch may be replicated (PartitionSpec()) while
-                # the SFT batch is sharded. Re-shard the mixed result to
-                # match the data sharding expected by _train_step.
-                batch = jax.device_put(batch, self._data_sharding)
-                del online_batch
-                gc.collect()
         info = (
                 critic_info
                 | {

@@ -34,8 +34,7 @@ DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-# Use 4 envs for sharding
-DEFAULT_TRAIN_ENV_NUM = 4
+DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
@@ -51,7 +50,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [1.0],
+    "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [5, 10],
 }
 
@@ -92,7 +91,9 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
+    parser.add_argument(
+        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
+    )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
 
     args = parser.parse_args()
