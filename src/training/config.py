@@ -136,6 +136,7 @@ class CollectionConfig:
     resize_image: int = 224
     add_states: bool = True
     num_rollouts: int = 50
+    num_initial_rollouts: int | None = None
     tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10

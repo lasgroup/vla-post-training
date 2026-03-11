@@ -52,6 +52,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
+    "collect.num_initial_rollouts": [5, 10],
 }
 
 

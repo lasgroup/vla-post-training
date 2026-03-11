@@ -107,7 +107,10 @@ def collect_data(
 
     total_episodes = 0
     total_successes = 0
-    num_rollouts = config.collect.num_rollouts
+    if step == 0 and config.collect.num_initial_rollouts is not None:
+        num_rollouts = config.collect.num_initial_rollouts
+    else:
+        num_rollouts = config.collect.num_rollouts
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
         obs, _ = env.reset()
