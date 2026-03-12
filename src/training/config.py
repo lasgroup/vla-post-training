@@ -84,8 +84,9 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
     critic_inference_start_step: int = 100
-    td_weight_schedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
+    td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
+    critic_pre_training_steps: int = 1_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,6 +112,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     td_weight_schedule: StepSchedule = StepSchedule(
         init_value=0.0, end_value=1.0, switch_step=1_000
     )
+    critic_pre_training_steps: int = 1_000
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
@@ -127,6 +129,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    use_mpo_advantage_weight: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -158,6 +161,7 @@ class CollectionConfig:
     env_resolution: int = 256
     resize_image: int = 224
     num_rollouts: int = 50
+    num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
     molmo: MolmoConfig = MolmoConfig()
     tasks: list[str] = dataclasses.field(
@@ -174,6 +178,9 @@ class CollectionConfig:
     num_steps_wait: int = 10
     use_time_to_success_as_reward: bool = False
     store_prefix_rep: bool = False
+    eval_env_num: int = 4
+    eval_interval: int = 300
+    num_eval_rollouts: int = 32
 
     def __post_init__(self):
         # Expand task ranges and handle multipliers
@@ -218,6 +225,7 @@ class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    default_prompt: str | None = None
 
 
 def make_base_online_config(

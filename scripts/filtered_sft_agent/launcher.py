@@ -24,13 +24,28 @@ from launcher_util import (
 SCRIPT = "scripts/filtered_sft_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_filtered_sft"
 PROJECT_NAME = "filtered_sft_agent_sweep"
-DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
+DEFAULT_BUFFER_CAPACITY = 250000
+DEFAULT_LOG_INTERVAL = 50
+DEFAULT_NUM_ROLLOUTS = 1
+DEFAULT_COLLECT_INTERVAL = 300
+DEFAULT_BATCH_SIZE = 256
+DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_EVAL_ENV_NUM = 4
+DEFAULT_EVAL_INTERVAL = 300
+DEFAULT_NUM_EVAL_ROLLOUTS = 32
+NUM_TRAIN_STEPS = 5_000
+
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
+    "seed": [0, 1, 2],
+    "log_interval": [25],
+    "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [0.5, 1.0],
 }
 
 
@@ -52,6 +67,18 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
+
+    parser.add_argument("--num_rollouts", type=int, default=DEFAULT_NUM_ROLLOUTS)
+    parser.add_argument(
+        "--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL
+    )
+    parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
+    parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
+    parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
+    parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
+
     args = parser.parse_args()
 
     combos = dict_permutations(applicable_configs)
@@ -63,6 +90,16 @@ def main() -> None:
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
+            "collect.num_rollouts": args.num_rollouts,
+            "collect.collect_interval": args.collect_interval,
+            "rl.buffer_capacity": args.buffer_capacity,
+            "batch_size": DEFAULT_BATCH_SIZE,
+            "collect.env_num": args.train_env_num,
+            "collect.eval_env_num": args.eval_env_num,
+            "collect.tasks": DEFAULT_TASKS,
+            "collect.eval_interval": args.eval_interval,
+            "collect.num_eval_rollouts": args.num_eval_rollouts,
+            "num_train_steps": args.num_train_steps,
         }
         flags.update(combo)
 

@@ -1,4 +1,5 @@
 # ruff: noqa: F722
+import dataclasses
 import functools
 from typing import Any, Dict, Tuple
 import gc
@@ -202,8 +203,14 @@ class BestofNLearner(FilteredSFTLearner):
 
         return policy_observation, critic_observation, actions
 
-    def save_episode(self, is_success=False, env_index=0, **kwargs):
-        return self._save_episode(env_index=env_index, **kwargs)
+    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+        assert env_index in range(len(self._episode_storage)), \
+            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        # extract episode data from storage and empty it
+        episode_data = self._episode_storage[env_index]
+        self._episode_storage[env_index] = []
+        # filtered SFT keeps only successful episodes.
+        self._save_episode_in_buffer(episode_data, task_description)
 
     def sample_actions(self, observations, **kwargs):
         if self.training_steps < self._config.rl.critic_inference_start_step:
@@ -361,6 +368,30 @@ class BestofNLearner(FilteredSFTLearner):
         assert isinstance(self._config.rl, BestofNLearnerConfig), "Only BestofN config should " \
                                                                                 "be passed to the best-of-N agent"
         rl_config = self._config.rl
+
+        if rl_config.critic_pre_training_steps == self.training_steps:
+            # Reset optimizer state of the value and q function
+            q_opt_state = self._state_action_critic_state.tx.init(
+                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+            )
+            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
+            self._state_action_critic_state = dataclasses.replace(
+                self._state_action_critic_state,
+                opt_state=q_opt_state,
+                ema_params=new_ema_state_action_critic_params,
+            )
+            del new_ema_state_action_critic_params, q_opt_state
+
+            v_opt_state = self._value_state.tx.init(
+                nnx.filter_state(self._value_state.params, nnx.Param)
+            )
+            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
+            self._value_state = dataclasses.replace(
+                self._value_state,
+                opt_state=v_opt_state,
+                ema_params=new_ema_value_params,
+            )
+            del new_ema_value_params, v_opt_state
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
@@ -377,18 +408,18 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             }
 
-        batch = next(self._data_iter) # TODO Ralf: Use the offline data for critic updates.
+        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
-                self._online_data_buffer.size >= self._online_data_buffer.batch_size
+                self._online_data_buffer.size >= online_batch_size
         )
 
         critic_info = {}
         if use_online:
-            online_batch = self._online_data_buffer.sample()
+            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
                 if self.debug:
                     log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=batch
+                        "before_critics", train_state=self._train_state, batch=online_batch
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -409,31 +440,6 @@ class BestofNLearner(FilteredSFTLearner):
                               } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
-            online_batch = self._online_batch_to_sft_batch(online_batch)
-            online_ratio = rl_config.online_ratio
-            if online_ratio >= 1.0:
-                batch = online_batch
-            elif online_ratio > 0:
-                # Mix online and offline into a fixed-size batch instead of
-                # concatenating (which would double the batch and OOM).
-                first_leaf = jax.tree.leaves(batch)[0]
-                batch_size = first_leaf.shape[0]
-                n_online = min(
-                    int(batch_size * online_ratio),
-                    jax.tree.leaves(online_batch)[0].shape[0],
-                )
-                n_offline = batch_size - n_online
-                batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
-                    batch,
-                    online_batch,
-                )
-                # The online batch may be replicated (PartitionSpec()) while
-                # the SFT batch is sharded. Re-shard the mixed result to
-                # match the data sharding expected by _train_step.
-                batch = jax.device_put(batch, self._data_sharding)
-                del online_batch
-                gc.collect()
         info = (
                 critic_info
                 | {

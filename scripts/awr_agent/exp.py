@@ -54,7 +54,6 @@ import jax.numpy as jnp
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi.training.utils as training_utils
 from src.envs import make_env
 from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
 from src.rl.advantage_weighted_sft.update_critic import (
@@ -69,8 +68,8 @@ from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecode
 from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
-from src.training.collect import collect_data
-from src.training.utils import init_logging, init_wandb, log_images
+from src.training.collect import collect_data, evaluate_policy
+from src.training.utils import init_logging, init_wandb
 
 
 
@@ -207,6 +206,12 @@ def main(config: _config.OnlineTrainConfig):
         config=config,
         task_description=task_description,
     )
+    eval_env = filtered_sft_wrap_env(
+        env_fn=env_fn,
+        config=config,
+        task_description=task_description,
+        env_num=config.collect.eval_env_num,
+    )
 
     prefix_embedding_shape = _infer_prefix_embedding_shape(config)
     if prefix_embedding_shape is None:
@@ -234,12 +239,6 @@ def main(config: _config.OnlineTrainConfig):
         task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
-
-    batch = next(iter(agent._data_loader))
-    logging.info(
-        f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}"
-    )
-    log_images(batch)
 
     start_step = int(jax.device_get(agent._train_state.step))
     agent.training_steps = start_step
@@ -282,6 +281,19 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
+
+        if step % config.collect.eval_interval == 0:
+            eval_info = evaluate_policy(
+                agent=agent,
+                env=eval_env,
+                task_description=task_description,
+                config=config,
+                step=step,
+            )
+            wandb.log(eval_info, step=step)
+            logging.info(
+                f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
+            )
 
         if (
             step % config.save_interval == 0 and step > start_step

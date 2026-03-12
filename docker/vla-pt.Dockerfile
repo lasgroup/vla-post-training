@@ -15,25 +15,20 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.1 /uv /uvx /bin/
 WORKDIR /app
 
 # Needed because LeRobot uses git-lfs.
-RUN apt-get update && apt-get install -y git git-lfs linux-headers-generic build-essential clang nano tmux zsh
+RUN apt-get update && apt-get install -y git git-lfs linux-headers-generic build-essential clang nano tmux zsh make g++ cmake
 
 # LIBERO dependencies
 RUN apt-get update && \
     apt-get install -y \
-    make \
-    g++ \
-    clang \
     libosmesa6-dev \
-    libgl1-mesa-glx \
     libegl1 \
     libglew-dev \
     libglfw3-dev \
-    libgles2-mesa-dev \
     libglib2.0-0 \
     libsm6 \
     libxrender1 \
     libxext6 \
-    cmake
+    libnvidia-gl-590
 
 # Copy from the cache instead of linking since it's a mounted volume
 ENV UV_LINK_MODE=copy
