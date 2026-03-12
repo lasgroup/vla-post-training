@@ -192,13 +192,31 @@ class DSRLActionDecoder:
         noise: np.ndarray,
     ) -> Dict[str, Any]:
         """Run policy inference, returning actions and prefix_rep."""
-        return self._policy.infer_with_model(
+        outputs = self._policy.infer_with_model(
             model=self.model,
             obs=obs,
             noise=noise,
             return_prefix_rep=True,
             sharding_spec=self._sharding_spec,
         )
+        if not isinstance(outputs, dict):
+            if isinstance(outputs, (tuple, list)) and len(outputs) >= 1:
+                normalized: Dict[str, Any] = {"actions": outputs[0]}
+                if len(outputs) > 1:
+                    normalized["prefix_rep"] = outputs[1]
+                return normalized
+            raise TypeError(
+                f"Unexpected policy output type: {type(outputs)}."
+            )
+
+        actions = outputs.get("actions")
+        if isinstance(actions, (tuple, list)) and len(actions) >= 1:
+            normalized = dict(outputs)
+            normalized["actions"] = actions[0]
+            if len(actions) > 1 and "prefix_rep" not in normalized:
+                normalized["prefix_rep"] = actions[1]
+            return normalized
+        return outputs
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +249,8 @@ class DSRLVectorEnv(SubprocVectorEnv):
 
         self._decoder = DSRLActionDecoder(config)
         self._last_obs: Optional[Dict[str, Any]] = None
+        self._prefix_rep_shape: tuple[int, ...] | None = None
+        self._warned_missing_prefix_rep = False
 
     @property
     def policy_action_dim(self) -> int:
@@ -312,20 +332,62 @@ class DSRLVectorEnv(SubprocVectorEnv):
     # ----- prefix rep helpers -----
 
     @staticmethod
+    def _normalize_prefix_rep_shape(
+        prefix_rep: np.ndarray,
+        *,
+        batch_size: int,
+    ) -> np.ndarray:
+        # Keep prefix leaves writable because collect.py updates reset env slots in-place.
+        prefix = np.array(prefix_rep, copy=True)
+        if prefix.ndim == 0:
+            prefix = prefix.reshape(1, 1)
+        if batch_size <= 0:
+            return prefix
+        if prefix.ndim == 1:
+            prefix = prefix[None, ...]
+        if prefix.shape[0] == batch_size:
+            return prefix
+        if prefix.shape[0] == 1 and batch_size > 1:
+            return np.repeat(prefix, batch_size, axis=0)
+        # Unbatched policy output in single-env paths: [S, D] -> [1, S, D].
+        if batch_size == 1:
+            return prefix[None, ...]
+        raise ValueError(
+            f"Prefix batch {prefix.shape[0]} != obs batch {batch_size}."
+        )
+
+    @staticmethod
     def _attach_prefix_rep(
         observation: Dict[str, Any],
         prefix_rep: np.ndarray,
         batch_size: int,
     ) -> Dict[str, Any]:
-        prefix = np.asarray(prefix_rep)
-        if prefix.ndim == 1:
-            prefix = prefix[None, :]
-        if prefix.shape[0] == 1 and batch_size > 1:
-            prefix = np.repeat(prefix, batch_size, axis=0)
-        assert prefix.shape[0] == batch_size, (
-            f"Prefix batch {prefix.shape[0]} != obs batch {batch_size}"
+        prefix = DSRLVectorEnv._normalize_prefix_rep_shape(
+            prefix_rep, batch_size=batch_size
         )
         return {**observation, "prefix_rep": prefix}
+
+    def _get_prefix_rep(
+        self,
+        outputs: Dict[str, Any],
+        *,
+        batch_size: int,
+    ) -> np.ndarray:
+        prefix_rep = outputs.get("prefix_rep")
+        if prefix_rep is not None:
+            prefix = self._normalize_prefix_rep_shape(
+                prefix_rep, batch_size=batch_size
+            )
+            self._prefix_rep_shape = tuple(prefix.shape[1:])
+            return prefix
+
+        if not self._warned_missing_prefix_rep:
+            logging.warning(
+                "Policy outputs are missing 'prefix_rep'; using zeros as fallback."
+            )
+            self._warned_missing_prefix_rep = True
+        shape_tail = self._prefix_rep_shape or (1,)
+        return np.zeros((batch_size, *shape_tail), dtype=np.float32)
 
     def _update_obs_cache(
         self,
@@ -337,8 +399,12 @@ class DSRLVectorEnv(SubprocVectorEnv):
             return
 
         idx = np.asarray(env_ids, dtype=np.int32)
+        def _scatter_update(prev, new):
+            updated = np.asarray(prev).copy()
+            updated[idx] = np.asarray(new)
+            return updated
         self._last_obs = jax.tree_util.tree_map(
-            lambda prev, new: np.asarray(prev).copy().__setitem__(idx, np.asarray(new)) or np.asarray(prev),
+            _scatter_update,
             self._last_obs,
             new_obs,
         )
@@ -365,7 +431,8 @@ class DSRLVectorEnv(SubprocVectorEnv):
             dtype=np.float32,
         )
         outputs = self._decoder.infer(processed_obs, dummy_noise)
-        obs_with_prefix = self._attach_prefix_rep(obs, outputs["prefix_rep"], batch_size)
+        prefix_rep = self._get_prefix_rep(outputs, batch_size=batch_size)
+        obs_with_prefix = self._attach_prefix_rep(obs, prefix_rep, batch_size)
         self._update_obs_cache(reset_ids, obs_with_prefix)
 
         return (obs_with_prefix, info) if info is not None else obs_with_prefix
@@ -389,8 +456,9 @@ class DSRLVectorEnv(SubprocVectorEnv):
 
         return_stacks = super().step(actions, id)
         obs_stack = return_stacks[0]
+        prefix_rep = self._get_prefix_rep(outputs, batch_size=self.env_num)
         obs_with_prefix = self._attach_prefix_rep(
-            obs_stack, outputs["prefix_rep"], self.env_num,
+            obs_stack, prefix_rep, self.env_num,
         )
         self._last_obs = obs_with_prefix
         return (obs_with_prefix, *return_stacks[1:])

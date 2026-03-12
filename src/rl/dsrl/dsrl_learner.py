@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import flax.nnx as nnx
 from jax.experimental import mesh_utils
 
+import openpi.training.checkpoints as _checkpoints
 from src.rl.agent import Agent
 from src.rl.dsrl.update_actor import (
     init_policy_state,
@@ -240,7 +241,15 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
-        self._sac_image_size = int(getattr(cofig.rl, "sac_image_size", 64))
+        self._checkpoint_manager, self._resuming = (
+            _checkpoints.initialize_checkpoint_dir(
+                self._config.checkpoint_dir,
+                keep_period=self._config.keep_period,
+                overwrite=self._config.overwrite,
+                resume=self._config.resume,
+            )
+        )
+        self._sac_image_size = int(getattr(config.rl, "sac_image_size", 64))
         self._crop_padding = int(getattr(config.rl, "random_crop_padding", 4))
         raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
         replay_dummy_obs = _build_replay_observation_template(
