@@ -132,8 +132,8 @@ def main(config: _config.OnlineTrainConfig):
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-           agent.save_checkpoint(step=step)
+        #if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+        #   agent.save_checkpoint(step=step)
 
     logging.info("Waiting for checkpoint manager to finish")
     agent._checkpoint_manager.wait_until_finished()

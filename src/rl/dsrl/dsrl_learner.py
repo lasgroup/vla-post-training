@@ -62,40 +62,8 @@ def _resize_image_np(img: np.ndarray, target_size: int) -> np.ndarray:
     return img
 
 
-def _get_sac_image_size(config: OnlineTrainConfig) -> int:
-    rl = getattr(config, "rl", None)
-    return int(getattr(rl, "sac_image_size", 64))
-
-
-def _get_random_crop_padding(config: OnlineTrainConfig) -> int:
-    rl = getattr(config, "rl", None)
-    return int(getattr(rl, "random_crop_padding", 4))
-
-
 # ---------------------------------------------------------------------------
-# JAX augmentation (random crop matching reference's batched_random_crop)
-# ---------------------------------------------------------------------------
-
-def _random_crop_single(rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
-    """Random crop with edge-replicated padding for a single (H, W, C) image."""
-    crop_from = jax.random.randint(rng, (2,), 0, 2 * padding + 1)
-    crop_from = jnp.concatenate([crop_from, jnp.zeros((1,), dtype=jnp.int32)])
-    padded = jnp.pad(
-        img,
-        ((padding, padding), (padding, padding), (0, 0)),
-        mode="edge",
-    )
-    return jax.lax.dynamic_slice(padded, crop_from, img.shape)
-
-
-def _batched_random_crop(rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
-    """Random crop with edge padding for a (B, H, W, C) batch."""
-    keys = jax.random.split(rng, imgs.shape[0])
-    return jax.vmap(lambda k, i: _random_crop_single(k, i, padding))(keys, imgs)
-
-
-# ---------------------------------------------------------------------------
-# Observation extraction (replay-buffer format)
+# Observation extraction
 # ---------------------------------------------------------------------------
 
 def _extract_replay_observation(
@@ -272,8 +240,8 @@ class DSRLLearner(Agent):
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
-        self._sac_image_size = _get_sac_image_size(config)
-        self._crop_padding = _get_random_crop_padding(config)
+        self._sac_image_size = int(getattr(cofig.rl, "sac_image_size", 64))
+        self._crop_padding = int(getattr(config.rl, "random_crop_padding", 4))
         raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
         replay_dummy_obs = _build_replay_observation_template(
             raw_dummy_obs,
@@ -442,7 +410,6 @@ class DSRLLearner(Agent):
 
         # Gaussian noise for first collection round
         if self._use_random_noise and not deterministic:
-            # Infer the output shape from observations batch dimension.
             obs_leaves = jax.tree_util.tree_leaves(observations)
             if obs_leaves:
                 batch_dim = np.asarray(obs_leaves[0]).shape[0]
@@ -469,22 +436,20 @@ class DSRLLearner(Agent):
     def sample_actions(self, observations, **kwargs):
         return self._generate_actions(observations, deterministic=False, **kwargs)
 
-    def sample_online_transitions(self) -> Dict[str, Any]:
-        """Sample transitions from the shared online replay buffer interface."""
-        if self._online_data_buffer.size == 0:
-            raise ValueError(
-                "Cannot sample transitions from an empty online replay buffer."
-            )
-        batch = self._online_data_buffer.sample()
+    # def sample_online_transitions(self) -> Dict[str, Any]:
+    #     """Sample transitions from the shared online replay buffer interface."""
+    #     if self._online_data_buffer.size == 0:
+    #         raise ValueError("Cannot sample transitions from an empty online replay buffer.")
+    #     batch = self._online_data_buffer.sample()
 
-        return {
-            "observation": batch["observation"],
-            "actions": np.asarray(batch["actions"], dtype=np.float32),
-            "next_observation": batch["next_observation"],
-            "reward": np.asarray(batch["reward"], dtype=np.float32),
-            "mc_return": np.asarray(batch["mc_return"], dtype=np.float32),
-            "discount": np.asarray(batch["discount"], dtype=np.float32),
-        }
+    #     return {
+    #         "observation": batch["observation"],
+    #         "actions": np.asarray(batch["actions"], dtype=np.float32),
+    #         "next_observation": batch["next_observation"],
+    #         "reward": np.asarray(batch["reward"], dtype=np.float32),
+    #         "mc_return": np.asarray(batch["mc_return"], dtype=np.float32),
+    #         "discount": np.asarray(batch["discount"], dtype=np.float32),
+    #     }
 
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
@@ -492,14 +457,6 @@ class DSRLLearner(Agent):
 
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(get_env_value(step_data, i))
-
-    def _get_critic_update_frequency(self) -> int:
-        rl = getattr(self._config, "rl", None)
-        return int(getattr(rl, "critic_update_frequency", 1))
-
-    def _get_actor_update_frequency(self) -> int:
-        rl = getattr(self._config, "rl", None)
-        return int(getattr(rl, "actor_update_frequency", 1))
 
     def _current_alpha(self) -> jax.Array:
         return alpha_value(self._alpha_state)
@@ -528,6 +485,21 @@ class DSRLLearner(Agent):
     # ------------------------------------------------------------------
     # Image augmentation applied to observation dicts at training time
     # ------------------------------------------------------------------
+    def _random_crop_single(rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
+        """Random crop with edge-replicated padding for a single (H, W, C) image."""
+        crop_from = jax.random.randint(rng, (2,), 0, 2 * padding + 1)
+        crop_from = jnp.concatenate([crop_from, jnp.zeros((1,), dtype=jnp.int32)])
+        padded = jnp.pad(
+            img,
+            ((padding, padding), (padding, padding), (0, 0)),
+            mode="edge",
+        )
+        return jax.lax.dynamic_slice(padded, crop_from, img.shape)
+
+    def _batched_random_crop(rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
+        """Random crop with edge padding for a (B, H, W, C) batch."""
+        keys = jax.random.split(rng, imgs.shape[0])
+        return jax.vmap(lambda k, i: _random_crop_single(k, i, padding))(keys, imgs)
 
     def _augment_images(self, obs_dict: Dict[str, jax.Array], rng: jax.Array) -> tuple[Dict[str, jax.Array], jax.Array]:
         """Apply random crop augmentation to image keys (matching reference)."""
@@ -560,15 +532,12 @@ class DSRLLearner(Agent):
 
         if self._use_random_noise:
             self._use_random_noise = False
-            logger.info(
-                "Disabling warmup Gaussian noise (buffer size=%d >= batch_size=%d).",
-                self._online_data_buffer.size, batch_size,
-            )
+            logger.info("Disabling warmup Gaussian noise (buffer size=%d >= batch_size=%d).", self._online_data_buffer.size, batch_size,)
 
         info = {}
         latest_actor_observation = None
 
-        if self.training_steps % self._get_critic_update_frequency() == 0:
+        if self.training_steps % int(getattr(self._config.rl, "critic_update_frequency", 1)) == 0:
             if batch_size != int(self._online_data_buffer.batch_size):
                 raise ValueError(
                     "Configured train batch_size does not match replay batch_size: "
@@ -582,7 +551,7 @@ class DSRLLearner(Agent):
             observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             next_observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation)
 
-            # Random crop augmentation (matching reference)
+            # Random crop augmentation
             aug_rng, self._rng = jax.random.split(self._rng)
             observation, aug_rng = self._augment_images(observation, aug_rng)
             next_observation, aug_rng = self._augment_images(next_observation, aug_rng)
@@ -604,12 +573,11 @@ class DSRLLearner(Agent):
             latest_actor_observation = observation
             info.update({f"critic/{k}": v for k, v in critic_info.items()})
 
-        if self.training_steps % self._get_actor_update_frequency() == 0:
+        if self.training_steps % int(getattr(self._config.rl, "actor_update_frequency", 1)) == 0:
             if latest_actor_observation is None:
                 batch = self._online_data_buffer.sample()
                 batch_observation = normalize_observation_for_model(batch["observation"])
                 observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
-                # Augment the actor batch too.
                 aug_rng, self._rng = jax.random.split(self._rng)
                 observation, _ = self._augment_images(observation, aug_rng)
             else:
@@ -641,7 +609,7 @@ class DSRLLearner(Agent):
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
         """Process a completed episode and insert transitions into the replay buffer.
 
-        Uses the DSRL sparse reward scheme from the reference implementation:
+        Uses the DSRL sparse reward scheme:
         - Every step gets reward = -1
         - Last step of a *successful* episode gets reward = 0
         - Discount = gamma^query_freq for non-terminal steps
