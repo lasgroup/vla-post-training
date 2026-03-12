@@ -494,7 +494,7 @@ class DSRLLearner(Agent):
     # ------------------------------------------------------------------
     # Image augmentation applied to observation dicts at training time
     # ------------------------------------------------------------------
-    def _random_crop_single(rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
+    def _random_crop_single(self, rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
         """Random crop with edge-replicated padding for a single (H, W, C) image."""
         crop_from = jax.random.randint(rng, (2,), 0, 2 * padding + 1)
         crop_from = jnp.concatenate([crop_from, jnp.zeros((1,), dtype=jnp.int32)])
@@ -505,10 +505,10 @@ class DSRLLearner(Agent):
         )
         return jax.lax.dynamic_slice(padded, crop_from, img.shape)
 
-    def _batched_random_crop(rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
+    def _batched_random_crop(self, rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
         """Random crop with edge padding for a (B, H, W, C) batch."""
         keys = jax.random.split(rng, imgs.shape[0])
-        return jax.vmap(lambda k, i: _random_crop_single(k, i, padding))(keys, imgs)
+        return jax.vmap(lambda k, i: self._random_crop_single(k, i, padding))(keys, imgs)
 
     def _augment_images(self, obs_dict: Dict[str, jax.Array], rng: jax.Array) -> tuple[Dict[str, jax.Array], jax.Array]:
         """Apply random crop augmentation to image keys (matching reference)."""
@@ -522,7 +522,7 @@ class DSRLLearner(Agent):
             # Only augment spatial images (B, H, W, C) where H, W > 1.
             if img.ndim == 4 and img.shape[1] > 1 and img.shape[2] > 1:
                 rng, crop_rng = jax.random.split(rng)
-                augmented[img_key] = _batched_random_crop(
+                augmented[img_key] = self._batched_random_crop(
                     crop_rng, img, padding=self._crop_padding
                 )
         return augmented, rng
