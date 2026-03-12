@@ -483,12 +483,6 @@ def _normalize_task_descriptions(
     return [str(task_description[i % len(task_description)]) for i in range(env_num)]
 
 
-def _get_pre_step_action_filter(domain: str):
-    if domain == "libero":
-        return lambda x: np.where(np.abs(x) < 0.0011, 0.0, x)
-    return lambda x: x
-
-
 def dsrl_wrap_env(
     env_fn,
     config: _config.OnlineTrainConfig,
@@ -498,7 +492,6 @@ def dsrl_wrap_env(
     env_num = int(config.collect.env_num)
     replan_steps = int(config.collect.replan_steps)
     domain = str(config.collect.domain)
-    pre_step_action_filter = _get_pre_step_action_filter(domain)
 
     task_description = _normalize_task_descriptions(task_description, env_num)
 
@@ -519,7 +512,6 @@ def dsrl_wrap_env(
             base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=replan_steps,
-                pre_step_filter=pre_step_action_filter,
             )
             return base_env
 

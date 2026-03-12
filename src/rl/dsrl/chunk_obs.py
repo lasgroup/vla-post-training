@@ -25,6 +25,37 @@ def unwrap_dsrl_vector_observation(observations: Any) -> Any:
     return observations
 
 
+def _ensure_batched_2d(arr: jnp.ndarray) -> jnp.ndarray:
+    """Collapse a state array to shape (B, D), taking the last timestep if chunked."""
+    if arr.ndim >= 3:
+        arr = arr[:, -1, ...]
+    if arr.ndim == 1:
+        arr = arr[jnp.newaxis, ...]
+    if arr.ndim > 2:
+        arr = jnp.reshape(arr, (arr.shape[0], -1))
+    return arr
+
+
+def _ensure_batched_image(arr: jnp.ndarray) -> jnp.ndarray:
+    """Collapse an image array to shape (B, H, W, C), taking the last frame if chunked."""
+    if arr.ndim >= 5:
+        arr = arr[:, -1, ...]
+    if arr.ndim == 3:
+        arr = arr[jnp.newaxis, ...]
+    return arr
+
+
+def _normalize_prefix(arr: jnp.ndarray) -> jnp.ndarray:
+    """Collapse a prefix embedding to shape (B, D)."""
+    if arr.ndim >= 4:
+        arr = arr[:, -1, ...]
+    if arr.ndim == 4:
+        arr = jnp.reshape(arr, (arr.shape[0], -1, arr.shape[-1]))
+    if arr.ndim == 3:
+        arr = jnp.mean(arr, axis=1)
+    return arr
+
+
 def normalize_observation_for_model(observations: Any) -> Any:
     """Convert wrapper observations to model-ready SAC inputs.
 
@@ -59,17 +90,9 @@ def normalize_observation_for_model(observations: Any) -> Any:
             gripper_arr = jnp.asarray(gripper_position, dtype=jnp.float32)
             state_source = jnp.concatenate([joint_arr, gripper_arr], axis=-1)
     if state_source is not None:
-        state = jnp.asarray(state_source, dtype=jnp.float32)
-        # Query-frequency wrappers add a temporal/chunk axis after batch.
-        # For SAC/DSRL we model Q(s, a_chunk), so keep only the latest state.
-        if state.ndim >= 3:
-            state = state[:, -1, ...]
-        if state.ndim == 1:
-            state = state[jnp.newaxis, ...]
-        # Flatten any remaining non-batch axes (e.g. trailing singleton dims).
-        if state.ndim > 2:
-            state = jnp.reshape(state, (state.shape[0], -1))
-        normalized["state"] = state
+        normalized["state"] = _ensure_batched_2d(
+            jnp.asarray(state_source, dtype=jnp.float32)
+        )
 
     image_source = _find_first(
         "image",
@@ -81,13 +104,7 @@ def normalize_observation_for_model(observations: Any) -> Any:
         "exterior_image_1_left",
     )
     if image_source is not None:
-        image = jnp.asarray(image_source)
-        # Chunked envs: [B, T, H, W, C] -> keep latest frame.
-        if image.ndim >= 5:
-            image = image[:, -1, ...]
-        if image.ndim == 3:
-            image = image[jnp.newaxis, ...]
-        normalized["image"] = image
+        normalized["image"] = _ensure_batched_image(jnp.asarray(image_source))
 
     wrist_image_source = _find_first(
         "wrist_image",
@@ -97,33 +114,14 @@ def normalize_observation_for_model(observations: Any) -> Any:
         "wrist_image_left",
     )
     if wrist_image_source is not None:
-        wrist_image = jnp.asarray(wrist_image_source)
-        if wrist_image.ndim >= 5:
-            wrist_image = wrist_image[:, -1, ...]
-        if wrist_image.ndim == 3:
-            wrist_image = wrist_image[jnp.newaxis, ...]
-        normalized["wrist_image"] = wrist_image
+        normalized["wrist_image"] = _ensure_batched_image(jnp.asarray(wrist_image_source))
 
     # Keep optional prefix embedding for experiments that enable it.
-    if PREFIX_EMBEDDING_NAME in observations:
-        prefix = jnp.asarray(observations[PREFIX_EMBEDDING_NAME], dtype=jnp.float32)
-        if prefix.ndim >= 4:
-            prefix = prefix[:, -1, ...]
-        if prefix.ndim == 4:
-            prefix = jnp.reshape(prefix, (prefix.shape[0], -1, prefix.shape[-1]))
-        if prefix.ndim == 3:
-            prefix = jnp.mean(prefix, axis=1)
-        normalized[PREFIX_EMBEDDING_NAME] = prefix
-    elif "prefix_rep" in observations:
-        # Backward-compatible alias used by DSRLVectorEnv.
-        prefix = jnp.asarray(observations["prefix_rep"], dtype=jnp.float32)
-        if prefix.ndim >= 4:
-            prefix = prefix[:, -1, ...]
-        if prefix.ndim == 4:
-            prefix = jnp.reshape(prefix, (prefix.shape[0], -1, prefix.shape[-1]))
-        if prefix.ndim == 3:
-            prefix = jnp.mean(prefix, axis=1)
-        normalized[PREFIX_EMBEDDING_NAME] = prefix
+    prefix_raw = observations.get(PREFIX_EMBEDDING_NAME) or observations.get("prefix_rep")
+    if prefix_raw is not None:
+        normalized[PREFIX_EMBEDDING_NAME] = _normalize_prefix(
+            jnp.asarray(prefix_raw, dtype=jnp.float32)
+        )
 
     return normalized if normalized else observations
 

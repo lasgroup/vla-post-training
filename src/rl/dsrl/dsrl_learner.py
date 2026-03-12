@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import orbax.checkpoint as ocp
 import functools
 import logging
 from typing import Any, Dict
@@ -41,6 +42,10 @@ from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig
 
 logger = logging.getLogger(__name__)
+
+import os
+import orbax.checkpoint as ocp
+import etils.epath as epath
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +337,16 @@ class DSRLLearner(Agent):
         )
         self._target_entropy = resolve_target_entropy(self._config, self._action_dim)
         self._autotune_alpha = alpha_autotune_enabled(self._config)
+
+        self.training_steps = 0
+
+        dsrl_ckpt_dir = epath.Path(self._config.checkpoint_dir) / "dsrl_state"
+        dsrl_ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self._dsrl_ckpt_dir = dsrl_ckpt_dir
+        self._dsrl_checkpointer = ocp.StandardCheckpointer()
+        
+        if self._resuming:
+            self._restore_checkpoint()
 
         def _sample_policy_actions(params, obs, rng):
             policy = nnx.merge(self._policy_state.model_def, params)
@@ -703,3 +718,60 @@ class DSRLLearner(Agent):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
         return collected_episodes
+
+    def _checkpoint_state(self) -> dict[str, Any]:
+        return {
+            "training_steps": np.asarray(self.training_steps, dtype=np.int32),
+            "rng": self._rng,
+            "policy_state": self._policy_state,
+            "state_action_critic_state": self._state_action_critic_state,
+            "alpha_state": self._alpha_state,
+            "use_random_noise": np.asarray(self._use_random_noise, dtype=np.bool_),
+        }
+
+    def save_checkpoint(self, step: int | None = None):
+        if step is None:
+            step = int(self.training_steps)
+
+        path = self._dsrl_ckpt_dir / str(step)
+        state = self._checkpoint_state()
+
+        # Orbax requires the target path not to already exist.
+        if path.exists():
+            return
+
+        self._dsrl_checkpointer.save(path, state)
+
+    def _restore_checkpoint(self):
+        if not self._dsrl_ckpt_dir.exists():
+            logger.info("No DSRL checkpoint directory found, starting from scratch.")
+            return
+
+        steps = []
+        for p in self._dsrl_ckpt_dir.iterdir():
+            if p.is_dir():
+                try:
+                    steps.append(int(p.name))
+                except ValueError:
+                    pass
+
+        if not steps:
+            logger.info("No DSRL checkpoints found, starting from scratch.")
+            return
+
+        step = max(steps)
+        path = self._dsrl_ckpt_dir / str(step)
+
+        restored = self._dsrl_checkpointer.restore(
+            path,
+            self._checkpoint_state(),
+        )
+
+        self.training_steps = int(restored["training_steps"])
+        self._rng = restored["rng"]
+        self._policy_state = restored["policy_state"]
+        self._state_action_critic_state = restored["state_action_critic_state"]
+        self._alpha_state = restored["alpha_state"]
+        self._use_random_noise = bool(restored["use_random_noise"])
+
+        logger.info("Restored DSRL checkpoint from step %d", step)

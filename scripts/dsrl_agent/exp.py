@@ -64,11 +64,7 @@ def main(config: _config.OnlineTrainConfig):
 
     # Dummy observation and action
     reset_out = env.reset()
-    if isinstance(reset_out, (tuple, list)) and len(reset_out) == 2:
-        obs_batch = reset_out[0]
-    else:
-        obs_batch = reset_out
-    model_obs_batch = unwrap_dsrl_vector_observation(obs_batch)
+    model_obs_batch = unwrap_dsrl_vector_observation(reset_out[0])
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(lambda x: np.asarray(x)[0:1], model_obs_batch,)
     action_dim = int(getattr(env, "policy_action_dim", int(getattr(config.model, "action_dim", 32))))
@@ -132,9 +128,9 @@ def main(config: _config.OnlineTrainConfig):
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
 
-        #if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-        #   agent.save_checkpoint(step=step)
-
+        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+          agent.save_checkpoint(step=step)
+ 
     logging.info("Waiting for checkpoint manager to finish")
     agent._checkpoint_manager.wait_until_finished()
 

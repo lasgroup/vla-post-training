@@ -83,8 +83,6 @@ def obs_to_pi_zero_input(
     obs,
     env_class: str,
     *,
-    task_description: str | None = None,
-    include_prompt: bool = False,
     molmo_config: Any | None = None,
 ):
     if env_class == "libero":
@@ -134,8 +132,6 @@ def obs_to_pi_zero_input(
     else:
         raise NotImplementedError
 
-    if include_prompt and task_description is not None:
-        obs_pi_zero["prompt"] = np.asarray(str(task_description))
     return obs_pi_zero
 
 class QueryFrequencyWrapper(gym.Wrapper):
@@ -143,11 +139,9 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self,
         env: gym.Env,
         query_frequency: int,
-        pre_step_filter: Callable[[Any], Any] | None = None,
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-        self._pre_step_filter = pre_step_filter or (lambda x: x)
 
     @property
     def expand_space(self, space):
@@ -204,7 +198,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
             # Extract the sub-action for this specific step
             # tree_map handles nested actions (dict/tuple) by slicing the i-th element of every leaf
             sub_action = jax.tree_util.tree_map(lambda x: x[i], action)
-            sub_action = self._pre_step_filter(sub_action)
             obs, reward, terminated, truncated, info = self.env.step(sub_action)
             data.append(
                 {
