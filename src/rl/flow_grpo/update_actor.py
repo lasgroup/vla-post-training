@@ -102,9 +102,6 @@ def train_step(
     noise_level = config.rl.noise_level
     kl_coef = config.rl.kl_coef
 
-    if use_mpo_advantage_weight:
-        group_size = 1
-
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -170,10 +167,26 @@ def train_step(
         )
         advantage = q_value - value
         if use_mpo_advantage_weight:
-            score = advantage / beta
-            score = jnp.minimum(score, weight_clip)  # Clipping
-            score = jax.nn.softmax(score, axis=0)  # (B, )
-            score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
+            if group_size > 1:
+                total_batch_size = advantage.shape[0]
+                assert (
+                    total_batch_size % group_size == 0
+                ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
+                B = total_batch_size // group_size
+                score = advantage.reshape(B, group_size) / beta
+                if weight_clip is not None:
+                    score = jnp.minimum(score, weight_clip)
+                score = jax.nn.softmax(score, axis=-1)
+                score = score[:, jnp.newaxis, :]
+                log_probs = jnp.swapaxes(
+                    log_probs.reshape(B, group_size, -1), 1, 2
+                )
+            else:
+                score = advantage / beta
+                if weight_clip is not None:
+                    score = jnp.minimum(score, weight_clip)
+                score = jax.nn.softmax(score, axis=0)
+            score = jax.lax.stop_gradient(score)
         else:
             adv = advantage
             if normalize_adv and group_size > 1:

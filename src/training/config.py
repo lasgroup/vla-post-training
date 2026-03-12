@@ -244,6 +244,17 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
+        make_base_online_config(
+            name="pi05_libero_online_mpo_flow_grpo_sft",
+            rl_config=FlowGRPOSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                group_size=8,
+                normalize_adv=True,
+                use_mpo_advantage_weight=True,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
         # 4. Best of N
         make_base_online_config(
             name="pi05_libero_online_best_of_n",

@@ -141,10 +141,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 del online_batch
                 gc.collect()
         if update_policy:
-            #effective_group_size = _effective_group_size(
-            #    rl_config.group_size, rl_config.use_mpo_advantage_weight
-            #)
-            effective_group_size = 1 if rl_config.use_mpo_advantage_weight else rl_config.group_size
+            effective_group_size = rl_config.group_size
             # When group_size > 1, the flow GRPO train_step internally repeats each sample group_size times. Randomly subsample the batch so that reduced_batch_size * group_size == original_batch_size.
             if effective_group_size > 1:
                 subsample_rng, self._rng = jax.random.split(self._rng, 2)
