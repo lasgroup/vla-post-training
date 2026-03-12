@@ -53,16 +53,17 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    env_fn, task_description = make_env(config)
+    env_fn, task_description = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
     )
+    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
     eval_env = filtered_sft_wrap_env(
-        env_fn=env_fn,
+        env_fn=eval_env_fn,
         config=config,
-        task_description=task_description,
+        task_description=eval_task_description,
         env_num=config.collect.eval_env_num,
     )
 
@@ -110,7 +111,7 @@ def main(config: _config.OnlineTrainConfig):
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,
-                task_description=task_description,
+                task_description=eval_task_description,
                 config=config,
                 step=step,
             )

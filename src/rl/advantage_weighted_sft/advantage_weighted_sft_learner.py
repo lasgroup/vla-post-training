@@ -364,7 +364,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if update_critic:
                 if self.debug:
                     log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=batch
+                        "before_critics", train_state=self._train_state, batch=online_batch
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -413,6 +413,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 gc.collect()
             else:
                 batch = next(self._data_iter)
+        else:
+            batch = next(self._data_iter)
         if update_policy:
             if self.debug:
                 log_memory_debug("before_update_policy")

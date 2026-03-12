@@ -297,7 +297,7 @@ def _resolve_task_description(config: Any) -> str:
     return "do the task"
 
 
-def make_env_molmo(config, num_devices: int = 4):
+def make_env_molmo(config, tasks: list[str], num_devices: int = 4):
     """Build MolmoSpaces env factory for online training."""
     _ = num_devices
     task_description = _resolve_task_description(config)

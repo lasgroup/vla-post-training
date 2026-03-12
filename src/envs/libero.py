@@ -35,7 +35,7 @@ def get_libero_warm_start_action():
     return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
 
 
-def make_env_libero(config, num_devices: int = 4):
+def make_env_libero(config, tasks, num_devices: int = 4):
     benchmark_dict = benchmark.get_benchmark_dict()
     warm_start_action = get_libero_warm_start_action()
 
@@ -44,7 +44,7 @@ def make_env_libero(config, num_devices: int = 4):
     initial_states_multitask = []
     task_descriptions = []
 
-    for task in config.collect.tasks:
+    for task in tasks:
         task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task.split("_")[-1])
         task_suite = benchmark_dict[task_suite_name]()
@@ -64,7 +64,7 @@ def make_env_libero(config, num_devices: int = 4):
         task_descriptions.append(task.language)
 
     def env_fn(rank: int):
-        task_index = rank % len(config.collect.tasks)
+        task_index = rank % len(tasks)
         args = env_args_multitask[task_index].copy()
         args["render_gpu_device_id"] = rank % num_devices
         env = OffScreenRenderEnv(**args)
