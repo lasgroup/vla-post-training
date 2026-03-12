@@ -1,5 +1,6 @@
 from gymnasium.wrappers import TimeLimit
 from libero.libero import benchmark, get_libero_path
+from libero.libero.envs import OffScreenRenderEnv
 import numpy as np
 import pathlib
 import os
@@ -63,16 +64,9 @@ def make_env_libero(config, num_devices: int = 4):
         task_descriptions.append(task.language)
 
     def env_fn(rank: int):
-
-        import os
-        from libero.libero.envs import OffScreenRenderEnv
-
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(rank % num_devices)
-        os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
-
         task_index = rank % len(config.collect.tasks)
         args = env_args_multitask[task_index].copy()
-        args["render_gpu_device_id"] = 0
+        args["render_gpu_device_id"] = rank % num_devices
         env = OffScreenRenderEnv(**args)
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
