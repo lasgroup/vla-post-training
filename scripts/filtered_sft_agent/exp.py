@@ -39,36 +39,36 @@ import jax.numpy as jnp
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi.training.utils as training_utils
-
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     filtered_sft_wrap_env,
 )
 from src.envs import make_env
 import src.training.config as _config
-from src.training.collect import collect_data
-from src.training.utils import init_logging, init_wandb, log_images
+from src.training.collect import collect_data, evaluate_policy
+from src.training.utils import init_logging, init_wandb
 
 
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    env_fn, task_description = make_env(config)
+    env_fn, task_description = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
         task_description=task_description,
     )
+    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
+    eval_env = filtered_sft_wrap_env(
+        env_fn=eval_env_fn,
+        config=config,
+        task_description=eval_task_description,
+        env_num=config.collect.eval_env_num,
+    )
+
     agent = FilteredSFTLearner(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
-
-    batch = next(iter(agent._data_loader))
-    logging.info(
-        f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}"
-    )
-    log_images(batch)
 
     start_step = int(jax.device_get(agent._train_state.step))
     agent.training_steps = start_step
@@ -86,7 +86,7 @@ def main(config: _config.OnlineTrainConfig):
 
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
-            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
@@ -106,6 +106,19 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
+
+        if step % config.collect.eval_interval == 0:
+            eval_info = evaluate_policy(
+                agent=agent,
+                env=eval_env,
+                task_description=eval_task_description,
+                config=config,
+                step=step,
+            )
+            wandb.log(eval_info, step=step)
+            logging.info(
+                f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
+            )
 
         if (
             step % config.save_interval == 0 and step > start_step

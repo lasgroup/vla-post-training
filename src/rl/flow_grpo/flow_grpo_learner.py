@@ -67,14 +67,14 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 )
             }
 
-        batch = next(self._data_iter)
+        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
-            self._online_data_buffer.size >= self._online_data_buffer.batch_size
+                self._online_data_buffer.size >= online_batch_size
         )
 
         critic_info, actor_info = {}, {}
         if use_online:
-            online_batch = self._online_data_buffer.sample()
+            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -98,6 +98,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             if online_ratio >= 1.0:
                 batch = online_batch
             elif online_ratio > 0:
+                batch = next(self._data_iter)
                 first_leaf = jax.tree.leaves(batch)[0]
                 batch_size = first_leaf.shape[0]
                 n_online = min(
@@ -112,6 +113,8 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 )
                 del online_batch
                 gc.collect()
+            else:
+                batch = next(self._data_iter)
         if update_policy:
             # When group_size > 1, the flow GRPO train_step internally repeats
             # each sample group_size times. Randomly subsample the batch so that
@@ -125,6 +128,8 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 ]
                 policy_batch = jax.tree.map(lambda x: x[indices], batch)
                 policy_batch = jax.device_put(policy_batch, self._data_sharding)
+            else:
+                policy_batch = jax.device_put(batch, self._data_sharding)
 
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
