@@ -1,8 +1,10 @@
 import gc
 import functools
+import dataclasses
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
 from src.rl.flow_grpo.update_actor import train_step as flow_grpo_train_step
 from src.training.config import FlowGRPOSFTLearnerConfig
+import flax.nnx as nnx
 import openpi.training.sharding as sharding
 import jax
 import jax.numpy as jnp
@@ -50,6 +52,31 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
     def update(self) -> dict:
         assert isinstance(self._config.rl, FlowGRPOSFTLearnerConfig)
         rl_config = self._config.rl
+
+        if rl_config.critic_pre_training_steps == self.training_steps:
+            q_opt_state = self._state_action_critic_state.tx.init(
+                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+            )
+            new_ema_q_params = jax.tree.map(
+                jnp.copy, self._state_action_critic_state.params
+            )
+            self._state_action_critic_state = dataclasses.replace(
+                self._state_action_critic_state,
+                opt_state=q_opt_state,
+                ema_params=new_ema_q_params,
+            )
+            del new_ema_q_params, q_opt_state
+
+            v_opt_state = self._value_state.tx.init(
+                nnx.filter_state(self._value_state.params, nnx.Param)
+            )
+            new_ema_v_params = jax.tree.map(jnp.copy, self._value_state.params)
+            self._value_state = dataclasses.replace(
+                self._value_state,
+                opt_state=v_opt_state,
+                ema_params=new_ema_v_params,
+            )
+            del new_ema_v_params, v_opt_state
 
         self.training_steps += 1
         update_critic = (
@@ -105,21 +132,29 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     jax.tree.leaves(online_batch)[0].shape[0],
                 )
                 n_offline = batch_size - n_online
-                policy_batch = jax.tree.map(
+                batch = jax.tree.map(
                     lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
                     batch,
                     online_batch,
                 )
+                batch = jax.device_put(batch, self._data_sharding)
                 del online_batch
                 gc.collect()
         if update_policy:
-            # When group_size > 1, the flow GRPO train_step internally repeats
-            # each sample group_size times. Randomly subsample the batch so that
-            # reduced_batch_size * group_size == original_batch_size.
-            if rl_config.group_size > 1:
+            #effective_group_size = _effective_group_size(
+            #    rl_config.group_size, rl_config.use_mpo_advantage_weight
+            #)
+            effective_group_size = 1 if rl_config.use_mpo_advantage_weight else rl_config.group_size
+            # When group_size > 1, the flow GRPO train_step internally repeats each sample group_size times. Randomly subsample the batch so that reduced_batch_size * group_size == original_batch_size.
+            if effective_group_size > 1:
                 subsample_rng, self._rng = jax.random.split(self._rng, 2)
-                batch_size = self._config.batch_size
-                reduced_size = batch_size // rl_config.group_size
+                batch_size = int(jax.tree.leaves(batch)[0].shape[0])
+                if batch_size % effective_group_size != 0:
+                    raise ValueError(
+                        "Flow-GRPO actor batch size must be divisible by the "
+                        f"effective group size: {batch_size} vs {effective_group_size}."
+                    )
+                reduced_size = batch_size // effective_group_size
                 indices = jax.random.permutation(subsample_rng, batch_size)[
                     :reduced_size
                 ]

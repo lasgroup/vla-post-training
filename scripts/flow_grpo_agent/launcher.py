@@ -34,14 +34,13 @@ DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-# Use 4 envs for sharding
-DEFAULT_TRAIN_ENV_NUM = 4
+DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-DEFAULT_GROUP_SIZE = 1
-DEFAULT_NORMALIZE_ADV = 0
+DEFAULT_GROUP_SIZE = 8
+DEFAULT_NORMALIZE_ADV = 1
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -53,8 +52,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.use_mpo_advantage_weight": [True, False],
+    "rl.online_ratio": [0.5, 1.0],
+    "collect.num_initial_rollouts": [5, 10],
 }
+
 
 
 def main() -> None:
@@ -68,7 +69,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
@@ -125,6 +126,7 @@ def main() -> None:
             "num_train_steps": args.num_train_steps,
             "rl.group_size": args.group_size,
             "rl.normalize_adv": bool(args.normalize_adv),
+            "rl.use_mpo_advantage_weight": False,
         }
         flags.update(combo)
 

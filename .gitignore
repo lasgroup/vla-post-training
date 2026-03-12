@@ -12,3 +12,6 @@ checkpoints/
 wandb/
 assets/
 _job_logs/
+
+# mpi_scripts
+mpi_scripts/
