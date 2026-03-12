@@ -225,7 +225,7 @@ class FilteredSFTLearner(Agent):
 
         # initialize data loader
         assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
         self._data_loader = create_data_loader(
             config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
