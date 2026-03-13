@@ -10,11 +10,12 @@ Usage:
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
+    DEFAULT_LOG_DIR,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
@@ -47,7 +48,7 @@ DEFAULT_NORMALIZE_ADV = 0
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
-applicable_configs: Dict[str, List[Any]] = {
+applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
@@ -70,6 +71,7 @@ def main() -> None:
         help="Execution mode",
     )
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
@@ -98,6 +100,7 @@ def main() -> None:
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
     parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
     args = parser.parse_args()
 
@@ -143,7 +146,9 @@ def main() -> None:
         command_list,
         mode=args.mode,
         duration=args.duration,
+        partition=args.partition,
         dry=args.dry,
+        log_dir=args.log_dir,
     )
 
 
