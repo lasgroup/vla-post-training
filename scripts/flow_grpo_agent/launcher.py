@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project
+    ./scripts/flow_grpo_agent/launcher.py --project_name flow_grpo_debug
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -110,7 +110,7 @@ def main() -> None:
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
     parser.add_argument(
         "--normalize_adv",
-        action=argparse.BooleanOptionalAction,
+        action='store_true',
         default=DEFAULT_NORMALIZE_ADV,
     )
 
