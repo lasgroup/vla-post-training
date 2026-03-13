@@ -50,7 +50,7 @@ from src.rl.dsrl.dsrl_env import dsrl_wrap_env
 
 from src.envs import make_env
 import src.training.config as _config
-from src.training.collect import collect_data
+from src.training.collect import collect_data, evaluate_policy
 from src.training.utils import init_logging, init_wandb
 
 def main(config: _config.OnlineTrainConfig):
@@ -59,8 +59,13 @@ def main(config: _config.OnlineTrainConfig):
     if bool(getattr(config.collect, "store_prefix_rep", False)):
         raise ValueError("DSRL does not support collect.store_prefix_rep=True.")
     
-    env_fn, task_description = make_env(config)
+    env_fn, task_description = make_env(config, config.collect.tasks)
     env, task_description = dsrl_wrap_env(env_fn, config, task_description)
+    
+    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
+    eval_env, eval_task_description = dsrl_wrap_env(
+        eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num
+    )
 
     # Dummy observation and action
     reset_out = env.reset()
@@ -127,6 +132,19 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
+
+        if step % config.collect.eval_interval == 0:
+            eval_info = evaluate_policy(
+                agent=agent,
+                env=eval_env,
+                task_description=eval_task_description,
+                config=config,
+                step=step,
+            )
+            wandb.log(eval_info, step=step)
+            logging.info(
+                f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
+            )
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
           agent.save_checkpoint(step=step)

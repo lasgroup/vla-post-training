@@ -196,7 +196,7 @@ class DSRLActionDecoder:
             model=self.model,
             obs=obs,
             noise=noise,
-            return_prefix_rep=True,
+            return_prefix_rep=False,
             sharding_spec=self._sharding_spec,
         )
         if not isinstance(outputs, dict):
@@ -271,7 +271,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
             return arr
         return jax.tree_util.tree_map(_pick_last, observations)
 
-    def _process_obs_for_pi0(self, observations: Dict) -> Dict[str, Any]:
+    def _process_obs_for_pi0(self, observations: Dict, env_ids: List[int] | None = None) -> Dict[str, Any]:
         current_obs = self._select_latest_frame(observations)
 
         _IMAGE_AND_STATE_KEYS = frozenset({
@@ -299,7 +299,11 @@ class DSRLVectorEnv(SubprocVectorEnv):
                 )
             processed[obs_key] = val
 
-        processed["prompt"] = self._task_description[0] if self._task_description else ""
+        if env_ids is None:
+            task_descs = self._task_description
+        else:
+            task_descs = [self._task_description[i] for i in env_ids]
+        processed["prompt"] = np.array(task_descs)
         return processed
 
     # ----- noise -> full-horizon expansion -----
@@ -425,7 +429,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
             obs, info = reset_returns, None
 
         batch_size = len(reset_ids)
-        processed_obs = self._process_obs_for_pi0(obs)
+        processed_obs = self._process_obs_for_pi0(obs, env_ids=reset_ids)
         dummy_noise = np.zeros(
             (batch_size, self._decoder.action_horizon, self._decoder.action_dim),
             dtype=np.float32,
@@ -446,7 +450,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
             raise NotImplementedError("Partial stepping is not supported.")
         assert self._last_obs is not None, "Call reset() before step()."
 
-        processed_obs = self._process_obs_for_pi0(self._last_obs)
+        processed_obs = self._process_obs_for_pi0(self._last_obs, env_ids=list(range(self.env_num)))
         expanded_noise = self._expand_noise(noise)
 
         outputs = self._decoder.infer(processed_obs, expanded_noise)
@@ -487,9 +491,10 @@ def dsrl_wrap_env(
     env_fn,
     config: _config.OnlineTrainConfig,
     task_description: list[str] | str,
+    env_num: int | None = None,
 ) -> tuple[DSRLVectorEnv, list[str]]:
     """Build a DSRLVectorEnv with all necessary wrappers."""
-    env_num = int(config.collect.env_num)
+    env_num = int(env_num if env_num is not None else config.collect.env_num)
     replan_steps = int(config.collect.replan_steps)
     domain = str(config.collect.domain)
 
