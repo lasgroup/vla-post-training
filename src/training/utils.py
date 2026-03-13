@@ -51,10 +51,12 @@ def init_wandb(
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
         wandb.init(id=run_id, resume="must", project=config.project_name)
     else:
+        algorithm = getattr(config, "algorithm", None) or None
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
+            group=algorithm,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 

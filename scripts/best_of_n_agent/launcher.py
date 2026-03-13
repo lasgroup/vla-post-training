@@ -104,6 +104,7 @@ def main() -> None:
         flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
+            "algorithm": "best_of_n",
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
