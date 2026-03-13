@@ -35,8 +35,9 @@ DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_N_SAMPLES = 8
 # Use 4 envs for sharding
-DEFAULT_TRAIN_ENV_NUM = 1
-DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_TRAIN_ENV_NUM = 4
+DEFAULT_TASKS = ["libero_90_59-62"]
+DEFAULT_EVAL_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
@@ -83,6 +84,8 @@ def main() -> None:
     parser.add_argument("--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL)
     parser.add_argument("--n_samples", type=int, default=DEFAULT_N_SAMPLES)
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
+    parser.add_argument("--tasks", nargs="+", default=DEFAULT_TASKS)
+    parser.add_argument("--eval_tasks", nargs="+", default=DEFAULT_EVAL_TASKS)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
     parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
@@ -115,7 +118,8 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
             "collect.eval_env_num": args.eval_env_num,
-            "collect.tasks": DEFAULT_TASKS,
+            "collect.tasks": args.tasks,
+            "collect.eval_tasks": args.eval_tasks,
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,

@@ -35,7 +35,34 @@ def get_libero_warm_start_action():
     return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
 
 
-def make_env_libero(config, tasks, num_devices: int = 4):
+def _get_physical_cuda_device_ids(default: int = 0) -> list[int]:
+    """Return physical GPU indices from CUDA_VISIBLE_DEVICES.
+
+    EGL rendering requires physical device IDs, not the 0-indexed remapped IDs
+    that CUDA exposes after CUDA_VISIBLE_DEVICES filtering.
+    """
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if not visible:
+        return [default]
+    ids = []
+    for dev in visible.split(","):
+        dev = dev.strip()
+        if dev and dev != "-1":
+            try:
+                ids.append(int(dev))
+            except ValueError:
+                pass  # GPU-UUID form — fall back to default
+    return ids if ids else [default]
+
+
+def _infer_num_visible_cuda_devices(default: int = 1) -> int:
+    return max(default, len(_get_physical_cuda_device_ids()))
+
+
+def make_env_libero(config, tasks, num_devices: int | None = None):
+    if num_devices is None:
+        num_devices = _infer_num_visible_cuda_devices(default=1)
+    physical_gpu_ids = _get_physical_cuda_device_ids()
     benchmark_dict = benchmark.get_benchmark_dict()
     warm_start_action = get_libero_warm_start_action()
 
@@ -66,7 +93,7 @@ def make_env_libero(config, tasks, num_devices: int = 4):
     def env_fn(rank: int):
         task_index = rank % len(tasks)
         args = env_args_multitask[task_index].copy()
-        args["render_gpu_device_id"] = rank % num_devices
+        args["render_gpu_device_id"] = physical_gpu_ids[rank % len(physical_gpu_ids)]
         env = OffScreenRenderEnv(**args)
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
