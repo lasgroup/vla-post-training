@@ -1,9 +1,10 @@
 import datetime as dt
 import itertools
 import os
+import re
 import secrets
 import shlex
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 # Default SLURM settings matching existing bash scripts
 DEFAULT_ACCOUNT = "a143"
@@ -48,13 +49,68 @@ def generate_srun_command(
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
 
 
-def auto_exp_name(project_name: str, combo: Dict[str, Any], run_idx: int) -> str:
+def _sanitize_name_value(value: Any) -> str:
+    if isinstance(value, bool):
+        value = "true" if value else "false"
+    elif isinstance(value, (list, tuple)):
+        value = "-".join(str(v) for v in value)
+    else:
+        value = str(value)
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", value)
+    value = re.sub(r"-{2,}", "-", value).strip("-_.")
+    return value or "none"
+
+
+def _name_label(flag: str) -> str:
+    if flag == "collect.tasks":
+        return "task"
+    if flag == "collect.eval_tasks":
+        return "evaltask"
+    return flag.rsplit(".", 1)[-1]
+
+
+def auto_exp_name(
+    project_name: str,
+    combo: Dict[str, Any],
+    run_idx: int,
+    *,
+    defaults: Optional[Dict[str, Any]] = None,
+    tracked_keys: Optional[Iterable[str]] = None,
+) -> str:
     """Generate a unique experiment name suitable for checkpoint directories."""
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     suffix = secrets.token_hex(3)
-    if "seed" in combo:
-        return f"{project_name}_{timestamp}_{suffix}_seed{combo['seed']}"
-    return f"{project_name}_{timestamp}_{suffix}_run{run_idx}"
+    if defaults is None and tracked_keys is None:
+        if "seed" in combo:
+            return f"{project_name}_{timestamp}_{suffix}_seed{combo['seed']}"
+        return f"{project_name}_{timestamp}_{suffix}_run{run_idx}"
+
+    parts = [project_name, timestamp, suffix]
+    seen = set()
+    name_keys = list(tracked_keys or [])
+    if "collect.tasks" in combo and "collect.tasks" not in name_keys:
+        name_keys.insert(0, "collect.tasks")
+    if "seed" in combo and "seed" not in name_keys:
+        name_keys.append("seed")
+
+    for key in name_keys:
+        if key in seen or key not in combo:
+            continue
+        seen.add(key)
+        if (
+            key not in {"collect.tasks", "seed"}
+            and defaults is not None
+            and key in defaults
+            and combo[key] == defaults[key]
+        ):
+            continue
+        if key == "seed":
+            parts.append(f"seed{_sanitize_name_value(combo[key])}")
+        else:
+            label = _name_label(key)
+            parts.append(f"{label}-{_sanitize_name_value(combo[key])}")
+
+    return "_".join(parts)
 
 
 def _normalize_flag_name(flag: str) -> str:

@@ -36,10 +36,17 @@ DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
+TASK_SWEEP: List[Dict[str, Any]] = [
+    {
+        "collect.tasks": DEFAULT_TASKS,
+        "collect.eval_tasks": DEFAULT_EVAL_TASKS,
+    }
+]
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -101,8 +108,10 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
+    tracked_name_keys = ["collect.tasks", *applicable_configs.keys(), "collect.eval_tasks"]
     for idx, combo in enumerate(combos):
-        flags: Dict[str, Any] = {
+        for task_idx, task_flags in enumerate(TASK_SWEEP):
+            flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
             "seed": DEFAULT_SEED,
@@ -118,22 +127,33 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
             "collect.eval_env_num": args.eval_env_num,
-            "collect.tasks": DEFAULT_TASKS,
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
         }
-        flags.update(combo)
+            default_name_flags = dict(flags)
+            default_name_flags.update(TASK_SWEEP[0])
+            flags.update(combo)
+            flags.update(task_flags)
 
-        # Keep these in sync with policy_training_start_step
-        policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
-        flags["rl.critic_pre_training_steps"] = policy_start
+            # Keep these in sync with policy_training_start_step
+            policy_start = flags["rl.policy_training_start_step"]
+            flags["rl.td_weight_schedule.switch_step"] = policy_start
+            flags["rl.critic_pre_training_steps"] = policy_start
 
-        flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
+            flags.setdefault(
+                "exp_name",
+                auto_exp_name(
+                    args.project_name,
+                    flags,
+                    idx * len(TASK_SWEEP) + task_idx,
+                    defaults=default_name_flags,
+                    tracked_keys=tracked_name_keys,
+                ),
+            )
 
-        cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
-        command_list.append(cmd)
+            cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
+            command_list.append(cmd)
 
     generate_run_commands(
         command_list,

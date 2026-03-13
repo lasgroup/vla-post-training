@@ -59,7 +59,7 @@ def main(config: _config.OnlineTrainConfig):
     if bool(getattr(config.collect, "store_prefix_rep", False)):
         raise ValueError("DSRL does not support collect.store_prefix_rep=True.")
     
-    env_fn, task_description = make_env(config)
+    env_fn, task_description = make_env(config, config.collect.tasks)
     env, task_description = dsrl_wrap_env(env_fn, config, task_description)
 
     # Dummy observation and action

@@ -26,6 +26,12 @@ CONFIG_NAME = "pi05_libero_online_dsrl"
 PROJECT_NAME = "dsrl_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
+DEFAULT_TASKS = ["libero_90_59x4"]
+TASK_SWEEP: List[Dict[str, Any]] = [
+    {
+        "collect.tasks": DEFAULT_TASKS,
+    }
+]
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -62,20 +68,34 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
+    tracked_name_keys = ["collect.tasks", *applicable_configs.keys()]
     for idx, combo in enumerate(combos):
-        flags: Dict[str, Any] = {
+        for task_idx, task_flags in enumerate(TASK_SWEEP):
+            flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
         }
-        flags.update(combo)
+            default_name_flags = dict(flags)
+            default_name_flags.update(TASK_SWEEP[0])
+            flags.update(combo)
+            flags.update(task_flags)
 
-        flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
+            flags.setdefault(
+                "exp_name",
+                auto_exp_name(
+                    args.project_name,
+                    flags,
+                    idx * len(TASK_SWEEP) + task_idx,
+                    defaults=default_name_flags,
+                    tracked_keys=tracked_name_keys,
+                ),
+            )
 
-        cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
-        command_list.append(cmd)
+            cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
+            command_list.append(cmd)
 
     generate_run_commands(
         command_list,
