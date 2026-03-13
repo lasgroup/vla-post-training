@@ -70,7 +70,7 @@ class RLAlgorithmConfig:
 @dataclasses.dataclass(frozen=True)
 class BestofNLearnerConfig(RLAlgorithmConfig):
     n_samples: int = 8
-    online_ratio: float = 0.0
+    online_ratio: float = 1.0
     critic_update_interval: int = 1
     critic_training_start_step: int = 0
     use_ema_critic: bool = True
@@ -284,6 +284,7 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
+    algorithm: str = ""
 
 
 def make_base_online_config(

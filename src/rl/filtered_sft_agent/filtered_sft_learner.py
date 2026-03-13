@@ -461,23 +461,32 @@ class FilteredSFTLearner(Agent):
         task_description: list[str],
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
-        processed_obs = self._process_obs_for_pi0(
-            observations, task_description=task_description
-        )
-        actions = self._sample_action(
-            observations=processed_obs,
-            rng=rng,
-            train_state=self._train_state,
-            return_prefix_rep=self._config.collect.store_prefix_rep,
-        )
-        # TODO: if store_prefix_rep is True, this will crash because (i) openpi output transforms
-        # cannot process tuples and (ii) venvs do not accept tuples as input
 
-        # TODO: check if casting is necessary
-        if isinstance(actions, (tuple, list)):
-            return tuple(np.asarray(x, dtype=np.float32) for x in actions)
+        # Fix to avoid multitask inference crash caused by the prompt being a list of strings. 
+        task_to_indices: dict[str, list[int]] = {}
+        for i, task in enumerate(task_description):
+            task_to_indices.setdefault(task, []).append(i)
 
-        return np.asarray(actions, dtype=np.float32)
+        all_actions = None
+        for task, indices in task_to_indices.items():
+            processed_obs = self._process_obs_for_pi0(
+                jax.tree.map(lambda x: x[indices], observations),
+                task_description=task,
+            )
+            group_actions = self._sample_action(
+                observations=processed_obs,
+                rng=rng,
+                train_state=self._train_state,
+                return_prefix_rep=False,
+            )
+            group_actions = np.asarray(group_actions, dtype=np.float32)
+            if all_actions is None:
+                all_actions = np.zeros(
+                    (len(task_description), *group_actions.shape[1:]), dtype=np.float32
+                )
+            all_actions[indices] = group_actions
+
+        return all_actions
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         return self._generate_actions(observations, **kwargs)

@@ -212,6 +212,10 @@ class BestofNLearner(FilteredSFTLearner):
         # filtered SFT keeps only successful episodes.
         self._save_episode_in_buffer(episode_data, task_description)
 
+    def _infer_policy_batch_size(self, observations: Dict) -> int:
+        first = next(v for k, v in observations.items() if k != "prompt")
+        return np.asarray(first).shape[0]
+
     def sample_actions(self, observations, **kwargs):
         if self.training_steps < self._config.rl.critic_inference_start_step:
             return super().sample_actions(observations, **kwargs)
@@ -410,7 +414,7 @@ class BestofNLearner(FilteredSFTLearner):
 
         online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
-                self._online_data_buffer.size >= online_batch_size
+                online_batch_size > 0 and self._online_data_buffer.size >= online_batch_size
         )
 
         critic_info = {}
