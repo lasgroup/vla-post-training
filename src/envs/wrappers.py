@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Callable
+from typing import Any, Dict, List
 import gymnasium as gym
 import jax
 import logging
@@ -82,7 +82,6 @@ def _quat2axisangle(quat):
 def obs_to_pi_zero_input(
     obs,
     env_class: str,
-    *,
     molmo_config: Any | None = None,
 ):
     if env_class == "libero":
@@ -131,8 +130,8 @@ def obs_to_pi_zero_input(
         )
     else:
         raise NotImplementedError
-
     return obs_pi_zero
+
 
 class QueryFrequencyWrapper(gym.Wrapper):
     def __init__(
