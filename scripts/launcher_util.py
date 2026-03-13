@@ -180,7 +180,29 @@ def generate_run_commands(
 
 
 def dict_permutations(d: dict) -> List[dict]:
-    """Generate all combinations from a dict of lists (cartesian product)."""
-    keys = d.keys()
-    values = d.values()
-    return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
+    """Generate all combinations from a dict of lists (cartesian product).
+
+    Keys can be str (single param) or tuple of str (grouped params swept together).
+    For tuple keys, each value must be a list of lists: one inner list per combo,
+    with one element per key in the tuple.  E.g.::
+
+        {("collect.tasks", "collect.eval_tasks"): [[["t1"], ["t1"]], [["t2"], ["t2"]]]}
+
+    Raises ValueError if the same parameter appears under more than one key.
+    """
+    seen: set = set()
+    for k in d:
+        for key in ((k,) if isinstance(k, str) else k):
+            if key in seen:
+                raise ValueError(f"Conflicting key in grid: '{key}'")
+            seen.add(key)
+
+    groups = [(([k], [[v] for v in vals]) if isinstance(k, str) else (list(k), vals))
+              for k, vals in d.items()]
+    result = []
+    for combo in itertools.product(*[g[1] for g in groups]):
+        flat = {}
+        for (keys, _), vals in zip(groups, combo):
+            flat.update(zip(keys, vals))
+        result.append(flat)
+    return result

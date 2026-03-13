@@ -10,7 +10,7 @@ Usage:
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
@@ -48,7 +48,7 @@ DEFAULT_NUM_CPUS = 16
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
-applicable_configs: Dict[str, List[Any]] = {
+applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "rl.n_samples": [8],
     "collect.use_time_to_success_as_reward": [True],

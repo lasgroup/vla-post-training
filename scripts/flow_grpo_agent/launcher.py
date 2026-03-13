@@ -10,7 +10,7 @@ Usage:
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
@@ -48,7 +48,7 @@ DEFAULT_NORMALIZE_ADV = 0
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
-applicable_configs: Dict[str, List[Any]] = {
+applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
