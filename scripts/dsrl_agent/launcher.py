@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
+    DEFAULT_LOG_DIR,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
@@ -59,6 +60,7 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
     args = parser.parse_args()
 
     combos = dict_permutations(applicable_configs)
@@ -84,6 +86,7 @@ def main() -> None:
         duration=args.duration,
         partition=args.partition,
         dry=args.dry,
+        log_dir=args.log_dir,
     )
 
 

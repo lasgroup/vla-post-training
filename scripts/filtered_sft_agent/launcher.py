@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
+    DEFAULT_LOG_DIR,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
@@ -79,6 +80,7 @@ def main() -> None:
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
     parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
     args = parser.parse_args()
 
@@ -115,6 +117,7 @@ def main() -> None:
         duration=args.duration,
         partition=args.partition,
         dry=args.dry,
+        log_dir=args.log_dir,
     )
 
 

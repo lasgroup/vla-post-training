@@ -13,6 +13,7 @@ DEFAULT_PARTITION = "normal"
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
 DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+DEFAULT_LOG_DIR = "logs"
 
 
 def generate_srun_command(
@@ -112,6 +113,7 @@ def generate_run_commands(
     mode: str = "swiss-ai",
     dry: bool = False,
     prompt: bool = True,
+    log_dir: str = DEFAULT_LOG_DIR,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -128,8 +130,10 @@ def generate_run_commands(
         prompt: If True, ask for confirmation before submitting.
     """
     if mode == "swiss-ai":
+        if not dry:
+            os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
+        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "
