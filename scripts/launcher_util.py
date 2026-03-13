@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "03:30:00"
+DEFAULT_PARTITION = "normal"
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
 DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
@@ -106,6 +107,7 @@ def generate_run_commands(
     num_gpus: int = 0,
     mem: int = 0,
     duration: str = DEFAULT_DURATION,
+    partition: str = DEFAULT_PARTITION,
     account: str = DEFAULT_ACCOUNT,
     mode: str = "swiss-ai",
     dry: bool = False,
@@ -127,7 +129,7 @@ def generate_run_commands(
     """
     if mode == "swiss-ai":
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} "
+        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "
