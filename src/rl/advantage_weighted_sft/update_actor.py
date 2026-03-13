@@ -27,12 +27,12 @@ def _awr_beta(config: OnlineTrainConfig) -> float:
 
 @at.typecheck
 def train_step(
-    config: OnlineTrainConfig,
-    rng: at.KeyArrayLike,
-    policy_state: training_utils.TrainState,
-    state_action_critic_state: training_utils.TrainState,
-    value_state: training_utils.TrainState,
-    batch: tuple[_model.Observation, ObsType, _model.Actions],
+        config: OnlineTrainConfig,
+        rng: at.KeyArrayLike,
+        policy_state: training_utils.TrainState,
+        state_action_critic_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 
@@ -44,7 +44,8 @@ def train_step(
 
     value_critic = create_critic(value_state, config)
     value_critic.eval()
-
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    reset_period = config.rl.reset_policy_params_to_ema_period
     # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
     critic_actions = flatten_action_horizon(actions)
     value = summarize_critic_values(value_critic(critic_observation))  # (B,)
@@ -61,11 +62,11 @@ def train_step(
 
     @at.typecheck
     def loss_fn(
-        model: _model.BaseModel,
-        rng: at.KeyArrayLike,
-        policy_observation: _model.Observation,
-        actions: _model.Actions,
-        score: jnp.ndarray,
+            model: _model.BaseModel,
+            rng: at.KeyArrayLike,
+            policy_observation: _model.Observation,
+            actions: _model.Actions,
+            score: jnp.ndarray,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
@@ -113,11 +114,28 @@ def train_step(
             new_state,
             ema_params=jax.tree.map(
                 lambda old, new: policy_state.ema_decay * old
-                + (1 - policy_state.ema_decay) * new,
+                                 + (1 - policy_state.ema_decay) * new,
                 policy_state.ema_params,
                 new_params,
             ),
         )
+        if reset_period:
+            step = new_state.step
+
+            def keep_state(state):
+                return state
+
+            def revert_to_ema(state):
+                return state.replace(
+                    params=jax.tree.map(lambda x: x, state.ema_params)
+                )
+
+            new_state = jax.lax.cond(
+                step % reset_period == 0,
+                revert_to_ema,
+                keep_state,
+                new_state
+            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(
@@ -131,12 +149,12 @@ def train_step(
         ),
     )
     info = {
-        "loss": loss,
-        "grad_norm": optax.global_norm(grads),
-        "param_norm": optax.global_norm(kernel_params),
-        "advantage_mean": jnp.mean(advantage),
-        "advantage_max": jnp.max(advantage),
-        "advantage_min": jnp.min(advantage),
-        "advantage_std": jnp.std(advantage),
-    } | aux_data
+               "loss": loss,
+               "grad_norm": optax.global_norm(grads),
+               "param_norm": optax.global_norm(kernel_params),
+               "advantage_mean": jnp.mean(advantage),
+               "advantage_max": jnp.max(advantage),
+               "advantage_min": jnp.min(advantage),
+               "advantage_std": jnp.std(advantage),
+           } | aux_data
     return new_state, info

@@ -67,10 +67,10 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 )
             }
 
-        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
-        use_online = (
-                self._online_data_buffer.size >= online_batch_size
+        online_batch_size = int(
+            self._config.batch_size * min(1.0, self._config.rl.online_ratio)
         )
+        use_online = self._online_data_buffer.size >= online_batch_size
 
         critic_info, actor_info = {}, {}
         if use_online:
@@ -142,6 +142,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 )
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
+
         info = (
             actor_info
             | critic_info
