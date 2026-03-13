@@ -25,6 +25,7 @@ class Agent(object):
     training_steps: int = 0
     env_steps: int = 0
     episodes: int = 0
+    total_collected_episodes: int = 0
     base_dir: str = "/agent"
 
     @abstractmethod

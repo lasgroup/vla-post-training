@@ -40,8 +40,8 @@ from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str]):
-    env_num = config.collect.env_num
+def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str], env_num: int | None = None):
+    env_num = env_num if env_num is not None else config.collect.env_num
     replan_steps = config.collect.replan_steps
     env_class = config.collect.domain
     seed = config.seed
@@ -225,7 +225,7 @@ class FilteredSFTLearner(Agent):
 
         # initialize data loader
         assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(1, int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
         self._data_loader = create_data_loader(
             config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
         )
@@ -401,12 +401,14 @@ class FilteredSFTLearner(Agent):
         )
         # Vector envs expect a batch dimension for actions. Policy inference
         # unbatches when batch_size == 1, so add it back for single-env runs.
+        num_devices = len(jax.devices())
+        sharding_spec = self._policy_sharding_spec if batch_size % num_devices == 0 else None
         actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
             noise=noise,
             return_prefix_rep=return_prefix_rep,
-            sharding_spec=self._policy_sharding_spec,
+            sharding_spec=sharding_spec,
         )["actions"]
 
         if return_prefix_rep:

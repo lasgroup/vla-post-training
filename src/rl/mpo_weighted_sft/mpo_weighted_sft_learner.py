@@ -104,11 +104,15 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
     ]:
         # Add prefix representation to the batch for the critic
         policy_sample_rng, rng = jax.random.split(rng, 2)
-        on_policy_action = self._get_on_policy_action(
-            online_observation=_model.Observation.from_dict(batch["observation"]),
-            policy_state=policy_state,
-            rng=policy_sample_rng,
-        )
+        assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
+        if self._config.rl.store_buffer_actions_in_batch:
+            value_action = batch["actions"]
+        else:
+            value_action = self._get_on_policy_action(
+                online_observation=_model.Observation.from_dict(batch["observation"]),
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
 
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -118,7 +122,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         # This ensures that we train an on policy critic.
         value_batch = (
             batch[0],
-            on_policy_action,
+            value_action,
             batch[2],
             batch[3],
             batch[4],

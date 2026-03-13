@@ -84,8 +84,9 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
     critic_inference_start_step: int = 100
-    td_weight_schedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
+    td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
+    critic_pre_training_steps: int = 1_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,6 +112,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     td_weight_schedule: StepSchedule = StepSchedule(
         init_value=0.0, end_value=1.0, switch_step=1_000
     )
+    critic_pre_training_steps: int = 1_000
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
@@ -127,6 +129,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    use_mpo_advantage_weight: bool = True
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
@@ -187,6 +190,7 @@ class CollectionConfig:
     env_resolution: int = 256
     resize_image: int = 224
     num_rollouts: int = 50
+    num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
     molmo: MolmoConfig = MolmoConfig()
     tasks: list[str] = dataclasses.field(
@@ -199,15 +203,28 @@ class CollectionConfig:
             )
         },
     )
+    eval_tasks: list[str] = dataclasses.field(
+        default_factory=lambda: ["libero_90_59x4"],
+        metadata={
+            "help": (
+                "List of tasks to evaluate. Supports individual task names (e.g., 'libero_90_34'), "
+                "ranges (e.g., 'libero_90_22-56'), and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). The total number of expanded tasks must be divisible by 4."
+            )
+        },
+    )
     replan_steps: int = 5
     num_steps_wait: int = 10
     use_time_to_success_as_reward: bool = False
     store_prefix_rep: bool = False
+    eval_env_num: int = 4
+    eval_interval: int = 300
+    num_eval_rollouts: int = 32
 
-    def __post_init__(self):
+    def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers
         expanded_tasks = []
-        for task in self.tasks:
+        for task in tasks:
             # 1. Extract optional multiplier (e.g., "x4")
             multiplier = 1
             base_task = task
@@ -231,9 +248,15 @@ class CollectionConfig:
             # 3. Add to expanded list, repeating by the multiplier
             for sub_task in sub_tasks:
                 expanded_tasks.extend([sub_task] * multiplier)
-        
+        return expanded_tasks
+
+    def __post_init__(self):
+        expanded_tasks = self.expand_tasks(self.tasks)
         object.__setattr__(self, 'tasks', expanded_tasks)
         assert len(self.tasks) == self.env_num, f"Total number of tasks ({len(self.tasks)}) must match env_num ({self.env_num})."
+        expanded_eval_tasks = self.expand_tasks(self.eval_tasks)
+        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks)
+        assert len(self.eval_tasks) == self.eval_env_num, f"Total number of eval tasks ({len(self.eval_tasks)}) must match eval_env_num ({self.eval_env_num})."
 
 
 @dataclasses.dataclass(frozen=True)
@@ -247,6 +270,7 @@ class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    default_prompt: str | None = None
 
 
 def make_base_online_config(

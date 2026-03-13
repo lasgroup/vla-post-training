@@ -1,4 +1,5 @@
 # ruff: noqa: F722
+import dataclasses
 import functools
 from typing import Any, Dict, Tuple
 import gc
@@ -312,6 +313,30 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
+        if rl_config.critic_pre_training_steps == self.training_steps:
+            # Reset optimizer state of the value and q function
+            q_opt_state = self._state_action_critic_state.tx.init(
+                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+            )
+            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
+            self._state_action_critic_state = dataclasses.replace(
+                self._state_action_critic_state,
+                opt_state=q_opt_state,
+                ema_params=new_ema_state_action_critic_params,
+            )
+            del new_ema_state_action_critic_params, q_opt_state
+
+            v_opt_state = self._value_state.tx.init(
+                nnx.filter_state(self._value_state.params, nnx.Param)
+            )
+            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
+            self._value_state = dataclasses.replace(
+                self._value_state,
+                opt_state=v_opt_state,
+                ema_params=new_ema_value_params,
+            )
+            del new_ema_value_params, v_opt_state
+
         self.training_steps += 1
         update_critic = (
                 self.training_steps >= rl_config.critic_training_start_step
@@ -328,7 +353,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
             }
 
-        batch = next(self._data_iter)
         online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
                 self._online_data_buffer.size >= online_batch_size
@@ -340,7 +364,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if update_critic:
                 if self.debug:
                     log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=batch
+                        "before_critics", train_state=self._train_state, batch=online_batch
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -368,6 +392,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             elif online_ratio > 0:
                 # Mix online and offline into a fixed-size batch instead of
                 # concatenating (which would double the batch and OOM).
+                batch = next(self._data_iter)
                 first_leaf = jax.tree.leaves(batch)[0]
                 batch_size = first_leaf.shape[0]
                 n_online = min(
@@ -386,6 +411,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 batch = jax.device_put(batch, self._data_sharding)
                 del online_batch
                 gc.collect()
+            else:
+                batch = next(self._data_iter)
+        else:
+            batch = next(self._data_iter)
         if update_policy:
             if self.debug:
                 log_memory_debug("before_update_policy")

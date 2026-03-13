@@ -28,12 +28,18 @@ DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
-DEFAULT_POLICY_UPDATE_INTERVAL = 20
-DEFAULT_NUM_ROLLOUTS = 50
-DEFAULT_COLLECT_INTERVAL = 200
-DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 50
+DEFAULT_POLICY_UPDATE_INTERVAL = 1
+DEFAULT_NUM_ROLLOUTS = 1
+DEFAULT_COLLECT_INTERVAL = 300
+DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
+DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_EVAL_ENV_NUM = 4
+DEFAULT_EVAL_INTERVAL = 300
+DEFAULT_NUM_EVAL_ROLLOUTS = 32
+NUM_TRAIN_STEPS = 5_000
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -41,9 +47,13 @@ DEFAULT_BATCH_SIZE = 256
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10, 20],
+    "rl.num_critic_updates_per_batch": [
+        10,
+    ],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [32, 64, 256]
+    "batch_size": [256],
+    "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [0.5, 1.0],
 }
 
 
@@ -82,6 +92,11 @@ def main() -> None:
     parser.add_argument(
         "--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL
     )
+    parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
+    parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
+    parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
+    parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
 
     args = parser.parse_args()
 
@@ -102,8 +117,19 @@ def main() -> None:
             "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "batch_size": DEFAULT_BATCH_SIZE,
+            "collect.env_num": args.train_env_num,
+            "collect.eval_env_num": args.eval_env_num,
+            "collect.tasks": DEFAULT_TASKS,
+            "collect.eval_interval": args.eval_interval,
+            "collect.num_eval_rollouts": args.num_eval_rollouts,
+            "num_train_steps": args.num_train_steps,
         }
         flags.update(combo)
+
+        # Keep these in sync with policy_training_start_step
+        policy_start = flags["rl.policy_training_start_step"]
+        flags["rl.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.critic_pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 
