@@ -34,15 +34,14 @@ DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-# Use 4 envs for sharding
-DEFAULT_TRAIN_ENV_NUM = 4
-DEFAULT_TASKS = ["libero_90_59x4"]
+DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
+DEFAULT_USE_EMA_FOR_DATA_COLLECTION = 1
 NUM_TRAIN_STEPS = 5_000
-DEFAULT_GROUP_SIZE = 1
-DEFAULT_NORMALIZE_ADV = 0
+DEFAULT_GROUP_SIZE = 8
+DEFAULT_NORMALIZE_ADV = 1
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -54,8 +53,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.use_mpo_advantage_weight": [True, False],
+    "rl.online_ratio": [0.5, 1.0],
+    "collect.num_initial_rollouts": [5, 10],
 }
+
 
 
 def main() -> None:
@@ -69,7 +70,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
@@ -94,7 +95,15 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
+    parser.add_argument(
+        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
+    )
+    parser.add_argument(
+        "--use_ema_for_data_collection",
+        type=int,
+        default=DEFAULT_USE_EMA_FOR_DATA_COLLECTION,
+    )
+    #parser.add_argument("--fsdp_devices", type=int, default=DEFAULT_FSDP_DEVICES)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
     parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
@@ -108,6 +117,7 @@ def main() -> None:
             "overwrite": True,
             "project_name": args.project_name,
             "seed": DEFAULT_SEED,
+            "collect.seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
             "collect.num_rollouts": args.num_rollouts,
@@ -120,12 +130,16 @@ def main() -> None:
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
             "collect.eval_env_num": args.eval_env_num,
-            "collect.tasks": DEFAULT_TASKS,
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
+            "collect.use_ema_for_data_collection": bool(
+                args.use_ema_for_data_collection
+            ),
+            #"fsdp_devices": args.fsdp_devices,
             "num_train_steps": args.num_train_steps,
             "rl.group_size": args.group_size,
             "rl.normalize_adv": bool(args.normalize_adv),
+            "rl.use_mpo_advantage_weight": False,
         }
         flags.update(combo)
 
@@ -133,6 +147,9 @@ def main() -> None:
         policy_start = flags["rl.policy_training_start_step"]
         flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
+
+        if "seed" in flags and "collect.seed" not in combo:
+            flags["collect.seed"] = flags["seed"]
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 
