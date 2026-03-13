@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Launcher for Flow-GRPO experiments.
-
-Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
-"""
+"""Launcher for grouped-MPO experiments."""
 
 import argparse
 import os
@@ -21,9 +15,9 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/flow_grpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
-PROJECT_NAME = "flow_grpo_sweep"
+SCRIPT = "scripts/mpo_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_grouped_mpo_sft"
+PROJECT_NAME = "grouped_mpo_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
@@ -40,9 +34,8 @@ DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
-NUM_TRAIN_STEPS = 5_000
 DEFAULT_GROUP_SIZE = 8
-DEFAULT_NORMALIZE_ADV = True
+NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
         "collect.tasks": DEFAULT_TASKS,
@@ -50,9 +43,6 @@ TASK_SWEEP: List[Dict[str, Any]] = [
     }
 ]
 
-# ---------- Hyperparameter grid ----------
-# Keys can be any `_config.cli()` override.
-# If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
@@ -62,27 +52,21 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [5, 10],
-    "rl.normalize_adv": [False, True],
 }
-
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dry", action="store_true", help="Print commands without submitting"
-    )
+    parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
     parser.add_argument(
         "--mode",
         default="swiss-ai",
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
-    parser.add_argument(
-        "--config_name", default=CONFIG_NAME, help="Training config name"
-    )
+    parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)
     parser.add_argument(
         "--checkpoint_base_dir",
@@ -97,22 +81,13 @@ def main() -> None:
         "--policy_update_interval", type=int, default=DEFAULT_POLICY_UPDATE_INTERVAL
     )
     parser.add_argument("--num_rollouts", type=int, default=DEFAULT_NUM_ROLLOUTS)
-    parser.add_argument(
-        "--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL
-    )
+    parser.add_argument("--collect_interval", type=int, default=DEFAULT_COLLECT_INTERVAL)
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument(
-        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
-    )
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
-    parser.add_argument(
-        "--normalize_adv",
-        action=argparse.BooleanOptionalAction,
-        default=DEFAULT_NORMALIZE_ADV,
-    )
 
     args = parser.parse_args()
 
@@ -127,34 +102,31 @@ def main() -> None:
     for idx, combo in enumerate(combos):
         for task_idx, task_flags in enumerate(TASK_SWEEP):
             flags: Dict[str, Any] = {
-            "overwrite": True,
-            "project_name": args.project_name,
-            "seed": DEFAULT_SEED,
-            "log_interval": args.log_interval,
-            "checkpoint_base_dir": args.checkpoint_base_dir,
-            "collect.num_rollouts": args.num_rollouts,
-            "collect.collect_interval": args.collect_interval,
-            "rl.policy_training_start_step": args.policy_start_training,
-            "rl.policy_update_interval": args.policy_update_interval,
-            "rl.buffer_capacity": args.buffer_capacity,
-            "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
-            "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
-            "batch_size": DEFAULT_BATCH_SIZE,
-            "collect.env_num": args.train_env_num,
-            "collect.eval_env_num": args.eval_env_num,
-            "collect.eval_interval": args.eval_interval,
-            "collect.num_eval_rollouts": args.num_eval_rollouts,
-            "num_train_steps": args.num_train_steps,
-            "rl.group_size": args.group_size,
-            "rl.normalize_adv": args.normalize_adv,
-            "rl.use_mpo_advantage_weight": False,
-        }
+                "overwrite": True,
+                "project_name": args.project_name,
+                "seed": DEFAULT_SEED,
+                "log_interval": args.log_interval,
+                "checkpoint_base_dir": args.checkpoint_base_dir,
+                "collect.num_rollouts": args.num_rollouts,
+                "collect.collect_interval": args.collect_interval,
+                "rl.policy_training_start_step": args.policy_start_training,
+                "rl.policy_update_interval": args.policy_update_interval,
+                "rl.buffer_capacity": args.buffer_capacity,
+                "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
+                "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
+                "batch_size": DEFAULT_BATCH_SIZE,
+                "collect.env_num": args.train_env_num,
+                "collect.eval_env_num": args.eval_env_num,
+                "collect.eval_interval": args.eval_interval,
+                "collect.num_eval_rollouts": args.num_eval_rollouts,
+                "num_train_steps": args.num_train_steps,
+                "rl.group_size": args.group_size,
+            }
             default_name_flags = dict(flags)
             default_name_flags.update(TASK_SWEEP[0])
             flags.update(combo)
             flags.update(task_flags)
 
-            # Keep these in sync with policy_training_start_step
             policy_start = flags["rl.policy_training_start_step"]
             flags["rl.td_weight_schedule.switch_step"] = policy_start
             flags["rl.critic_pre_training_steps"] = policy_start

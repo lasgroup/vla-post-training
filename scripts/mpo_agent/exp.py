@@ -60,6 +60,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
     StateValueDef,
 )
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
+from src.rl.grouped_mpo.grouped_mpo_learner import GroupedMPOWeightedSFTLearner
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
 from src.rl.networks.decoders.values.state_action_value import (
     StateActionEnsembleDecoder,
@@ -231,7 +232,11 @@ def main(config: _config.OnlineTrainConfig):
     state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
         config, prefix_embedding_shape=prefix_embedding_shape
     )
-    agent = MPOWeightedSFTLearner(
+    learner_cls = MPOWeightedSFTLearner
+    if isinstance(config.rl, _config.GroupedMPOWeightedSFTLearnerConfig):
+        learner_cls = GroupedMPOWeightedSFTLearner
+
+    agent = learner_cls(
         config=config,
         dummy_obs=dummy_obs,
         dummy_act=dummy_act,

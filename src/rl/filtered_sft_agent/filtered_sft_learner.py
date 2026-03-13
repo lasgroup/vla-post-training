@@ -382,13 +382,10 @@ class FilteredSFTLearner(Agent):
         observations: Dict,
         rng: jax.random.PRNGKey,
         train_state: training_utils.TrainState,
+        use_ema: bool = True,
         return_prefix_rep: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        params = (
-            train_state.ema_params
-            if train_state.ema_params is not None
-            else train_state.params
-        )
+        params = self._select_policy_params(train_state, prefer_ema=use_ema)
         model = nnx.merge(train_state.model_def, params)
         model.eval()
         first_obs = next(iter(observations.values()), None)
@@ -419,9 +416,28 @@ class FilteredSFTLearner(Agent):
 
         return (actions, prefix) if return_prefix_rep else actions
 
+    @staticmethod
+    def _select_policy_params(
+        train_state: training_utils.TrainState,
+        *,
+        prefer_ema: bool,
+    ) -> nnx.State:
+        if prefer_ema and train_state.ema_params is not None:
+            return train_state.ema_params
+        return train_state.params
+
+    def _use_ema_for_data_collection(self) -> bool:
+        return self._train_state.ema_params is not None
+
+    def _use_ema_for_evaluation(self) -> bool:
+        return self._train_state.ema_params is not None
+
     def _generate_actions(
-        self, observations: np.ndarray | Dict,
+        self,
+        observations: np.ndarray | Dict,
         task_description: list[str],
+        *,
+        use_ema: bool,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
@@ -431,6 +447,7 @@ class FilteredSFTLearner(Agent):
             observations=processed_obs,
             rng=rng,
             train_state=self._train_state,
+            use_ema=use_ema,
             return_prefix_rep=self._config.collect.store_prefix_rep,
         )
         # TODO: if store_prefix_rep is True, this will crash because (i) openpi output transforms
@@ -443,10 +460,18 @@ class FilteredSFTLearner(Agent):
         return np.asarray(actions, dtype=np.float32)
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        return self._generate_actions(observations, **kwargs)
+        return self._generate_actions(
+            observations,
+            use_ema=self._use_ema_for_evaluation(),
+            **kwargs,
+        )
 
     def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        return self._generate_actions(observations, **kwargs)
+        return self._generate_actions(
+            observations,
+            use_ema=self._use_ema_for_data_collection(),
+            **kwargs,
+        )
 
     def _online_batch_to_sft_batch(
         self, online_batch: Dict[str, Any]
@@ -486,10 +511,9 @@ class FilteredSFTLearner(Agent):
         # TODO: check if last observation needs to be taken
         next_observation = jax.tree.map(lambda x: x[[-1]], episode_data[-1]["next_observation"])
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
+        params = self._select_policy_params(
+            self._train_state,
+            prefer_ema=self._use_ema_for_data_collection(),
         )
         model = nnx.merge(self._train_state.model_def, params)
         model.eval()

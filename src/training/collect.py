@@ -36,7 +36,7 @@ def evaluate_policy(
         obs, _ = env.reset()
 
         while total_episodes < num_rollouts:
-            action_chunk = agent.sample_actions(
+            action_chunk = agent.eval_actions(
                 obs,
                 task_description=task_description,
             )

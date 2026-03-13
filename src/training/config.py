@@ -124,12 +124,20 @@ class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    group_size: int = 8
+    num_steps: int = 10
+    noise_level: float = 0.0
+
+
+@dataclasses.dataclass(frozen=True)
 class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
+    use_mpo_advantage_weight: bool = False
+    kl_coef: float = 1e-2
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
@@ -339,11 +347,21 @@ _CONFIGS.extend(
             ),
         ),
         make_base_online_config(
-            name="pi05_libero_online_flow_grpo_sft",
-            rl_config=FlowGRPOSFTLearnerConfig(
-                store_buffer_actions_in_batch=True,
+            name="pi05_libero_online_grouped_mpo_sft",
+            rl_config=GroupedMPOWeightedSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
                 policy_update_interval=20,
                 policy_training_start_step=100,
+                group_size=8,
+            ),
+        ),
+        make_base_online_config(
+            name="pi05_libero_online_flow_grpo_sft",
+            rl_config=FlowGRPOSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+                use_mpo_advantage_weight=False,
             ),
         ),
         # 4. Best of N

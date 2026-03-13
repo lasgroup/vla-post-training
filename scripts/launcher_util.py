@@ -13,6 +13,7 @@ DEFAULT_DURATION = "03:30:00"
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
 DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+DEFAULT_SLURM_LOG_DIR = "/users/mertalbaba/vla-post-training/logs"
 
 
 def generate_srun_command(
@@ -163,6 +164,7 @@ def generate_run_commands(
     mem: int = 0,
     duration: str = DEFAULT_DURATION,
     account: str = DEFAULT_ACCOUNT,
+    log_dir: str = DEFAULT_SLURM_LOG_DIR,
     mode: str = "swiss-ai",
     dry: bool = False,
     prompt: bool = True,
@@ -182,8 +184,13 @@ def generate_run_commands(
         prompt: If True, ask for confirmation before submitting.
     """
     if mode == "swiss-ai":
+        os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} "
+        bsub_cmd = (
+            f"sbatch --account={account} --time={duration} "
+            f"--output={shlex.quote(os.path.join(log_dir, 'slurm-%j.out'))} "
+            f"--error={shlex.quote(os.path.join(log_dir, 'slurm-%j.err'))} "
+        )
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "
