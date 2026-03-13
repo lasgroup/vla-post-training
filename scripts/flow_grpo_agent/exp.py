@@ -1,6 +1,9 @@
 # ruff: noqa: E402
 # suppress Numba FNV hashing warnings
 import warnings
+import os
+os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " --xla_gpu_deterministic_ops=true"
+
 
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.encoders import MLPEncoder
