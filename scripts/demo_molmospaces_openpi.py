@@ -1,25 +1,21 @@
 import collections
 import dataclasses
-import importlib
 import logging
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import tyro
+import cv2
 
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
+from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
 from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 from openpi.policies import policy_config as _policy_config
 import src.training.config as _config
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None
 
 
 @dataclasses.dataclass
@@ -31,9 +27,9 @@ class Args:
 
     # MolmoSpaces benchmark/env setup.
     benchmark_path: str = (
-        "/capstor/store/cscs/swissai/a143/molmo-assets/benchmarks/"
-        "molmospaces-bench-v1/ithor/FrankaPickHardBench/"
-        "FrankaPickHardBench_20260206_json_benchmark"
+        "/capstor/scratch/cscs/mbagatella/molmospaces/benchmarks/"
+        "molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/"
+        "FrankaPickDroidMiniBench_json_benchmark_20251231"
     )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
@@ -47,14 +43,14 @@ class Args:
     wrist_camera_key: str = "wrist_camera"
 
     # Action mapping from OpenPI output to MolmoSpaces action dict.
-    execute_horizon: int | None = None  # defaults to train_cfg.model.action_horizon
+    execute_horizon: int = 8  # defaults to train_cfg.model.action_horizon
     grasping_type: str | None = None  # one of {"continuous", "binary"}; defaults to eval config
     gripper_threshold: float | None = None  # defaults to eval config
     gripper_scale: float = 255.0
 
     # Rollout control.
-    num_episodes: int = 1
-    max_steps: int = 300
+    num_episodes: int = 20
+    max_steps: int = 450
 
     # Video visualization.
     save_trajectory_video: bool = True
@@ -98,47 +94,6 @@ class _RegisteredPolicyAdapter:
 
     def get_info(self) -> dict[str, Any]:
         return {"policy_name": self._policy_name}
-
-
-def _as_uint8_hwc(image: Any) -> np.ndarray:
-    image = np.asarray(image)
-    if image.ndim == 3 and image.shape[0] == 3:
-        image = np.transpose(image, (1, 2, 0))
-    if np.issubdtype(image.dtype, np.floating):
-        image = np.clip(image, 0.0, 1.0) * 255.0 if image.max() <= 1.0 else image
-    return np.clip(image, 0, 255).astype(np.uint8)
-
-
-def _resolve_eval_config(eval_config_cls: str):
-    if ":" not in eval_config_cls:
-        raise ValueError(
-            f"Invalid eval_config_cls '{eval_config_cls}'. Expected 'module.path:ClassName'."
-        )
-    module_name, class_name = eval_config_cls.split(":", maxsplit=1)
-    module = importlib.import_module(module_name)
-    try:
-        cls = getattr(module, class_name)
-    except AttributeError as exc:
-        raise ValueError(
-            f"Could not resolve class '{class_name}' in module '{module_name}'."
-        ) from exc
-    return cls()
-
-def _resize_nearest(image: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
-    src_h, src_w = image.shape[:2]
-    if src_h == target_h and src_w == target_w:
-        return image
-    y_idx = np.linspace(0, src_h - 1, num=target_h, dtype=np.int32)
-    x_idx = np.linspace(0, src_w - 1, num=target_w, dtype=np.int32)
-    return image[y_idx][:, x_idx]
-
-
-def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
-    src_h, src_w = image.shape[:2]
-    if src_h == target_h:
-        return image
-    target_w = max(1, int(round((target_h / float(src_h)) * src_w)))
-    return _resize_nearest(image, target_h, target_w)
 
 
 def _action_overlay(action: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -248,13 +203,9 @@ def _compose_rollout_frame(
     action: np.ndarray | None,
     args: Args,
 ) -> np.ndarray:
-    exo = _as_uint8_hwc(model_input["observation/exterior_image_1_left"])
-    wrist = _as_uint8_hwc(model_input["observation/wrist_image_left"])
-
-    target_h = max(exo.shape[0], wrist.shape[0])
-    exo = _resize_to_height(exo, target_h)
-    wrist = _resize_to_height(wrist, target_h)
-    separator = np.full((target_h, 4, 3), 255, dtype=np.uint8)
+    exo = model_input["observation/exterior_image_1_left"]
+    wrist = model_input["observation/wrist_image_left"]
+    separator = np.full((max(exo.shape[0], wrist.shape[0]), 4, 3), 255, dtype=np.uint8)
     frame = np.concatenate([exo, separator, wrist], axis=1)
 
     # Always include the action panel so all video frames have identical shape.
@@ -277,20 +228,6 @@ def _compose_rollout_frame(
     )
 
 
-def _obs_to_openpi_input(
-    obs: dict[str, Any],
-    args: Args,
-    registered_policy: _RegisteredPolicyAdapter,
-) -> dict[str, Any]:
-    return _shared_obs_to_openpi_input(
-        obs,
-        exo_camera_key=args.exo_camera_key,
-        wrist_camera_key=args.wrist_camera_key,
-        gripper_obs_norm=0.824033,
-        prompt=registered_policy.get_prompt(args.default_prompt),
-    )
-
-
 def _model_action_to_env_action(
     model_action: np.ndarray,
     grasping_type: str,
@@ -298,13 +235,7 @@ def _model_action_to_env_action(
     gripper_scale: float,
 ) -> dict[str, np.ndarray]:
     model_action = np.asarray(model_action, dtype=np.float32)
-    if model_action.shape[0] < 8:
-        raise ValueError(
-            "Expected at least 8 action dims from OpenPI policy, got shape "
-            f"{model_action.shape}."
-        )
 
-    arm = model_action[:7]
     if grasping_type == "continuous":
         gripper = np.asarray([model_action[7] * gripper_scale], dtype=np.float32)
     elif grasping_type == "binary":
@@ -318,34 +249,7 @@ def _model_action_to_env_action(
             "Use 'continuous' or 'binary'."
         )
 
-    return {"arm": arm, "gripper": gripper}
-
-
-def _resolve_execute_horizon(args: Args, train_cfg: Any) -> int:
-    model_horizon = int(getattr(train_cfg.model, "action_horizon", 0) or 0)
-    requested = args.execute_horizon
-
-    if requested is None:
-        if model_horizon <= 0:
-            raise ValueError(
-                "Could not infer execute_horizon from model config. "
-                "Please pass --execute-horizon explicitly."
-            )
-        return model_horizon
-
-    if requested <= 0:
-        raise ValueError(f"--execute-horizon must be positive, got {requested}.")
-
-    if model_horizon > 0 and requested > model_horizon:
-        logging.warning(
-            "Requested execute_horizon=%d exceeds model action_horizon=%d; using %d.",
-            requested,
-            model_horizon,
-            model_horizon,
-        )
-        return model_horizon
-
-    return requested
+    return {"arm": model_action[:7], "gripper": gripper}
 
 
 def run(args: Args) -> None:
@@ -353,19 +257,15 @@ def run(args: Args) -> None:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
 
     train_cfg = _config.get_config(args.config_name)
-    execute_horizon = _resolve_execute_horizon(args, train_cfg)
+    execute_horizon = args.execute_horizon
     policy = _policy_config.create_trained_policy(
         train_cfg,
         args.checkpoint_dir,
         default_prompt=args.default_prompt,
     )
-    eval_config = _resolve_eval_config(args.eval_config_cls)
+    eval_config = PiPolicyEvalConfig()
     grasping_type = args.grasping_type or eval_config.policy_config.grasping_type
-    gripper_threshold = (
-        args.gripper_threshold
-        if args.gripper_threshold is not None
-        else eval_config.policy_config.grasping_threshold
-    )
+    gripper_threshold = args.gripper_threshold or eval_config.policy_config.grasping_threshold
     prompt_sampler = PromptSampler(
         task_type=eval_config.task_type,
         prompt_templates=eval_config.policy_config.prompt_templates,
@@ -393,106 +293,95 @@ def run(args: Args) -> None:
         args.checkpoint_dir,
     )
 
-    try:
-        total_success = 0
-        total_reward = 0.0
-        total_steps = 0
-        for episode_idx in range(args.num_episodes):
-            obs, info = env.reset(seed=args.seed + episode_idx)
-            action_buffer: collections.deque[np.ndarray] = collections.deque()
-            episode_prompt = registered_policy.get_prompt(args.default_prompt)
-            video_frames: list[np.ndarray] = []
+    total_success = 0
+    total_reward = 0.0
+    total_steps = 0
+    for episode_idx in range(args.num_episodes):
+        obs, info = env.reset(seed=args.seed + episode_idx)
+        action_buffer: collections.deque[np.ndarray] = collections.deque()
+        episode_prompt = registered_policy.get_prompt(args.default_prompt)
+        video_frames: list[np.ndarray] = []
 
-            if args.save_trajectory_video:
-                try:
-                    initial_model_input = _obs_to_openpi_input(obs, args, registered_policy)
-                    video_frames.append(
-                        _compose_rollout_frame(
-                            initial_model_input,
-                            episode_prompt,
-                            action=None,
-                            args=args,
-                        )
-                    )
-                except KeyError as exc:
-                    logging.warning("Video frame capture skipped at reset: %s", exc)
-
-            success = False
-            episode_reward = 0.0
-            episode_steps = 0
-            for step_idx in range(args.max_steps):
-                model_input = _obs_to_openpi_input(obs, args, registered_policy)
-
-                if not action_buffer:
-                    action_chunk = np.asarray(
-                        policy.infer(model_input, sharding_spec=None)["actions"]
-                    )
-                    if action_chunk.ndim == 1:
-                        action_chunk = action_chunk[None, :]
-                    action_buffer.extend(action_chunk[:execute_horizon])
-
-                raw_action = action_buffer.popleft()
-                if args.save_trajectory_video:
-                    video_frames.append(
-                        _compose_rollout_frame(
-                            model_input,
-                            episode_prompt,
-                            action=raw_action,
-                            args=args,
-                        )
-                    )
-
-                env_action = _model_action_to_env_action(
-                    raw_action,
-                    grasping_type=grasping_type,
-                    gripper_threshold=gripper_threshold,
-                    gripper_scale=args.gripper_scale,
-                )
-                obs, reward, terminated, truncated, info = env.step(env_action)
-                episode_reward += float(reward)
-                episode_steps = step_idx + 1
-
-                if info.get("success") is True:
-                    success = True
-
-                if terminated or truncated:
-                    break
-
-            total_success += int(success)
-            total_reward += episode_reward
-            total_steps += episode_steps
-            logging.info(
-                (
-                    "Episode %d/%d finished: success=%s, steps=%d, "
-                    "accumulated_reward=%.4f, success_so_far=%d"
-                ),
-                episode_idx + 1,
-                args.num_episodes,
-                success,
-                episode_steps,
-                episode_reward,
-                total_success,
+        success = False
+        episode_reward = 0.0
+        episode_steps = 0
+        for step_idx in range(args.max_steps):
+            model_input = _shared_obs_to_openpi_input(
+                obs,
+                exo_camera_key=args.exo_camera_key,
+                wrist_camera_key=args.wrist_camera_key,
+                gripper_obs_norm=0.824033,
+                prompt=registered_policy.get_prompt(args.default_prompt),
             )
 
-            if args.save_trajectory_video and video_frames:
-                video_path = video_dir / f"episode_{episode_idx:04d}.mp4"
-                save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
-                logging.info("Saved trajectory video with prompt overlay: %s", video_path)
+            if not action_buffer:
+                action_chunk = np.asarray(
+                    policy.infer(model_input, sharding_spec=None)["actions"]
+                )
+                action_buffer.extend(action_chunk[:execute_horizon])
 
-        num_episodes = max(args.num_episodes, 1)
+            raw_action = action_buffer.popleft()
+            if args.save_trajectory_video:
+                video_frames.append(
+                    _compose_rollout_frame(
+                        model_input,
+                        episode_prompt,
+                        action=raw_action,
+                        args=args,
+                    )
+                )
+
+            env_action = _model_action_to_env_action(
+                raw_action,
+                grasping_type=grasping_type,
+                gripper_threshold=gripper_threshold,
+                gripper_scale=args.gripper_scale,
+            )
+            obs, reward, terminated, truncated, info = env.step(env_action)
+            episode_reward += float(reward)
+            episode_steps = step_idx + 1
+
+            if info["success"]:
+                success = True
+                break
+
+            if terminated or truncated:
+                break
+
+        total_success += int(success)
+        total_reward += episode_reward
+        total_steps += episode_steps
         logging.info(
             (
-                "Done. Success rate: %.3f, total_steps=%d, "
-                "total_accumulated_reward=%.4f, avg_steps=%.2f, avg_reward=%.4f"
+                "Episode %d/%d finished: success=%s, steps=%d, "
+                "accumulated_reward=%.4f, success_so_far=%d"
             ),
-            total_success / num_episodes,
-            total_steps,
-            total_reward,
-            total_steps / num_episodes,
-            total_reward / num_episodes,
+            episode_idx + 1,
+            args.num_episodes,
+            success,
+            episode_steps,
+            episode_reward,
+            total_success,
         )
-    finally:
-        env.close()
+
+        if args.save_trajectory_video and video_frames:
+            video_path = video_dir / f"episode_{episode_idx:04d}.mp4"
+            save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
+            logging.info("Saved trajectory video with prompt overlay: %s", video_path)
+
+    num_episodes = max(args.num_episodes, 1)
+    logging.info(
+        (
+            "Done. Success rate: %.3f, total_steps=%d, "
+            "total_accumulated_reward=%.4f, avg_steps=%.2f, avg_reward=%.4f"
+        ),
+        total_success / num_episodes,
+        total_steps,
+        total_reward,
+        total_steps / num_episodes,
+        total_reward / num_episodes,
+    )
+    env.close()
 
 
 def main() -> None:
