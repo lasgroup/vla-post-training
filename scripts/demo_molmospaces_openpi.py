@@ -27,7 +27,7 @@ class Args:
 
     # MolmoSpaces benchmark/env setup.
     benchmark_path: str = (
-        "/capstor/scratch/cscs/mbagatella/molmospaces/benchmarks/"
+        "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/"
         "molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/"
         "FrankaPickDroidMiniBench_json_benchmark_20251231"
     )
