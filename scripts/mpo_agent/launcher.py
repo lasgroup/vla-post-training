@@ -74,7 +74,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"

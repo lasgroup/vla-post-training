@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Launcher for grouped-MPO experiments."""
+"""Launcher for grouped-MPO experiments
+
+Usage:
+    ./scripts/grouped_mpo_agent/launcher.py --project_name grouped_mpo_debug
+    ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
+    ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
+"""
 
 import argparse
 import os
@@ -48,9 +54,9 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [64],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [0.5],
     "collect.num_initial_rollouts": [5, 10],
 }
 
@@ -64,7 +70,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)

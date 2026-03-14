@@ -18,6 +18,50 @@ import openpi.training.utils as training_utils
 from src.rl.networks.rl_networks import ObsType
 
 
+def _compute_rollout_log_probs(
+    *,
+    model: _model.BaseModel,
+    policy_observation: _model.Observation,
+    rollout_info: dict[str, at.Array],
+    num_steps: int,
+    noise_level: float,
+) -> at.Array:
+    if not hasattr(model, "get_dist_and_log_prob"):
+        raise AttributeError(
+            "Flow-GRPO requires a model with get_dist_and_log_prob()."
+        )
+
+    rollout_x = jax.lax.stop_gradient(rollout_info["x"])
+    rollout_x_next = jax.lax.stop_gradient(rollout_info["x_next"])
+    rollout_time = jax.lax.stop_gradient(rollout_info["time"])
+    dt = jnp.asarray(-1.0 / max(num_steps, 1), dtype=rollout_x.dtype)
+
+    def step_log_prob(
+        x_t: at.Array,
+        x_next: at.Array,
+        time: at.Array,
+    ) -> at.Array:
+        time = jnp.broadcast_to(
+            jnp.asarray(time, dtype=rollout_x.dtype), (x_t.shape[0],)
+        )
+        log_prob, _ = model.get_dist_and_log_prob(
+            x_t=x_t,
+            sample=x_next,
+            time=time,
+            observation=policy_observation,
+            dt=dt,
+            noise_level=noise_level,
+        )
+        return log_prob
+
+    policy_log_probs = jax.vmap(step_log_prob, in_axes=(0, 0, 0))(
+        rollout_x,
+        rollout_x_next,
+        rollout_time,
+    )
+    return jnp.moveaxis(policy_log_probs, 0, -1)
+
+
 def _compute_ema_reference_kl(
     *,
     model_def: nnx.GraphDef[_model.BaseModel],
@@ -39,34 +83,13 @@ def _compute_ema_reference_kl(
         raise AttributeError(
             "Flow-GRPO KL regularization requires a model with get_dist_and_log_prob()."
         )
-
-    rollout_x = jax.lax.stop_gradient(rollout_info["x"])
-    rollout_x_next = jax.lax.stop_gradient(rollout_info["x_next"])
-    rollout_time = jax.lax.stop_gradient(rollout_info["time"])
-    dt = jnp.asarray(-1.0 / max(num_steps, 1), dtype=rollout_x.dtype)
-
-    def reference_step_log_prob(
-        x_t: at.Array,
-        x_next: at.Array,
-        time: at.Array,
-    ) -> at.Array:
-        time = jnp.broadcast_to(jnp.asarray(time, dtype=rollout_x.dtype), (x_t.shape[0],))
-        log_prob, _ = reference_model.get_dist_and_log_prob(
-            x_t=x_t,
-            sample=x_next,
-            time=time,
-            observation=policy_observation,
-            dt=dt,
-            noise_level=noise_level,
-        )
-        return log_prob
-
-    reference_log_probs = jax.vmap(reference_step_log_prob, in_axes=(0, 0, 0))(
-        rollout_x,
-        rollout_x_next,
-        rollout_time,
+    reference_log_probs = _compute_rollout_log_probs(
+        model=reference_model,
+        policy_observation=policy_observation,
+        rollout_info=rollout_info,
+        num_steps=num_steps,
+        noise_level=noise_level,
     )
-    reference_log_probs = jnp.moveaxis(reference_log_probs, 0, -1)
     kl = jnp.mean(policy_log_probs - reference_log_probs)
     return kl, reference_log_probs
 
@@ -81,7 +104,7 @@ def train_step(
     batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    policy_observation, critic_observation, actions = batch
+    policy_observation, critic_observation, _ = batch
 
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()
@@ -102,46 +125,60 @@ def train_step(
     noise_level = config.rl.noise_level
     kl_coef = config.rl.kl_coef
 
+    def expand_and_flatten(x):
+        return jnp.repeat(x, repeats=group_size, axis=0)
+
+    expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
+    expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
+
+    train_rng = jax.random.fold_in(rng, policy_state.step)
+    sample_rng, noise_rng = jax.random.split(train_rng)
+
+    noise = jax.random.normal(
+        noise_rng,
+        (
+            expanded_policy_obs.state.shape[0],
+            policy_model.action_horizon,
+            policy_model.action_dim,
+        ),
+    )
+    sampled_actions, rollout_info = policy_model.sample_actions(
+        rng=sample_rng,
+        observation=expanded_policy_obs,
+        noise=noise,
+        num_steps=num_steps,
+        noise_level=noise_level,
+        return_info_dict=True,
+    )
+
+    value = summarize_critic_values(
+        value_critic(expanded_critic_obs),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    q_value = summarize_critic_values(
+        state_action_critic(
+            expanded_critic_obs, flatten_action_horizon(sampled_actions)
+        ),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    advantage = jax.lax.stop_gradient(q_value - value)
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
-        rng: at.KeyArrayLike,
         policy_observation: _model.Observation,
-        critic_observation: ObsType,
-        state_action_critic: nnx.Module,
-        value_critic: nnx.Module,
+        rollout_info: dict[str, at.Array],
+        advantage: at.Array,
+        q_value: at.Array,
         reference_params: nnx.State | None,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        step_rng, noise_rng = jax.random.split(rng)
-
-        def expand_and_flatten(x):
-            return jnp.repeat(x, repeats=group_size, axis=0)
-
-        # Repeat action G times to get a group evaluation, [B * G, ...]
-        expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
-        expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
-
-        # Sample noise vector x_1, [B * G, T, dim_A]
-        noise = jax.random.normal(
-            noise_rng,
-            (
-                expanded_policy_obs.state.shape[0],
-                model.action_horizon,
-                model.action_dim,
-            ),
-        )
-        # Sample actions for expanded states [B * G, dim_A]
-        actions, outs = model.sample_actions(
-            rng=step_rng,
-            observation=expanded_policy_obs,
-            noise=noise,
+        policy_log_probs = _compute_rollout_log_probs(
+            model=model,
+            policy_observation=policy_observation,
+            rollout_info=rollout_info,
             num_steps=num_steps,
             noise_level=noise_level,
-            return_info_dict=True,
         )
-
-        # Stack log-prob of per-step generation [B * G, action_horizon, num_steps].
-        policy_log_probs = jnp.moveaxis(outs["log_prob"], 0, -1)
         log_probs = policy_log_probs
         kl_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
         reference_log_probs = jnp.zeros_like(policy_log_probs)
@@ -149,23 +186,12 @@ def train_step(
             kl_loss, reference_log_probs = _compute_ema_reference_kl(
                 model_def=policy_state.model_def,
                 reference_params=reference_params,
-                policy_observation=expanded_policy_obs,
-                rollout_info=outs,
+                policy_observation=policy_observation,
+                rollout_info=rollout_info,
                 policy_log_probs=policy_log_probs,
                 num_steps=num_steps,
                 noise_level=noise_level,
             )
-
-        # 2. Compute the advantage weights
-        value = summarize_critic_values(
-            value_critic(expanded_critic_obs),
-            critic_reduction=config.rl.critic_reduction,
-        )
-        q_value = summarize_critic_values(
-            state_action_critic(expanded_critic_obs, flatten_action_horizon(actions)),
-            critic_reduction=config.rl.critic_reduction,
-        )
-        advantage = q_value - value
         if use_mpo_advantage_weight:
             if group_size > 1:
                 total_batch_size = advantage.shape[0]
@@ -231,19 +257,16 @@ def train_step(
 
         return loss, info
 
-    train_rng = jax.random.fold_in(rng, policy_state.step)
-
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(
         policy_model,
-        train_rng,
-        policy_observation,
-        critic_observation,
-        state_action_critic,
-        value_critic,
+        expanded_policy_obs,
+        rollout_info,
+        advantage,
+        q_value,
         policy_state.ema_params,
     )
 

@@ -46,82 +46,86 @@ def train_step(
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
 
+    def expand_and_flatten(x):
+        return jnp.repeat(x, repeats=group_size, axis=0)
+
+    expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
+    expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
+
+    train_rng = jax.random.fold_in(rng, policy_state.step)
+    sample_rng, loss_rng, noise_rng = jax.random.split(train_rng, 3)
+
+    noise = jax.random.normal(
+        noise_rng,
+        (
+            expanded_policy_obs.state.shape[0],
+            policy.action_horizon,
+            policy.action_dim,
+        ),
+    )
+    sampled_actions = policy.sample_actions(
+        rng=sample_rng,
+        observation=expanded_policy_obs,
+        noise=noise,
+        num_steps=num_steps,
+        noise_level=noise_level,
+        return_info_dict=False,
+        return_prefix_rep=False,
+    )
+
+    critic_actions = flatten_action_horizon(sampled_actions)
+    value = summarize_critic_values(
+        value_critic(expanded_critic_obs),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    q_value = summarize_critic_values(
+        state_action_critic(expanded_critic_obs, critic_actions),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    advantage = jax.lax.stop_gradient(q_value - value)
+
+    if group_size > 1:
+        total_batch_size = advantage.shape[0]
+        assert (
+            total_batch_size % group_size == 0
+        ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={group_size}"
+        base_batch_size = total_batch_size // group_size
+        score = advantage.reshape(base_batch_size, group_size) / beta
+        if weight_clip is not None:
+            score = jnp.minimum(score, weight_clip)
+        score = jax.nn.softmax(score, axis=-1)
+        score_stats = score
+        score = jax.lax.stop_gradient(score[..., jnp.newaxis])
+    else:
+        score = advantage / beta
+        if weight_clip is not None:
+            score = jnp.minimum(score, weight_clip)
+        score = jax.nn.softmax(score, axis=0)
+        score_stats = score
+        score = jax.lax.stop_gradient(score)
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
         rng: at.KeyArrayLike,
         policy_observation: _model.Observation,
-        critic_observation: ObsType,
+        actions: _model.Actions,
+        score: at.Array,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        sample_rng, loss_rng, noise_rng = jax.random.split(rng, 3)
-
-        def expand_and_flatten(x):
-            return jnp.repeat(x, repeats=group_size, axis=0)
-
-        expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
-        expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
-
-        noise = jax.random.normal(
-            noise_rng,
-            (
-                expanded_policy_obs.state.shape[0],
-                model.action_horizon,
-                model.action_dim,
-            ),
-        )
-        sampled_actions = model.sample_actions(
-            rng=sample_rng,
-            observation=expanded_policy_obs,
-            noise=noise,
-            num_steps=num_steps,
-            noise_level=noise_level,
-            return_info_dict=False,
-            return_prefix_rep=False,
-        )
-
-        critic_actions = flatten_action_horizon(sampled_actions)
-        value = summarize_critic_values(
-            value_critic(expanded_critic_obs),
-            critic_reduction=config.rl.critic_reduction,
-        )
-        q_value = summarize_critic_values(
-            state_action_critic(expanded_critic_obs, critic_actions),
-            critic_reduction=config.rl.critic_reduction,
-        )
-        advantage = q_value - value
-
         chunked_loss = model.compute_loss(
-            loss_rng,
-            expanded_policy_obs,
-            sampled_actions,
+            rng,
+            policy_observation,
+            actions,
             train=True,
         )
 
         if group_size > 1:
-            total_batch_size = advantage.shape[0]
-            assert (
-                total_batch_size % group_size == 0
-            ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={group_size}"
-            base_batch_size = total_batch_size // group_size
-            score = advantage.reshape(base_batch_size, group_size) / beta
-            if weight_clip is not None:
-                score = jnp.minimum(score, weight_clip)
-            score = jax.nn.softmax(score, axis=-1)
-            score = jax.lax.stop_gradient(score[..., jnp.newaxis])
-
             grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
             loss = jnp.mean(jnp.sum(score * grouped_chunked_loss, axis=1))
-            score_stats = score[..., 0]
         else:
-            score = advantage / beta
-            if weight_clip is not None:
-                score = jnp.minimum(score, weight_clip)
-            score = jax.nn.softmax(score, axis=0)
-            score = jax.lax.stop_gradient(score)
             while score.ndim < chunked_loss.ndim:
                 score = score[..., jnp.newaxis]
             loss = jnp.sum(score * chunked_loss)
-            score_stats = score[..., 0]
 
         info = {
             "loss": loss,
@@ -137,16 +141,15 @@ def train_step(
         }
         return loss, info
 
-    train_rng = jax.random.fold_in(rng, policy_state.step)
-
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(
         policy,
-        train_rng,
-        policy_observation,
-        critic_observation,
+        loss_rng,
+        expanded_policy_obs,
+        sampled_actions,
+        score,
     )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)

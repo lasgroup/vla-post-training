@@ -22,7 +22,7 @@ from launcher_util import (
 )
 
 SCRIPT = "scripts/flow_grpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_mpo_flow_grpo_sft"
+CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
 PROJECT_NAME = "mpo_flow_grpo_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
@@ -33,7 +33,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 128
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59x1"]
 DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
@@ -43,6 +43,7 @@ DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
 DEFAULT_GROUP_SIZE = 8
 DEFAULT_NORMALIZE_ADV = True
+DEFAULT_KL_COEF = 0.0
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
         "collect.tasks": DEFAULT_TASKS,
@@ -55,9 +56,9 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [32],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [5, 10],
 }
 
@@ -103,6 +104,7 @@ def main() -> None:
     )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
+    parser.add_argument("--kl_coef", type=float, default=DEFAULT_KL_COEF)
     parser.add_argument(
         "--normalize_adv",
         action='store_true',
@@ -113,7 +115,12 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
-    tracked_name_keys = ["collect.tasks", *applicable_configs.keys(), "collect.eval_tasks"]
+    tracked_name_keys = [
+        "collect.tasks",
+        *applicable_configs.keys(),
+        "rl.kl_coef",
+        "collect.eval_tasks",
+    ]
     for idx, combo in enumerate(combos):
         for task_idx, task_flags in enumerate(TASK_SWEEP):
             flags: Dict[str, Any] = {
@@ -136,6 +143,7 @@ def main() -> None:
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
             "rl.group_size": args.group_size,
+            "rl.kl_coef": args.kl_coef,
             "rl.normalize_adv": args.normalize_adv,
             "rl.use_mpo_advantage_weight": True,
         }
