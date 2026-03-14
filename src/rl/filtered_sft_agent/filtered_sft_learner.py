@@ -576,10 +576,11 @@ class FilteredSFTLearner(Agent):
             self._save_episode_in_buffer(episode_data, task_description)
 
     def _save_episode_in_buffer(self, episode_data, task_description):
-
-        assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
-            "Only Filtered SFT config should be passed " "to the filtered SFT agent"
-        )
+        
+        # TODO: Get a way to uncomment it, currently necessary for best-of-N.
+        # assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
+        #     "Only Filtered SFT config should be passed " "to the filtered SFT agent"
+        # )
 
         if self._config.collect.store_prefix_rep:
             self._attach_prefix_embeddings_to_episode_data(
