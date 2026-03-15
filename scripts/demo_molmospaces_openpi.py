@@ -13,6 +13,7 @@ import cv2
 
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
+from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
 from openpi.training import config as _openpi_config
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
@@ -51,7 +52,7 @@ class Args:
     gripper_scale: float = 255.0
 
     # Rollout control.
-    num_episodes: int = 20
+    num_episodes: int | None = None
     max_steps: int = 450
 
     # Video visualization.
@@ -295,7 +296,8 @@ def _load_local_openpi_policy(
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
 
-    train_cfg = _openpi_config.get_config(config_name)
+    # FIXME (yarden): _polaris here is a hack
+    train_cfg = _openpi_config.get_config(config_name + "_polaris")
     policy = _policy_config.create_trained_policy(
         train_cfg,
         checkpoint_path,
@@ -338,6 +340,14 @@ def run(args: Args) -> None:
     if args.episode_sampling not in {"sequential", "random"}:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
 
+    benchmark_path = Path(args.benchmark_path).expanduser().resolve()
+    benchmark_episodes = load_all_episodes(benchmark_path)
+    if not benchmark_episodes:
+        raise ValueError(
+            f"No benchmark episodes found in {benchmark_path}. "
+            "Expected benchmark.json or house_*/episode_*.json files."
+        )
+
     eval_config = _resolve_eval_config(args.eval_config_cls)
     checkpoint_path = _resolve_checkpoint_path(args, eval_config)
     policy, train_cfg = _load_local_openpi_policy(
@@ -358,13 +368,14 @@ def run(args: Args) -> None:
     )
 
     env_cfg = MolmoSpacesGymConfig(
-        benchmark_dir=args.benchmark_path,
+        benchmark_dir=str(benchmark_path),
         eval_config_cls=args.eval_config_cls,
         episode_sampling=args.episode_sampling,
         seed=args.seed,
         task_horizon_steps=args.task_horizon_steps,
     )
     env = MolmoSpacesBenchmarkGymEnv(env_cfg)
+    num_episodes = args.num_episodes if args.num_episodes is not None else len(benchmark_episodes)
     policy_name = getattr(train_cfg, "name", os.path.basename(checkpoint_path))
     registered_policy = _RegisteredPolicyAdapter(policy, policy_name, prompt_sampler)
     env.register_policy(registered_policy)
@@ -382,7 +393,7 @@ def run(args: Args) -> None:
     total_success = 0
     total_reward = 0.0
     total_steps = 0
-    for episode_idx in range(args.num_episodes):
+    for episode_idx in range(num_episodes):
         obs, info = env.reset(seed=args.seed + episode_idx)
         action_buffer: collections.deque[np.ndarray] = collections.deque()
         episode_prompt = registered_policy.get_prompt(args.default_prompt)
@@ -443,7 +454,7 @@ def run(args: Args) -> None:
                 "accumulated_reward=%.4f, success_so_far=%d"
             ),
             episode_idx + 1,
-            args.num_episodes,
+            num_episodes,
             success,
             episode_steps,
             episode_reward,
@@ -455,7 +466,7 @@ def run(args: Args) -> None:
             save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
             logging.info("Saved trajectory video with prompt overlay: %s", video_path)
 
-    num_episodes = max(args.num_episodes, 1)
+    num_episodes = max(num_episodes, 1)
     logging.info(
         (
             "Done. Success rate: %.3f, total_steps=%d, "
