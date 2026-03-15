@@ -1,6 +1,8 @@
 import collections
 import dataclasses
+import importlib
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -9,20 +11,18 @@ import tyro
 import cv2
 
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
-from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
+from openpi.training import config as _openpi_config
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
 from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 from openpi.policies import policy_config as _policy_config
-import src.training.config as _config
 
 
 @dataclasses.dataclass
 class Args:
     # OpenPI policy selection.
-    config_name: str = "pi05_droid_jointpos_polaris"
-    checkpoint_dir: str = "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris"
+    checkpoint_dir: str | None = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
@@ -95,6 +95,20 @@ class _RegisteredPolicyAdapter:
     def get_info(self) -> dict[str, Any]:
         return {"policy_name": self._policy_name}
 
+def _resolve_eval_config(eval_config_cls: str):
+    if ":" not in eval_config_cls:
+        raise ValueError(
+            f"Invalid eval_config_cls '{eval_config_cls}'. Expected 'module.path:ClassName'."
+        )
+    module_name, class_name = eval_config_cls.split(":", maxsplit=1)
+    module = importlib.import_module(module_name)
+    try:
+        cls = getattr(module, class_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"Could not resolve class '{class_name}' in module '{module_name}'."
+        ) from exc
+    return cls()
 
 def _action_overlay(action: np.ndarray, width: int, height: int) -> np.ndarray:
     action = np.asarray(action, dtype=np.float32)
@@ -252,20 +266,83 @@ def _model_action_to_env_action(
     return {"arm": model_action[:7], "gripper": gripper}
 
 
+def _resolve_checkpoint_path(args: Args, eval_config: Any) -> str:
+    checkpoint_path = args.checkpoint_dir or getattr(
+        eval_config.policy_config, "checkpoint_path", None
+    )
+    if not checkpoint_path:
+        raise ValueError(
+            "No checkpoint path configured. Set eval_config.policy_config.checkpoint_path "
+            "or pass --checkpoint-dir."
+        )
+
+    return str(Path(checkpoint_path).expanduser())
+
+
+def _load_local_openpi_policy(
+    checkpoint_path: str,
+    *,
+    default_prompt: str | None,
+) -> tuple[Any, Any]:
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
+
+    train_cfg = _openpi_config.get_config(os.path.basename(checkpoint_path))
+    policy = _policy_config.create_trained_policy(
+        train_cfg,
+        checkpoint_path,
+        default_prompt=default_prompt,
+    )
+    return policy, train_cfg
+
+
+def _resolve_execute_horizon(args: Args, train_cfg: Any, eval_config: Any) -> int:
+    model_horizon = int(getattr(train_cfg.model, "action_horizon", 0) or 0)
+    config_chunk_size = int(getattr(eval_config.policy_config, "chunk_size", 0) or 0)
+    requested = args.execute_horizon
+    if requested is None and config_chunk_size > 0:
+        requested = config_chunk_size
+
+    if requested is None:
+        if model_horizon <= 0:
+            raise ValueError(
+                "Could not infer execute_horizon from model config. "
+                "Please pass --execute-horizon explicitly."
+            )
+        return model_horizon
+
+    if requested <= 0:
+        raise ValueError(f"--execute-horizon must be positive, got {requested}.")
+
+    if model_horizon > 0 and requested > model_horizon:
+        logging.warning(
+            "Requested execute_horizon=%d exceeds model action_horizon=%d; using %d.",
+            requested,
+            model_horizon,
+            model_horizon,
+        )
+        return model_horizon
+
+    return requested
+
+
 def run(args: Args) -> None:
     if args.episode_sampling not in {"sequential", "random"}:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
 
-    train_cfg = _config.get_config(args.config_name)
-    execute_horizon = args.execute_horizon
-    policy = _policy_config.create_trained_policy(
-        train_cfg,
-        args.checkpoint_dir,
+    eval_config = _resolve_eval_config(args.eval_config_cls)
+    checkpoint_path = _resolve_checkpoint_path(args, eval_config)
+    policy, train_cfg = _load_local_openpi_policy(
+        checkpoint_path,
         default_prompt=args.default_prompt,
     )
-    eval_config = PiPolicyEvalConfig()
+    execute_horizon = _resolve_execute_horizon(args, train_cfg, eval_config)
     grasping_type = args.grasping_type or eval_config.policy_config.grasping_type
-    gripper_threshold = args.gripper_threshold or eval_config.policy_config.grasping_threshold
+    gripper_threshold = (
+        args.gripper_threshold
+        if args.gripper_threshold is not None
+        else eval_config.policy_config.grasping_threshold
+    )
     prompt_sampler = PromptSampler(
         task_type=eval_config.task_type,
         prompt_templates=eval_config.policy_config.prompt_templates,
@@ -280,17 +357,18 @@ def run(args: Args) -> None:
         task_horizon_steps=args.task_horizon_steps,
     )
     env = MolmoSpacesBenchmarkGymEnv(env_cfg)
-    registered_policy = _RegisteredPolicyAdapter(policy, args.config_name, prompt_sampler)
+    policy_name = getattr(train_cfg, "name", os.path.basename(checkpoint_path))
+    registered_policy = _RegisteredPolicyAdapter(policy, policy_name, prompt_sampler)
     env.register_policy(registered_policy)
     video_dir = Path(args.video_dir).expanduser()
     video_fps = 1000.0 / float(eval_config.policy_dt_ms)
     logging.info(
         "OpenPI config=%s model_type=%s action_horizon=%s execute_horizon=%d checkpoint=%s",
-        args.config_name,
+        policy_name,
         getattr(train_cfg.model, "model_type", "unknown"),
         getattr(train_cfg.model, "action_horizon", "unknown"),
         execute_horizon,
-        args.checkpoint_dir,
+        checkpoint_path,
     )
 
     total_success = 0
