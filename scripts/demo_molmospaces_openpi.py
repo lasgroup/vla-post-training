@@ -14,6 +14,9 @@ import cv2
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
 from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
+import openpi.models.pi0_config as _pi0_config
+import openpi.policies.droid_policy as _droid_policy
+import openpi.transforms as _openpi_transforms
 from openpi.training import config as _openpi_config
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
@@ -296,8 +299,30 @@ def _load_local_openpi_policy(
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
 
-    # FIXME (yarden): _polaris here is a hack
-    train_cfg = _openpi_config.get_config(config_name + "_polaris")
+    if config_name != "pi05_droid_jointpos":
+        raise ValueError(
+            f"Unsupported checkpoint config '{config_name}'. "
+            "This demo currently defines an explicit TrainConfig only for "
+            "'pi05_droid_jointpos'."
+        )
+    # https://github.com/omarrayyann/openpi/blob/711487f019e5f03b254d427d4523b1f0805a4814/src/openpi/training/config.py#L682-L698
+    train_cfg = _openpi_config.TrainConfig(
+        name="pi05_droid_jointpos",
+        model=_pi0_config.Pi0Config(action_horizon=15, pi05=True),
+        data=_openpi_config.SimpleDataConfig(
+            assets=_openpi_config.AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _openpi_transforms.Group(
+                inputs=[_droid_policy.DroidInputs(model_type=_openpi_config.ModelType.PI05)],
+                outputs=[
+                    _openpi_transforms.AbsoluteActions(
+                        _openpi_transforms.make_bool_mask(7, -1)
+                    ),
+                    _droid_policy.DroidOutputs(),
+                ],
+            ),
+            base_config=_openpi_config.DataConfig(prompt_from_task=True),
+        ),
+    )
     policy = _policy_config.create_trained_policy(
         train_cfg,
         checkpoint_path,
