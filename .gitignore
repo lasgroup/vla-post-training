@@ -18,6 +18,3 @@ core_*
 
 # Outputs
 outputs/
-
-#Ignoring the lock
-uv.lock
