@@ -156,6 +156,7 @@ def _build_pi0_backbone_critic_defs(
             action=action,
             hidden_dims=critic_decoder_hidden_dims,
             num_qs=critic_num_qs,
+            num_bins=config.rl.num_value_bins,
             rngs=rngs,
         )
 
@@ -166,6 +167,7 @@ def _build_pi0_backbone_critic_defs(
             observation=embedding,
             hidden_dims=critic_decoder_hidden_dims,
             num_vs=critic_num_vs,
+            num_bins=config.rl.num_value_bins,
             rngs=rngs,
         )
 

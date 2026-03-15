@@ -87,6 +87,9 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
     critic_pre_training_steps: int = 1_000
+    num_value_bins: int = 1       # 1 = Gaussian (MSE-equivalent), >1 = Categorical over bins
+    value_lower_bound: float | None = None  # None -> auto-compute from reward type and discount
+    value_upper_bound: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -221,6 +224,7 @@ class CollectionConfig:
     )
     replan_steps: int = 5
     num_steps_wait: int = 10
+    max_episode_steps: int = 400  # Value for LIBERO-90, used to compute value bounds. 
     use_time_to_success_as_reward: bool = False
     store_prefix_rep: bool = False
     eval_env_num: int = 4
@@ -285,6 +289,21 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     algorithm: str = ""
+
+    def __post_init__(self):
+        if isinstance(self.rl, BestofNLearnerConfig):
+            if self.rl.value_lower_bound is None or self.rl.value_upper_bound is None:
+                discount = float(self.rl.discount)
+                T = int(self.collect.max_episode_steps)
+                if self.collect.use_time_to_success_as_reward:
+                    lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+                    upper = 0.0
+                else:
+                    lower = 0.0
+                    upper = 1.0
+                object.__setattr__(self, "rl", dataclasses.replace(
+                    self.rl, value_lower_bound=lower, value_upper_bound=upper
+                ))
 
 
 def make_base_online_config(

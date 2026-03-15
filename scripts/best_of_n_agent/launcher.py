@@ -93,6 +93,7 @@ def main() -> None:
 
     parser.add_argument("--critic_training_start_step", type=int, default=DEFAULT_CRITIC_TRAINING_START_STEP)
     parser.add_argument("--critic_inference_start_step", type=int, default=DEFAULT_CRITIC_INFERENCE_START_STEP)
+    parser.add_argument("--num_value_bins", type=int, default=1, help="1=regression, >1=categorical over return bins")
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
@@ -124,6 +125,7 @@ def main() -> None:
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
+            "rl.num_value_bins": args.num_value_bins,
         }
         flags.update(combo)
 

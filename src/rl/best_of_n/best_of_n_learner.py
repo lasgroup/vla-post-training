@@ -14,6 +14,7 @@ import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
+from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.best_of_n.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
@@ -312,14 +313,18 @@ class BestofNLearner(FilteredSFTLearner):
                 pad_width[-1] = (0, model_act_dim - actions_norm.shape[-1])
                 actions_norm = np.pad(actions_norm, pad_width, mode="constant", constant_values=0.0)
             flat_actions = jnp.asarray(actions_norm.reshape(group_env_num * n_samples, -1))
-            q_values = np.asarray(q_model(critic_obs, flat_actions))
-            # q_values: [num_qs, group_env_num * n_samples]
+            q_logits = q_model(critic_obs, flat_actions)
+            # q_logits: [num_qs, batch] for Gaussian or [num_qs, batch, K] for Categorical
 
             # 5. Reduce ensemble, select best per env
-            if q_values.ndim > 1:
-                q_values = q_values.min(axis=0)
-            q_values = q_values.reshape(group_env_num, n_samples)
-            best_idx = q_values.argmax(axis=1)
+            rl_config = self._config.rl
+            _lower, _upper = get_value_bounds(self._config)
+            q_dist = make_value_distribution(q_logits, rl_config.num_value_bins, _lower, _upper)
+            scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
+            if scores.ndim > 1:
+                scores = scores.min(axis=0)
+            scores = scores.reshape(group_env_num, n_samples)
+            best_idx = scores.argmax(axis=1)
 
             group_actions = np.asarray(group_actions).reshape(group_env_num, n_samples, *np.asarray(group_actions).shape[1:])
             best = group_actions[np.arange(group_env_num), best_idx]
