@@ -415,6 +415,19 @@ def run(args: Args) -> None:
                 action_chunk = np.asarray(
                     policy.infer(model_input, sharding_spec=None)["actions"]
                 )
+                chunk_len = int(action_chunk.shape[0]) if action_chunk.ndim > 0 else 0
+                if chunk_len != execute_horizon:
+                    logging.warning(
+                        (
+                            "Policy returned action chunk length %d while "
+                            "execute_horizon=%d; %s."
+                        ),
+                        chunk_len,
+                        execute_horizon,
+                        "truncating to execute_horizon"
+                        if chunk_len > execute_horizon
+                        else "buffer may run short before the next inference call",
+                    )
                 action_buffer.extend(action_chunk[:execute_horizon])
 
             raw_action = action_buffer.popleft()
