@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import numpy as np
 import tyro
@@ -17,6 +18,7 @@ from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
 from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 from openpi.policies import policy_config as _policy_config
+from openpi.shared import download as _openpi_download
 
 
 @dataclasses.dataclass
@@ -276,6 +278,9 @@ def _resolve_checkpoint_path(args: Args, eval_config: Any) -> str:
             "or pass --checkpoint-dir."
         )
 
+    if urlparse(checkpoint_path).scheme:
+        return checkpoint_path
+
     return str(Path(checkpoint_path).expanduser())
 
 
@@ -284,10 +289,13 @@ def _load_local_openpi_policy(
     *,
     default_prompt: str | None,
 ) -> tuple[Any, Any]:
+    config_name = os.path.basename(checkpoint_path.rstrip("/"))
+    checkpoint_path = str(_openpi_download.maybe_download(checkpoint_path))
+
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
 
-    train_cfg = _openpi_config.get_config(os.path.basename(checkpoint_path))
+    train_cfg = _openpi_config.get_config(config_name)
     policy = _policy_config.create_trained_policy(
         train_cfg,
         checkpoint_path,
