@@ -195,9 +195,7 @@ class ResidualRLBaseActionSampler:
             config, init_rng, self._mesh, resume=resuming,
         )
         jax.block_until_ready(train_state)
-        logging.info(
-            f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}"
-        )
+        logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 
         if resuming:
             train_state = _checkpoints.restore_state(
@@ -398,18 +396,35 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         **kwargs: Any,
     ):
         reset_returns = super().reset(id, **kwargs)
-        self._clear_base_actions()
 
         if isinstance(reset_returns, tuple):
             obs, info = reset_returns
         else:
             obs, info = reset_returns, None
 
-        logging.info("[reset: sampling base actions]")
-        self._base_actions = self._sample_base_actions(obs)
-        base_action = self._base_actions[:, [0]]
-        obs_with_base = self._attach_base_action(obs, base_action)
-        self._last_obs = obs_with_base
+        if id is None:
+            # Full reset: re-sample base actions for all envs.
+            self._clear_base_actions()
+            #logging.info("[reset: sampling base actions]")
+            self._base_actions = self._sample_base_actions(obs)
+            base_action_chunk = self._base_actions[:, :self._query_frequency]
+            obs_with_base = self._attach_base_action(obs, base_action_chunk)
+            self._last_obs = obs_with_base
+        else:
+            # Partial reset (single env done during collection).
+            # Don't re-sample base actions — keep the existing ones.
+            # Just attach the current base action chunk to the new obs.
+            if self._base_actions is not None and self._last_obs is not None:
+                obs_with_base = self._attach_base_action(
+                    obs, self._last_obs["base_action"][:1]
+                )
+            else:
+                # Fallback: no base actions yet, attach zeros.
+                action_dim = self._sampler.action_dim
+                dummy = np.zeros(
+                    (1, self._query_frequency, action_dim), dtype=np.float32,
+                )
+                obs_with_base = self._attach_base_action(obs, dummy)
 
         return (obs_with_base, info) if info is not None else obs_with_base
 
@@ -427,20 +442,24 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         lo, hi = self._residual_action_clip_range
         residual_action = np.clip(residual_action, lo, hi)
 
-        base_action = self._last_obs["base_action"]
-        actions = base_action + residual_action
+        # base_action_chunk: (B, replan_steps, action_dim)
+        # residual_action:   (B, 1, action_dim) — broadcasts across replan_steps
+        base_action_chunk = self._last_obs["base_action"]
+        actions = base_action_chunk + residual_action
 
         return_stacks = super().step(actions, id)
         obs_stack = return_stacks[0]
 
-        self._query_count += 1
+        self._query_count += self._query_frequency
         if self._query_count >= self._sampler.action_horizon:
             self._clear_base_actions()
-            logging.info("[step: re-sampling base actions]")
+            #logging.info("[step: re-sampling base actions]")
             self._base_actions = self._sample_base_actions(obs_stack)
 
-        next_base_action = self._base_actions[:, [self._query_count]]
-        obs_with_base = self._attach_base_action(obs_stack, next_base_action)
+        start = self._query_count
+        end = start + self._query_frequency
+        next_base_action_chunk = self._base_actions[:, start:end]
+        obs_with_base = self._attach_base_action(obs_stack, next_base_action_chunk)
         self._last_obs = obs_with_base
 
         return (obs_with_base, *return_stacks[1:])

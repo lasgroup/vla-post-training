@@ -244,9 +244,9 @@ def _normalize_residual_observation(observations: Any) -> Any:
             base_action = observations["observation"].get("base_action")
         if base_action is not None:
             ba = jnp.asarray(base_action, dtype=jnp.float32)
-            # Flatten to (B, D)
+            # Take last timestep to (B, D), matching _ensure_batched_2d.
             if ba.ndim >= 3:
-                ba = ba.reshape(ba.shape[0], -1)
+                ba = ba[:, -1, ...]
             if ba.ndim == 1:
                 ba = ba[jnp.newaxis, ...]
             if "state" in normalized:
@@ -265,16 +265,23 @@ def _normalize_replay_observation_for_model(obs_dict: Dict[str, Any]) -> Dict[st
     """
     normalized: Dict[str, Any] = {}
     state = jnp.asarray(obs_dict["state"], dtype=jnp.float32)
+    # Collapse temporal dim from QueryFrequencyWrapper (take last timestep).
+    if state.ndim >= 3:
+        state = state[:, -1, ...]
     if "base_action" in obs_dict:
         ba = jnp.asarray(obs_dict["base_action"], dtype=jnp.float32)
         if ba.ndim >= 3:
-            ba = ba.reshape(ba.shape[0], -1)
+            ba = ba[:, -1, ...]
         state = jnp.concatenate([state, ba], axis=-1)
     normalized["state"] = state
 
     for img_key in ("image", "wrist_image"):
         if img_key in obs_dict:
-            normalized[img_key] = jnp.asarray(obs_dict[img_key], dtype=jnp.float32)
+            img = jnp.asarray(obs_dict[img_key], dtype=jnp.float32)
+            # Collapse temporal dim: (B, T, H, W, C) -> (B, H, W, C)
+            if img.ndim >= 5:
+                img = img[:, -1, ...]
+            normalized[img_key] = img
     return normalized
 
 

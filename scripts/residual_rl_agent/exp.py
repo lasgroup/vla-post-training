@@ -85,10 +85,10 @@ def main(config: _config.OnlineTrainConfig):
     model_obs_batch = _unwrap_residual_observation(reset_out[0])
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(lambda x: np.asarray(x)[0:1], model_obs_batch)
-    action_dim = int(
-        getattr(env, "policy_action_dim",
-                int(getattr(config.model, "action_dim", 32)))
-    )
+    # Infer the true robot action dim from the base_action attached by the env
+    # (e.g. 7), not config.model.action_dim (latent/noise dim, e.g. 32).
+    base_action = np.asarray(model_obs_batch["base_action"])
+    action_dim = int(base_action.shape[-1])
     action_horizon = 1
     dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
     # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
