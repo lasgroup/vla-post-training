@@ -466,9 +466,11 @@ def residual_rl_wrap_env(
     config: _config.OnlineTrainConfig,
     task_description: list[str] | str,
     residual_action_clip_range: tuple[float, float] = (-1.0, 1.0),
+    env_num: int | None = None,
 ) -> tuple[ResidualRLVectorEnv, list[str]]:
     """Build a ResidualRLVectorEnv with all necessary wrappers."""
-    env_num = int(config.collect.env_num)
+    if env_num is None:
+        env_num = int(config.collect.env_num)
     replan_steps = int(config.collect.replan_steps)
     domain = str(config.collect.domain)
 
