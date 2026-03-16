@@ -463,6 +463,7 @@ class FilteredSFTLearner(Agent):
         rng, self._rng = jax.random.split(self._rng)
 
         # Fix to avoid multitask inference crash caused by the prompt being a list of strings. 
+        task_to_indices: dict[str, list[int]] = {}
         for i, task in enumerate(task_description):
             task_to_indices.setdefault(task, []).append(i)
 
