@@ -65,31 +65,14 @@ class ResidualRLBaseActionSampler:
             jax.sharding.PartitionSpec("batch"),
         )
 
-        # Initialize checkpoint manager if not provided.
-        # if checkpoint_manager is None:
-        #     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
-        #         config.checkpoint_dir,
-        #         keep_period=config.keep_period,
-        #         overwrite=config.overwrite,
-        #         resume=config.resume,
-        #     )
-        # self._checkpoint_manager = checkpoint_manager
-
         # Load model weights.
-        train_state, self._train_state_sharding = init_train_state(config, init_rng, self._mesh, resume=resuming,)
+        train_state, self._train_state_sharding = init_train_state(config, init_rng, self._mesh) #, resume=resuming,
         jax.block_until_ready(train_state)
         logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
-
-        # if resuming:
-        #     train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader,)
 
         self._train_state = train_state
         params = train_state.ema_params if train_state.ema_params is not None else train_state.params
         self.model = nnx.merge(train_state.model_def, params)
-
-        # Load policy (for tokenization / action sampling), then drop its
-        # redundant copy of the model to free memory.
-        #checkpoint_dir = _resolve_policy_checkpoint_dir(config, checkpoint_manager)
         checkpoint_dir = _resolve_policy_checkpoint_dir(config)
         self._policy = policy_config.create_trained_policy(config, checkpoint_dir)
         self._drop_policy_model()
@@ -104,10 +87,6 @@ class ResidualRLBaseActionSampler:
     @property
     def train_state_sharding(self) -> Any:
         return self._train_state_sharding
-
-    # @property
-    # def checkpoint_manager(self) -> _checkpoints.CheckpointManager:
-    #     return self._checkpoint_manager
 
     def _drop_policy_model(self) -> None:
         if getattr(self._policy, "_is_pytorch_model", False):
@@ -151,9 +130,6 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         config: OnlineTrainConfig,
         task_description: list[str],
         residual_action_clip_range: tuple[float, float] = (-1.0, 1.0),
-        checkpoint_manager: _checkpoints.CheckpointManager | None = None,
-        resuming: bool = False,
-        data_loader: Any = None,
         sampler: ResidualRLBaseActionSampler | None = None,
         **kwargs: Any,
     ) -> None:
@@ -170,12 +146,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         if sampler is not None:
             self._sampler = sampler
         else:
-            self._sampler = ResidualRLBaseActionSampler(
-                config,
-                #checkpoint_manager=checkpoint_manager,
-                #resuming=resuming,
-                #data_loader=data_loader,
-            )
+            self._sampler = ResidualRLBaseActionSampler(config)
         self._last_obs: Optional[Dict[str, Any]] = None
         self._base_actions: Optional[np.ndarray] = None
         self._query_count = 0
@@ -314,7 +285,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         residual_action = np.clip(residual_action, lo, hi)
 
         # base_action_chunk: (B, replan_steps, action_dim)
-        # residual_action:   (B, 1, action_dim) — broadcasts across replan_steps
+        # residual_action:   (B, replan_steps, action_dim) or (B, 1, action_dim)
         base_action_chunk = self._last_obs["base_action"]
         actions = base_action_chunk + residual_action
 

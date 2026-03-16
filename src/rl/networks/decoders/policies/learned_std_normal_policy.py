@@ -20,6 +20,7 @@ class LearnedStdNormalPolicyDecoder(nnx.Module):
                  dropout_rate: Optional[float] = None,
                  log_std_min: Optional[float] = -20,
                  log_std_max: Optional[float] = 2,
+                 output_init_scale: Optional[float] = None,
                  *, rngs: nnx.Rngs):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
@@ -31,8 +32,9 @@ class LearnedStdNormalPolicyDecoder(nnx.Module):
                        dropout_rate=dropout_rate,
                        rngs=rngs)
 
-        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
-        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        head_init = default_init(output_init_scale) if output_init_scale is not None else default_init(1e-2)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=head_init, rngs=rngs)
+        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=head_init, rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,
@@ -93,6 +95,7 @@ class LearnedStdTanhNormalPolicyDecoder(nnx.Module):
                  log_std_max: Optional[float] = 2,
                  low: Optional[float] = None,
                  high: Optional[float] = None,
+                 output_init_scale: Optional[float] = None,
                  *, rngs: nnx.Rngs):
         action_dim = action if isinstance(action, int) else action.shape[-1]
         self.log_std_min = log_std_min
@@ -106,8 +109,9 @@ class LearnedStdTanhNormalPolicyDecoder(nnx.Module):
                        dropout_rate=dropout_rate,
                        rngs=rngs)
 
-        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
-        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=default_init(1e-2), rngs=rngs)
+        head_init = default_init(output_init_scale) if output_init_scale is not None else default_init(1e-2)
+        self.mean_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=head_init, rngs=rngs)
+        self.log_std_head = nnx.Linear(hidden_dims[-1], action_dim, kernel_init=head_init, rngs=rngs)
 
     def __call__(self,
                  observations: jnp.ndarray,

@@ -38,6 +38,10 @@ def _build_actor_critic_defs(
     critic_decoder_hidden_dims = tuple(_get_rl_attr(config, "critic_decoder_hidden_dims", (256, 256)))
     policy_decoder_hidden_dims = tuple(_get_rl_attr(config, "policy_decoder_hidden_dims", (256, 256)))
     critic_num_qs = int(_get_rl_attr(config, "critic_num_qs", 2))
+    # When set (e.g. 1e-5), policy output heads are initialized near zero.
+    # Useful for residual RL so the initial residual is ~0.
+    raw_output_init_scale = _get_rl_attr(config, "policy_output_init_scale", None)
+    policy_output_init_scale = float(raw_output_init_scale) if raw_output_init_scale is not None else None
     encoder_type = str(_get_rl_attr(config, "encoder_type", "resnet_34_v1")).lower()
     encoder_norm = str(_get_rl_attr(config, "encoder_norm", "group")).lower()
     use_spatial_softmax = bool(_get_rl_attr(config, "use_spatial_softmax", True))
@@ -208,6 +212,7 @@ def _build_actor_critic_defs(
                 observation=embedding,
                 action=action,
                 hidden_dims=policy_decoder_hidden_dims,
+                output_init_scale=policy_output_init_scale,
                 rngs=rngs,
             )
         if policy_distribution == "tanh_normal":
@@ -217,6 +222,7 @@ def _build_actor_critic_defs(
                 hidden_dims=policy_decoder_hidden_dims,
                 low=action_low,
                 high=action_high,
+                output_init_scale=policy_output_init_scale,
                 rngs=rngs,
             )
         raise ValueError(

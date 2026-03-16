@@ -62,7 +62,7 @@ def main(config: _config.OnlineTrainConfig):
     dummy_obs = jax.tree.map(lambda x: np.asarray(x)[0:1], model_obs_batch)
     base_action = np.asarray(model_obs_batch["base_action"])
     action_dim = int(base_action.shape[-1])
-    action_horizon = 1  # One residual for the action chunk
+    action_horizon = int(config.collect.replan_steps)
     dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
     action_low = jnp.asarray(-1.0, dtype=jnp.float32)
     action_high = jnp.asarray(1.0, dtype=jnp.float32)
