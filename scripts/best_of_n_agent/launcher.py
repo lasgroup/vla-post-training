@@ -55,6 +55,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "rl.train_on_policy_value_function": [True, False],
     "log_interval": [25],
+    "rl.num_value_bins": [1, 20, 50],
 }
 
 
@@ -94,6 +95,7 @@ def main() -> None:
     parser.add_argument("--critic_training_start_step", type=int, default=DEFAULT_CRITIC_TRAINING_START_STEP)
     parser.add_argument("--critic_inference_start_step", type=int, default=DEFAULT_CRITIC_INFERENCE_START_STEP)
     parser.add_argument("--num_value_bins", type=int, default=1, help="1=regression, >1=categorical over return bins")
+    parser.add_argument("--value_target_type", default="one_hot", choices=["one_hot", "two_hot"])
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
@@ -126,6 +128,7 @@ def main() -> None:
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
             "rl.num_value_bins": args.num_value_bins,
+            "rl.value_target_type": args.value_target_type,
         }
         flags.update(combo)
 

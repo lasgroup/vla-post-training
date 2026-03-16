@@ -66,20 +66,47 @@ class GaussianValueDistribution(ValueDistribution):
 class CategoricalValueDistribution(ValueDistribution):
     """Categorical distribution over uniformly spaced value bins.
 
-    log_prob discretizes continuous targets to the nearest bin and returns
-    the negative cross-entropy. mean() returns the expected value under the
-    predicted distribution.
+    log_prob converts continuous targets to bin probabilities according to target_type:
+      - "one_hot":  hard nearest-bin (prone to logit saturation)
+      - "two_hot":  linear interpolation between the two bracketing bins
+
+    mean() returns the expected value E[V] = sum(softmax(logits) * bin_centers).
     """
 
     logits: at.Float[at.Array, "... k"]
     bin_centers: at.Float[at.Array, " k"]
+    target_type: str = "one_hot"
 
     def log_prob(self, targets: at.Float[at.Array, "..."]) -> at.Float[at.Array, "..."]:
-        indices = _discretize(targets, self.bin_centers)
-        # Broadcast indices to match logits' leading dims (all except the K dim).
+        k = self.logits.shape[-1]
         target_shape = self.logits.shape[:-1]
-        indices = jnp.broadcast_to(indices, target_shape)
-        return -optax.softmax_cross_entropy_with_integer_labels(self.logits, indices)
+        log_probs = jax.nn.log_softmax(self.logits, axis=-1)
+
+        if self.target_type == "one_hot":
+            indices = _discretize(targets, self.bin_centers)
+            indices = jnp.broadcast_to(indices, target_shape)
+            return -optax.softmax_cross_entropy_with_integer_labels(self.logits, indices)
+
+        elif self.target_type == "two_hot":
+            lower = self.bin_centers[0]
+            upper = self.bin_centers[-1]
+            bin_width = (upper - lower) / (k - 1)
+            values = jnp.clip(targets, lower, upper)
+            scaled = (values - lower) / bin_width          # float in [0, k-1]
+            lower_idx = jnp.clip(jnp.floor(scaled).astype(jnp.int32), 0, k - 2)
+            upper_idx = lower_idx + 1
+            upper_weight = scaled - lower_idx.astype(jnp.float32)
+            lower_weight = 1.0 - upper_weight
+            lower_idx = jnp.broadcast_to(lower_idx, target_shape)
+            upper_idx = jnp.broadcast_to(upper_idx, target_shape)
+            lower_weight = jnp.broadcast_to(lower_weight, target_shape)
+            upper_weight = jnp.broadcast_to(upper_weight, target_shape)
+            soft = (jax.nn.one_hot(lower_idx, k) * lower_weight[..., jnp.newaxis] +
+                    jax.nn.one_hot(upper_idx, k) * upper_weight[..., jnp.newaxis])
+            return jnp.sum(soft * log_probs, axis=-1)
+
+        else:
+            raise ValueError(f"Unknown target_type: {self.target_type!r}")
 
     def mean(self) -> at.Float[at.Array, "..."]:
         probs = jax.nn.softmax(self.logits, axis=-1)
@@ -100,6 +127,7 @@ def make_value_distribution(
     num_value_bins: int = 1,
     value_lower_bound: float = 0.0,
     value_upper_bound: float = 1.0,
+    target_type: str = "one_hot",
 ) -> ValueDistribution:
     """Create a value distribution from raw network logits.
 
@@ -109,9 +137,15 @@ def make_value_distribution(
         num_value_bins: Number of bins. 1 = Gaussian (regression), >1 = Categorical.
         value_lower_bound: Lower end of the return range (Categorical only).
         value_upper_bound: Upper end of the return range (Categorical only).
+        target_type: How to convert scalar targets to bin probabilities.
+            "one_hot" | "two_hot" (Categorical only).
     """
     logits = jnp.asarray(logits, dtype=jnp.float32)
     if num_value_bins <= 1:
         return GaussianValueDistribution(logits=logits)
     centers = _bin_centers(value_lower_bound, value_upper_bound, num_value_bins)
-    return CategoricalValueDistribution(logits=logits, bin_centers=centers)
+    return CategoricalValueDistribution(
+        logits=logits,
+        bin_centers=centers,
+        target_type=target_type,
+    )

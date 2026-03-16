@@ -264,7 +264,7 @@ def train_q_step(
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         _lower, _upper = get_value_bounds(config)
-        q_dist = make_value_distribution(q_logits, config.rl.num_value_bins, _lower, _upper)
+        q_dist = make_value_distribution(q_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
         td_weight = config.rl.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         td_loss = -jnp.mean(q_dist.log_prob(td_targets))
@@ -340,7 +340,7 @@ def train_value_step(
             critic_reduction=config.rl.critic_reduction,
         )
         _lower, _upper = get_value_bounds(config)
-        v_dist = make_value_distribution(value_logits, config.rl.num_value_bins, _lower, _upper)
+        v_dist = make_value_distribution(value_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
         td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss

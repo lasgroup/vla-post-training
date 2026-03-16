@@ -90,6 +90,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     num_value_bins: int = 1       # 1 = Gaussian (MSE-equivalent), >1 = Categorical over bins
     value_lower_bound: float | None = None  # None -> auto-compute from reward type and discount
     value_upper_bound: float | None = None
+    value_target_type: str = "one_hot"   # "one_hot" | "two_hot"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -123,6 +124,10 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
+    num_value_bins: int = 1
+    value_lower_bound: float | None = None
+    value_upper_bound: float | None = None
+    value_target_type: str = "one_hot"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -291,7 +296,7 @@ class OnlineTrainConfig(TrainConfig):
     algorithm: str = ""
 
     def __post_init__(self):
-        if isinstance(self.rl, BestofNLearnerConfig):
+        if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self.rl.value_lower_bound is None or self.rl.value_upper_bound is None:
                 discount = float(self.rl.discount)
                 T = int(self.collect.max_episode_steps)
