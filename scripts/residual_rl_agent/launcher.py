@@ -87,4 +87,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# uv run scripts/dsrl_agent/launcher.py --dry
+# uv run scripts/residual_rl_agent/launcher.py --dry
