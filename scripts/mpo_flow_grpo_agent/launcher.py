@@ -65,6 +65,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [5, 10],
     "rl.kl_coef": [0.0, 0.01],
     "rl.td_weight_schedule.switch_step": [900, 3000],
+    "rl.save_all_episodes": [True],
+    "rl.policy_only_successful": [False, True],
 }
 
 

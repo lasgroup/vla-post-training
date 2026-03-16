@@ -69,6 +69,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.normalize_adv": [False, True],
     "rl.kl_coef": [0.0, 0.01],
     "rl.td_weight_schedule.switch_step": [900, 3000],
+    "rl.save_all_episodes": [True], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
+    "rl.policy_only_successful": [False, True], # Default value is True. This flag controls whether to use all episodes for policy updates or only successful ones. It is added to investigate whether using only successful episodes can improve performance, especially when the success rate is low.
 }
 
 

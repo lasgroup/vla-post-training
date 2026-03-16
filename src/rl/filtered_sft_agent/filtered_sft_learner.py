@@ -345,6 +345,7 @@ class FilteredSFTLearner(Agent):
                 "reward": np.zeros((1,), dtype=np.float32),
                 "mc_return": np.zeros((1,), dtype=np.float32),
                 "discount": np.zeros((1,), dtype=np.float32),
+                "is_success": np.zeros((1,), dtype=np.float32),
             }
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
@@ -541,11 +542,11 @@ class FilteredSFTLearner(Agent):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        if is_success:
-            self._save_episode_in_buffer(episode_data, task_description)
+        # Save successful episodes always; save failed episodes only when save_all_episodes is set.
+        if is_success or self._config.rl.save_all_episodes:
+            self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
-    def _save_episode_in_buffer(self, episode_data, task_description):
+    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = True):
 
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
             "Only Filtered SFT config should be passed " "to the filtered SFT agent"
@@ -603,8 +604,10 @@ class FilteredSFTLearner(Agent):
             "reward": _reward.astype(np.float32),
             "mc_return": _mc_return.astype(np.float32),
             "discount": _discount.astype(np.float32),
+            "is_success": np.full((n_windows,), float(is_success), dtype=np.float32),
         })
-        self._collection_success_episodes += 1
+        if is_success:
+            self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage

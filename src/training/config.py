@@ -115,6 +115,8 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_update_interval: int = 1
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
+    save_all_episodes: bool = False
+    policy_only_successful: bool = False
 
 
 @dataclasses.dataclass(frozen=True)

@@ -133,6 +133,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
+            # Filter to successful episodes only for the policy update if configured.
+            if rl_config.policy_only_successful:
+                success_mask = online_batch["is_success"] > 0.5
+                n_success = int(jnp.sum(success_mask))
+                if n_success > 0:
+                    success_indices = jnp.where(success_mask, size=n_success)[0]
+                    online_batch = jax.tree.map(lambda x: x[success_indices], online_batch)
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
