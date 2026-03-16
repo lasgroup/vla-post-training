@@ -162,6 +162,38 @@ class DSRLLearnerConfig(RLAlgorithmConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class ResidualRLLearnerConfig(RLAlgorithmConfig):
+    """SAC-based residual RL: learns residual corrections on top of a frozen base policy."""
+    actor_lr: float = 1e-4
+    critic_lr: float = 3e-4
+    alpha_lr: float = 3e-4
+    critic_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
+    policy_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
+    critic_num_qs: int = 10
+    critic_reduction: str = "mean"
+    backup_entropy: bool = False
+    critic_update_frequency: int = 1
+    actor_update_frequency: int = 1
+    critic_ema_decay: float | None = 0.995
+    encoder_type: str = "small"
+    encoder_norm: str = "group"
+    use_spatial_softmax: bool = True
+    softmax_temperature: float = 1.0
+    image_latent_dim: int = 50
+    use_image_bottleneck: bool = True
+    use_state_branch: bool = True
+    autotune_alpha: bool = True
+    init_alpha: float = 1.0
+    target_entropy: str | float = "auto"
+    policy_distribution: str = "tanh_normal"
+    sac_image_size: int = 64
+    random_crop_padding: int = 4
+    warmup_gaussian_noise: bool = True
+    # Residual-specific: clip range for residual actions output by the SAC policy.
+    residual_action_scale: float = 1.0
+
+
+@dataclasses.dataclass(frozen=True)
 class MolmoConfig:
     benchmark_dir: str = ""
     eval_config_cls: str = (
@@ -354,7 +386,11 @@ _CONFIGS.extend(
         make_base_online_config(
             name="pi05_libero_online_dsrl",
             rl_config=DSRLLearnerConfig(),
-        )
+        ),
+        make_base_online_config(
+            name="pi05_libero_online_residual_rl",
+            rl_config=ResidualRLLearnerConfig(),
+        ),
     ]
 )
 
