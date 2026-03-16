@@ -188,10 +188,10 @@ class ResidualRLLearnerConfig(RLAlgorithmConfig):
     policy_distribution: str = "tanh_normal"
     sac_image_size: int = 64
     random_crop_padding: int = 4
-    warmup_gaussian_noise: bool = True
-    # Residual-specific: clip range for residual actions output by the SAC policy.
+    warmup_gaussian_noise: bool = False
     residual_action_scale: float = 1.0
-
+    policy_output_init_scale: float | None = None
+    policy_log_std_init: float | None = None
 
 @dataclasses.dataclass(frozen=True)
 class MolmoConfig:

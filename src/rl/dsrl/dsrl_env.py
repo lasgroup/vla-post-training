@@ -257,9 +257,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
         prefix_rep: np.ndarray,
         batch_size: int,
     ) -> Dict[str, Any]:
-        prefix = DSRLVectorEnv._normalize_prefix_rep_shape(
-            prefix_rep, batch_size=batch_size
-        )
+        prefix = DSRLVectorEnv._normalize_prefix_rep_shape(prefix_rep, batch_size=batch_size)
         return {**observation, "prefix_rep": prefix}
 
     def _get_prefix_rep(
@@ -270,16 +268,12 @@ class DSRLVectorEnv(SubprocVectorEnv):
     ) -> np.ndarray:
         prefix_rep = outputs.get("prefix_rep")
         if prefix_rep is not None:
-            prefix = self._normalize_prefix_rep_shape(
-                prefix_rep, batch_size=batch_size
-            )
+            prefix = self._normalize_prefix_rep_shape(prefix_rep, batch_size=batch_size)
             self._prefix_rep_shape = tuple(prefix.shape[1:])
             return prefix
 
         if not self._warned_missing_prefix_rep:
-            logging.warning(
-                "Policy outputs are missing 'prefix_rep'; using zeros as fallback."
-            )
+            logging.warning("Policy outputs are missing 'prefix_rep'; using zeros as fallback.")
             self._warned_missing_prefix_rep = True
         shape_tail = self._prefix_rep_shape or (1,)
         return np.zeros((batch_size, *shape_tail), dtype=np.float32)
@@ -339,7 +333,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
         assert self._last_obs is not None, "Call reset() before step()."
 
         processed_obs = self._process_obs_for_pi0(self._last_obs, env_ids=list(range(self.env_num)))
-        expanded_noise = self._expand_noise(noise)
+        expanded_noise = self._expand_noise(noise) # TODO: This should happen outside of the wrapper
 
         outputs = self._decoder.infer(processed_obs, expanded_noise)
         actions = np.asarray(outputs["actions"])
@@ -349,9 +343,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
         return_stacks = super().step(actions, id)
         obs_stack = return_stacks[0]
         prefix_rep = self._get_prefix_rep(outputs, batch_size=self.env_num)
-        obs_with_prefix = self._attach_prefix_rep(
-            obs_stack, prefix_rep, self.env_num,
-        )
+        obs_with_prefix = self._attach_prefix_rep(obs_stack, prefix_rep, self.env_num)
         self._last_obs = obs_with_prefix
         return (obs_with_prefix, *return_stacks[1:])
 

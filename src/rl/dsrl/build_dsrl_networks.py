@@ -42,6 +42,8 @@ def _build_actor_critic_defs(
     # Useful for residual RL so the initial residual is ~0.
     raw_output_init_scale = _get_rl_attr(config, "policy_output_init_scale", None)
     policy_output_init_scale = float(raw_output_init_scale) if raw_output_init_scale is not None else None
+    raw_log_std_init = _get_rl_attr(config, "policy_log_std_init", None)
+    policy_log_std_init = float(raw_log_std_init) if raw_log_std_init is not None else None
     encoder_type = str(_get_rl_attr(config, "encoder_type", "resnet_34_v1")).lower()
     encoder_norm = str(_get_rl_attr(config, "encoder_norm", "group")).lower()
     use_spatial_softmax = bool(_get_rl_attr(config, "use_spatial_softmax", True))
@@ -213,6 +215,7 @@ def _build_actor_critic_defs(
                 action=action,
                 hidden_dims=policy_decoder_hidden_dims,
                 output_init_scale=policy_output_init_scale,
+                log_std_init=policy_log_std_init,
                 rngs=rngs,
             )
         if policy_distribution == "tanh_normal":
@@ -223,6 +226,7 @@ def _build_actor_critic_defs(
                 low=action_low,
                 high=action_high,
                 output_init_scale=policy_output_init_scale,
+                log_std_init=policy_log_std_init,
                 rngs=rngs,
             )
         raise ValueError(

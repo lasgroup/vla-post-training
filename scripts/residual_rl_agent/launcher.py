@@ -39,6 +39,11 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "num_train_steps": [500_000],
     "rl.buffer_capacity": [100_000],
     "rl.discount": [0.999],
+    "rl.policy_output_init_scale": [1e-4],
+    "rl.policy_log_std_init": [-5.0],
+    "rl.init_alpha": [0.001],
+    "rl.residual_action_scale": [0.25],
+    "rl.autotune_alpha": [False]
 }
 
 

@@ -45,14 +45,7 @@ from src.rl.dsrl.dsrl_utils import (
 class ResidualRLBaseActionSampler:
     """Samples base actions from an OpenPI policy for residual RL."""
 
-    def __init__(
-        self,
-        config: OnlineTrainConfig,
-        # *,
-        # checkpoint_manager: _checkpoints.CheckpointManager | None = None,
-        # resuming: bool = False,
-        # data_loader: Any = None,
-    ) -> None:
+    def __init__(self, config: OnlineTrainConfig) -> None:
         self._rng = jax.random.key(config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
 
@@ -66,7 +59,7 @@ class ResidualRLBaseActionSampler:
         )
 
         # Load model weights.
-        train_state, self._train_state_sharding = init_train_state(config, init_rng, self._mesh) #, resume=resuming,
+        train_state, self._train_state_sharding = init_train_state(config, init_rng, self._mesh)
         jax.block_until_ready(train_state)
         logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 
@@ -135,9 +128,8 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
     ) -> None:
         super().__init__(env_fns, **kwargs)
 
-        assert len(task_description) == self.env_num, (
-            f"Expected {self.env_num} task descriptions, got {len(task_description)}"
-        )
+        assert len(task_description) == self.env_num, f"Expected {self.env_num} task descriptions, got {len(task_description)}"
+    
         self._task_description = task_description
         self._query_frequency = int(config.collect.replan_steps)
         self._resize_image = int(config.collect.resize_image)
@@ -231,11 +223,8 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         return self._sampler.sample(processed_obs, batch_size)
 
     @staticmethod
-    def _attach_base_action(
-        observation: Dict[str, Any],
-        base_action: np.ndarray,
-    ) -> Dict[str, Any]:
-        return {**observation, "base_action": base_action}
+    def _attach_base_action(obs: Dict[str, Any], base_action: np.ndarray,) -> Dict[str, Any]:
+        return {**obs, "base_action": base_action}
 
     # ----- reset / step -----
 
@@ -261,9 +250,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         else:
             # Partial reset: single env done
             if self._base_actions is not None and self._last_obs is not None:
-                obs_with_base = self._attach_base_action(
-                    obs, self._last_obs["base_action"][:1]
-                )
+                obs_with_base = self._attach_base_action(obs, self._last_obs["base_action"][:1])
             else:
                 # Fallback: no base actions yet, attach zeros.
                 action_dim = self._sampler.action_dim
@@ -284,8 +271,6 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         lo, hi = self._residual_action_clip_range
         residual_action = np.clip(residual_action, lo, hi)
 
-        # base_action_chunk: (B, replan_steps, action_dim)
-        # residual_action:   (B, replan_steps, action_dim) or (B, 1, action_dim)
         base_action_chunk = self._last_obs["base_action"]
         actions = base_action_chunk + residual_action
 
@@ -295,7 +280,6 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         self._query_count += self._query_frequency
         if self._query_count >= self._sampler.action_horizon:
             self._clear_base_actions()
-            #logging.info("[step: re-sampling base actions]")
             self._base_actions = self._sample_base_actions(obs_stack)
 
         start = self._query_count

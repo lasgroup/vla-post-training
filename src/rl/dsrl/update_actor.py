@@ -208,7 +208,8 @@ def train_actor_step(
             "log_prob_mean": jnp.mean(log_probs),
             "entropy": -jnp.mean(log_probs),
             "q_value_mean": jnp.mean(q_values),
-            "action_mean": jnp.mean(jnp.abs(actions)),
+            "action_mean": jnp.mean(actions),
+            "action_abs_mean": jnp.mean(jnp.abs(actions)),
             "action_std": jnp.std(actions),
         }
 

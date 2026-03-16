@@ -52,11 +52,7 @@ def _normalize_residual_observation(observations: Any) -> Any:
 
 
 def _normalize_replay_observation_for_model(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize a replay-buffer observation for residual RL.
-
-    Replay observations already have flat ``state`` and ``base_action`` arrays,
-    so we concatenate and collapse the temporal dim.
-    """
+    """Normalize a replay-buffer observation for residual RL."""
     normalized: Dict[str, Any] = {}
     state = jnp.asarray(obs_dict["state"], dtype=jnp.float32)
     if state.ndim >= 3:

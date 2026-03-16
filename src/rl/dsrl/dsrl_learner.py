@@ -189,12 +189,8 @@ class DSRLLearner(Agent):
         self._eval_policy_actions_jit = jax.jit(_eval_policy_actions)
         warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs_normalized)
         warmup_rng = jax.random.fold_in(self._rng, 0)
-        _ = jax.block_until_ready(
-            self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
-        )
-        _ = jax.block_until_ready(
-            self._eval_policy_actions_jit(self._policy_state.params, warmup_obs)
-        )
+        _ = jax.block_until_ready(self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng))
+        _ = jax.block_until_ready(self._eval_policy_actions_jit(self._policy_state.params, warmup_obs))
         self._train_critic_step = jax.jit(functools.partial(train_q_step, self._config))
         self._train_actor_step = jax.jit(functools.partial(train_actor_step, self._config))
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
@@ -277,10 +273,7 @@ class DSRLLearner(Agent):
                 batch_dim = np.asarray(obs_leaves[0]).shape[0]
             else:
                 batch_dim = 1
-            noise = np.asarray(
-                jax.random.normal(rng, (batch_dim, self._action_dim)),
-                dtype=np.float32,
-            )
+            noise = np.asarray(jax.random.normal(rng, (batch_dim, self._action_dim)),dtype=np.float32,)
             if batch_actions:
                 noise = normalize_action_batch_shape(noise, self._expected_action_shape)
             return noise
@@ -584,10 +577,7 @@ class DSRLLearner(Agent):
         step = max(steps)
         path = self._ckpt_dir / str(step)
 
-        restored = self._checkpointer.restore(
-            path,
-            self._checkpoint_state(),
-        )
+        restored = self._checkpointer.restore(path,self._checkpoint_state(),)
 
         self.training_steps = int(restored["training_steps"])
         self._rng = restored["rng"]
