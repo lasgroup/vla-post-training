@@ -33,7 +33,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 128
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59x1"]
 DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
@@ -41,6 +41,9 @@ DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 DEFAULT_GROUP_SIZE = 8
+DEFAULT_NUM_STEPS = 5
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
+DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
 NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
@@ -54,10 +57,11 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [64],
+    "batch_size": [128],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [0.5],
     "collect.num_initial_rollouts": [5, 10],
+    "rl.td_weight_schedule.switch_step": [900, 3000],
 }
 
 
@@ -94,6 +98,9 @@ def main() -> None:
     parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
+    parser.add_argument("--num_steps", type=int, default=DEFAULT_NUM_STEPS)
+    parser.add_argument("--td_weight_switch_step", type=int, default=DEFAULT_TD_WEIGHT_SWITCH_STEP)
+    parser.add_argument("--td_weight_ramp_steps", type=int, default=DEFAULT_TD_WEIGHT_RAMP_STEPS)
 
     args = parser.parse_args()
 
@@ -127,6 +134,7 @@ def main() -> None:
                 "collect.num_eval_rollouts": args.num_eval_rollouts,
                 "num_train_steps": args.num_train_steps,
                 "rl.group_size": args.group_size,
+                "rl.num_steps": args.num_steps,
             }
             default_name_flags = dict(flags)
             default_name_flags.update(TASK_SWEEP[0])
@@ -134,7 +142,7 @@ def main() -> None:
             flags.update(task_flags)
 
             policy_start = flags["rl.policy_training_start_step"]
-            flags["rl.td_weight_schedule.switch_step"] = policy_start
+            flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
 
             flags.setdefault(

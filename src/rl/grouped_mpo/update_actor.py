@@ -92,14 +92,14 @@ def train_step(
         base_batch_size = total_batch_size // group_size
         score = advantage.reshape(base_batch_size, group_size) / beta
         if weight_clip is not None:
-            score = jnp.minimum(score, weight_clip)
+            score = jnp.clip(score, -weight_clip, weight_clip)
         score = jax.nn.softmax(score, axis=-1)
         score_stats = score
         score = jax.lax.stop_gradient(score[..., jnp.newaxis])
     else:
         score = advantage / beta
         if weight_clip is not None:
-            score = jnp.minimum(score, weight_clip)
+            score = jnp.clip(score, -weight_clip, weight_clip)
         score = jax.nn.softmax(score, axis=0)
         score_stats = score
         score = jax.lax.stop_gradient(score)

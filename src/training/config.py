@@ -42,19 +42,40 @@ class LinearSchedule(_optimizer.LRScheduleConfig):
 
 @dataclasses.dataclass(frozen=True)
 class StepSchedule(_optimizer.LRScheduleConfig):
-    """Step schedule: returns init_value for steps < switch_step, then end_value."""
+    """Step schedule with optional linear ramp.
+
+    - steps < switch_step: init_value
+    - switch_step <= steps < switch_step + ramp_steps: linear ramp from init_value to end_value
+    - steps >= switch_step + ramp_steps: end_value
+
+    When ramp_steps=0 (default), this is an abrupt step function (backward compatible).
+    """
 
     init_value: float = 0.0
     end_value: float = 1.0
     switch_step: int = 1000
+    ramp_steps: int = 0
 
     def create(self) -> optax.Schedule:
+        if self.ramp_steps <= 0:
+            return optax.join_schedules(
+                schedules=[
+                    optax.constant_schedule(self.init_value),
+                    optax.constant_schedule(self.end_value),
+                ],
+                boundaries=[self.switch_step],
+            )
         return optax.join_schedules(
             schedules=[
                 optax.constant_schedule(self.init_value),
+                optax.linear_schedule(
+                    init_value=self.init_value,
+                    end_value=self.end_value,
+                    transition_steps=self.ramp_steps,
+                ),
                 optax.constant_schedule(self.end_value),
             ],
-            boundaries=[self.switch_step],
+            boundaries=[self.switch_step, self.switch_step + self.ramp_steps],
         )
 
 
@@ -127,7 +148,7 @@ class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
-    noise_level: float = 0.0
+    noise_level: float = 0.3
 
 
 @dataclasses.dataclass(frozen=True)

@@ -62,20 +62,18 @@ def _compute_rollout_log_probs(
     return jnp.moveaxis(policy_log_probs, 0, -1)
 
 
-def _compute_ema_reference_kl(
+def _compute_reference_log_probs(
     *,
     model_def: nnx.GraphDef[_model.BaseModel],
     reference_params: nnx.State | None,
     policy_observation: _model.Observation,
     rollout_info: dict[str, at.Array],
-    policy_log_probs: at.Array,
     num_steps: int,
     noise_level: float,
-) -> tuple[at.Float[at.Array, ""], at.Array]:
+) -> at.Array | None:
+    """Compute reference log-probs outside the gradient tape."""
     if reference_params is None or noise_level <= 0.0:
-        return jnp.asarray(0.0, dtype=policy_log_probs.dtype), jnp.zeros_like(
-            policy_log_probs
-        )
+        return None
 
     reference_model = nnx.merge(model_def, reference_params)
     reference_model.eval()
@@ -83,15 +81,13 @@ def _compute_ema_reference_kl(
         raise AttributeError(
             "Flow-GRPO KL regularization requires a model with get_dist_and_log_prob()."
         )
-    reference_log_probs = _compute_rollout_log_probs(
+    return _compute_rollout_log_probs(
         model=reference_model,
         policy_observation=policy_observation,
         rollout_info=rollout_info,
         num_steps=num_steps,
         noise_level=noise_level,
     )
-    kl = jnp.mean(policy_log_probs - reference_log_probs)
-    return kl, reference_log_probs
 
 
 @at.typecheck
@@ -163,6 +159,21 @@ def train_step(
     )
     advantage = jax.lax.stop_gradient(q_value - value)
 
+    # Compute reference log-probs OUTSIDE the gradient tape.
+    # The reference model params are fixed, so no gradients needed.
+    reference_log_probs = None
+    if kl_coef > 0.0:
+        reference_log_probs = _compute_reference_log_probs(
+            model_def=policy_state.model_def,
+            reference_params=policy_state.ema_params,
+            policy_observation=expanded_policy_obs,
+            rollout_info=rollout_info,
+            num_steps=num_steps,
+            noise_level=noise_level,
+        )
+    if reference_log_probs is not None:
+        reference_log_probs = jax.lax.stop_gradient(reference_log_probs)
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -170,7 +181,7 @@ def train_step(
         rollout_info: dict[str, at.Array],
         advantage: at.Array,
         q_value: at.Array,
-        reference_params: nnx.State | None,
+        reference_log_probs: at.Array | None,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         policy_log_probs = _compute_rollout_log_probs(
             model=model,
@@ -180,18 +191,14 @@ def train_step(
             noise_level=noise_level,
         )
         log_probs = policy_log_probs
+
+        # KL against EMA reference, using pre-computed reference log-probs.
         kl_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
-        reference_log_probs = jnp.zeros_like(policy_log_probs)
-        if kl_coef > 0.0:
-            kl_loss, reference_log_probs = _compute_ema_reference_kl(
-                model_def=policy_state.model_def,
-                reference_params=reference_params,
-                policy_observation=policy_observation,
-                rollout_info=rollout_info,
-                policy_log_probs=policy_log_probs,
-                num_steps=num_steps,
-                noise_level=noise_level,
-            )
+        ref_log_prob_mean = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
+        if kl_coef > 0.0 and reference_log_probs is not None:
+            kl_loss = jnp.mean(policy_log_probs - reference_log_probs)
+            ref_log_prob_mean = jnp.mean(reference_log_probs)
+
         if use_mpo_advantage_weight:
             if group_size > 1:
                 total_batch_size = advantage.shape[0]
@@ -201,7 +208,7 @@ def train_step(
                 B = total_batch_size // group_size
                 score = advantage.reshape(B, group_size) / beta
                 if weight_clip is not None:
-                    score = jnp.minimum(score, weight_clip)
+                    score = jnp.clip(score, -weight_clip, weight_clip)
                 score = jax.nn.softmax(score, axis=-1)
                 score = score[:, jnp.newaxis, :]
                 log_probs = jnp.swapaxes(
@@ -210,7 +217,7 @@ def train_step(
             else:
                 score = advantage / beta
                 if weight_clip is not None:
-                    score = jnp.minimum(score, weight_clip)
+                    score = jnp.clip(score, -weight_clip, weight_clip)
                 score = jax.nn.softmax(score, axis=0)
             score = jax.lax.stop_gradient(score)
         else:
@@ -221,11 +228,8 @@ def train_step(
                     total_batch_size % group_size == 0
                 ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
                 B = total_batch_size // group_size
-                # 4. Reshape back to (B, G) for Group Relative calculations
+                # Reshape to (B, G) for Group Relative calculations.
                 # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
-                # Get groups per sample in the batch and set the group to be the last dimension.
-                # NOTE: jnp.transpose requires a full permutation for all dimensions;
-                # swapaxes is the intended "swap last two dims" operation.
                 adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
                 log_probs = jnp.swapaxes(
                     log_probs.reshape(B, group_size, -1), 1, 2
@@ -252,7 +256,7 @@ def train_step(
             "q_mean": jnp.mean(q_value),
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(policy_log_probs),
-            "reference_log_prob_mean": jnp.mean(reference_log_probs),
+            "reference_log_prob_mean": ref_log_prob_mean,
         }
 
         return loss, info
@@ -267,7 +271,7 @@ def train_step(
         rollout_info,
         advantage,
         q_value,
-        policy_state.ema_params,
+        reference_log_probs,
     )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)

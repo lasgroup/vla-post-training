@@ -55,7 +55,7 @@ def train_step(
 
     score = advantage / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
+    score = jnp.clip(score, -config.rl.weight_clip, config.rl.weight_clip)  # Clipping
     score = jax.nn.softmax(score, axis=0)  # (B, )
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
