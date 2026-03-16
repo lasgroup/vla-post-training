@@ -292,12 +292,7 @@ def make_base_online_config(
             extra_delta_transform=False,
         ),
         batch_size=256,
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=100,  # override default warmup steps
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
-        ),
+        lr_schedule=ConstantSchedule(value=5e-5),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
         weight_loader=weight_loaders.CheckpointWeightLoader(
