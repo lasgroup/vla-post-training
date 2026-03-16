@@ -35,35 +35,14 @@ import numpy as np
 import tqdm_loggable.auto as tqdm
 import wandb
 
-from src.rl.residual_rl.residual_rl_learner import ResidualRLLearner
+from src.rl.residual_rl.residual_rl_learner import ResidualRLLearner, _unwrap_residual_observation
 from src.rl.dsrl.build_dsrl_networks import _build_actor_critic_defs
-from src.rl.residual_rl.residual_rl_learner import _normalize_residual_observation
 from src.rl.residual_rl.residual_rl_env import residual_rl_wrap_env
 
 from src.envs import make_env
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.utils import init_logging, init_wandb
-
-
-def _unwrap_residual_observation(observations):
-    """Extract model observations from ResidualRLVectorEnv outputs.
-
-    The residual env outputs flat dicts with keys like ``pi0/state``,
-    ``pi0/image``, and ``base_action``. We pass them through as-is
-    since ``_normalize_residual_observation`` handles the conversion.
-    """
-    if (
-        isinstance(observations, dict)
-        and "observation" in observations
-        and isinstance(observations["observation"], dict)
-    ):
-        unpacked = dict(observations["observation"])
-        # Preserve base_action from the top level.
-        if "base_action" in observations:
-            unpacked["base_action"] = observations["base_action"]
-        return unpacked
-    return observations
 
 
 def main(config: _config.OnlineTrainConfig):

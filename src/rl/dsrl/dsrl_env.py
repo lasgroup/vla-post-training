@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import gc
 import logging
-import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import jax
@@ -21,18 +20,11 @@ import numpy as np
 from jax.experimental import mesh_utils
 
 import flax.nnx as nnx
-import flax.traverse_util as traverse_util
 
-import openpi.shared.array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
-import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
-import openpi.training.utils as training_utils
-import openpi.training.weight_loaders as _weight_loaders
 from openpi.policies import policy_config
 from openpi_client import image_tools
 
-from src.envs import make_env
 from src.envs.venv import SubprocVectorEnv
 from src.envs.wrappers import (
     Pi0ObservationWrapper,
@@ -41,108 +33,11 @@ from src.envs.wrappers import (
 )
 import src.training.config as _config
 from src.training.config import OnlineTrainConfig
-
-
-# ---------------------------------------------------------------------------
-# Train state initialization (shared with learner)
-# ---------------------------------------------------------------------------
-
-def _load_weights_and_validate(
-    loader: _weight_loaders.WeightLoader, params_shape: at.Params
-) -> at.Params:
-    loaded_params = loader.load(params_shape)
-    at.check_pytree_equality(
-        expected=params_shape,
-        got=loaded_params,
-        check_shapes=True,
-        check_dtypes=True,
-    )
-    return traverse_util.unflatten_dict(
-        {
-            k: v
-            for k, v in traverse_util.flatten_dict(loaded_params).items()
-            if not isinstance(v, jax.ShapeDtypeStruct)
-        }
-    )
-
-
-@at.typecheck
-def init_train_state(
-    config: OnlineTrainConfig,
-    init_rng: at.KeyArrayLike,
-    mesh: jax.sharding.Mesh,
-) -> tuple[training_utils.TrainState, Any]:
-    tx = _optimizer.create_optimizer(
-        config.optimizer,
-        config.lr_schedule,
-        weight_decay_mask=None,
-    )
-
-    def init(
-        rng: at.KeyArrayLike,
-        partial_params: at.Params | None = None,
-    ) -> training_utils.TrainState:
-        rng, model_rng = jax.random.split(rng)
-        model = config.model.create(model_rng)
-
-        if partial_params is not None:
-            graphdef, state = nnx.split(model)
-            nnx.replace_by_pure_dict(state, partial_params)
-            model = nnx.merge(graphdef, state)
-
-        params = nnx.state(model)
-        params = nnx_utils.state_map(
-            params,
-            config.freeze_filter,
-            lambda p: p.replace(p.value.astype(jnp.bfloat16)),
-        )
-
-        return training_utils.TrainState(
-            step=0,
-            params=params,
-            model_def=nnx.graphdef(model),
-            tx=tx,
-            opt_state=tx.init(nnx.filter_state(params, config.trainable_filter)),
-            ema_decay=config.ema_decay,
-            ema_params=None if config.ema_decay is None else params,
-        )
-
-    train_state_shape = jax.eval_shape(init, init_rng)
-    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-
-    partial_params = _load_weights_and_validate(
-        config.weight_loader,
-        nnx.to_pure_dict(train_state_shape.params),
-    )
-    replicated_sharding = jax.sharding.NamedSharding(
-        mesh, jax.sharding.PartitionSpec(),
-    )
-
-    train_state = jax.jit(
-        init,
-        donate_argnums=(1,),
-        in_shardings=replicated_sharding,
-        out_shardings=state_sharding,
-    )(init_rng, partial_params)
-
-    return train_state, state_sharding
-
-
-# ---------------------------------------------------------------------------
-# Action decoder: owns OpenPI model + policy, converts noise -> actions
-# ---------------------------------------------------------------------------
-
-def _resolve_policy_checkpoint_dir(config: OnlineTrainConfig) -> str:
-    checkpoint_dir = os.environ.get("OPENPI_POLICY_CHECKPOINT_DIR")
-    if checkpoint_dir is not None:
-        return checkpoint_dir
-    if isinstance(config.weight_loader, _weight_loaders.CheckpointWeightLoader):
-        path = config.weight_loader.params_path
-        return path[: -len("/params")] if path.endswith("/params") else path
-    raise FileNotFoundError(
-        "Policy checkpoint not found. Set OPENPI_POLICY_CHECKPOINT_DIR or "
-        "use CheckpointWeightLoader with a params path."
-    )
+from src.rl.dsrl.dsrl_utils import (
+    init_train_state,
+    _resolve_policy_checkpoint_dir,
+    _normalize_task_descriptions,
+)
 
 
 class DSRLActionDecoder:
@@ -471,21 +366,6 @@ class DSRLVectorEnv(SubprocVectorEnv):
 # ---------------------------------------------------------------------------
 # Environment factory
 # ---------------------------------------------------------------------------
-
-def _normalize_task_descriptions(
-    task_description: list[str] | str,
-    env_num: int,
-) -> list[str]:
-    if isinstance(task_description, str):
-        return [task_description] * env_num
-    if not task_description:
-        return [""] * env_num
-    if len(task_description) == env_num:
-        return [str(x) for x in task_description]
-    if len(task_description) == 1:
-        return [str(task_description[0])] * env_num
-    return [str(task_description[i % len(task_description)]) for i in range(env_num)]
-
 
 def dsrl_wrap_env(
     env_fn,

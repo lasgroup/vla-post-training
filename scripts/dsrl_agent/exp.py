@@ -1,13 +1,4 @@
 # ruff: noqa: E402
-# suppress Numba FNV hashing warnings
-
-#import os
-# Spawned env workers re-import this module. Keep them off GPU/JAX device init.
-#if mp.current_process().name != "MainProcess":
-#    os.environ.setdefault("JAX_PLATFORMS", "cpu")
-
-# Avoid aggressive JAX GPU preallocation in the trainer process.
-# os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 import warnings
 

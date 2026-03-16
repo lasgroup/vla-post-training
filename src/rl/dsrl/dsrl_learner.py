@@ -6,12 +6,12 @@ import logging
 from typing import Any, Dict
 
 import numpy as np
-import PIL.Image
 import jax
 import jax.numpy as jnp
 import flax.nnx as nnx
 from jax.experimental import mesh_utils
 
+import etils.epath as epath
 import openpi.training.checkpoints as _checkpoints
 from src.rl.agent import Agent
 from src.rl.dsrl.update_actor import (
@@ -36,6 +36,13 @@ from src.rl.dsrl.chunk_obs import (
     normalize_action_batch_shape,
     normalize_observation_for_model,
 )
+from src.rl.dsrl.dsrl_utils import (
+    _resize_image_np,
+    _copy_with_batch_dim,
+    _extract_replay_observation,
+    _finalize_replay_observation,
+    _build_replay_observation_template,
+)
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.networks.rl_networks import ActionType, ObsType
 from src.rl.types import StepData
@@ -43,206 +50,22 @@ from src.training.config import OnlineTrainConfig
 
 logger = logging.getLogger(__name__)
 
-import os
-import orbax.checkpoint as ocp
-import etils.epath as epath
-
-
-# ---------------------------------------------------------------------------
-# Image helpers
-# ---------------------------------------------------------------------------
-
-def _resize_image_np(img: np.ndarray, target_size: int) -> np.ndarray:
-    """Resize a single HxWxC uint8 image to target_size x target_size."""
-    if img.ndim == 3:
-        h, w = img.shape[0], img.shape[1]
-        if h == target_size and w == target_size:
-            return img
-        return np.array(
-            PIL.Image.fromarray(img).resize((target_size, target_size)),
-            dtype=img.dtype,
-        )
-    # Handle arbitrary leading dims (batch, temporal, etc.) by recursing.
-    if img.ndim >= 4:
-        return np.stack([_resize_image_np(img[i], target_size) for i in range(img.shape[0])])
-    return img
-
-
-# ---------------------------------------------------------------------------
-# Observation extraction
-# ---------------------------------------------------------------------------
-
-def _extract_replay_observation(
-    observation: Any,
-    *,
-    obs_prefix: str,
-    sac_image_size: int = 0,
-) -> Dict[str, np.ndarray]:
-    """Convert env observation payloads into replay observations.
-
-    Returns a dict with:
-    - ``state`` (required)
-    - optional ``image``, ``wrist_image`` (resized to *sac_image_size* when > 0)
-
-    - optional `prefix_embedding`
-    """
-    if not isinstance(observation, dict):
-        raise TypeError(
-            f"Expected dict observation for replay extraction, got {type(observation)}."
-        )
-
-    obs_dict = (
-        observation["observation"]
-        if isinstance(observation.get("observation"), dict)
-        else observation
-    )
-
-    def _get_from_obs(*keys: str) -> Any | None:
-        for key in keys:
-            if key in obs_dict:
-                return obs_dict[key]
-        return None
-
-    extracted: Dict[str, np.ndarray] = {}
-
-    image = _get_from_obs(
-        f"{obs_prefix}/image",
-        "image",
-        "observation/image",
-        "observation/exterior_image_1_left",
-        "exterior_image_1_left",
-        "pixels",
-    )
-    if image is not None:
-        img = np.asarray(image)
-        if sac_image_size > 0:
-            img = _resize_image_np(img, sac_image_size)
-        extracted["image"] = np.asarray(img, dtype=np.uint8)
-
-    wrist_image = _get_from_obs(
-        f"{obs_prefix}/wrist_image",
-        "wrist_image",
-        "observation/wrist_image",
-        "observation/wrist_image_left",
-        "wrist_image_left",
-    )
-    if wrist_image is not None:
-        wimg = np.asarray(wrist_image)
-        if sac_image_size > 0:
-            wimg = _resize_image_np(wimg, sac_image_size)
-        extracted["wrist_image"] = np.asarray(wimg, dtype=np.uint8)
-
-    state = _get_from_obs(
-        f"{obs_prefix}/state",
-        "state",
-        "observation/state",
-    )
-    if state is None:
-        joint_position = _get_from_obs(
-            "observation/joint_position",
-            "joint_position",
-        )
-        gripper_position = _get_from_obs(
-            "observation/gripper_position",
-            "gripper_position",
-        )
-        if joint_position is not None and gripper_position is not None:
-            state = np.concatenate(
-                [
-                    np.asarray(joint_position, dtype=np.float32),
-                    np.asarray(gripper_position, dtype=np.float32),
-                ],
-                axis=-1,
-            )
-    if state is None:
-        raise KeyError(
-            "Replay extraction requires a state vector. Expected one of "
-            f"['{obs_prefix}/state', 'state', 'observation/state']."
-        )
-    extracted["state"] = np.asarray(state, dtype=np.float32)
-
-    # Remove for testing
-    # for src in (observation, obs_dict):
-    #     if PREFIX_EMBEDDING_NAME in src:
-    #         extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
-    #             src[PREFIX_EMBEDDING_NAME], dtype=np.float32
-    #         )
-    #         break
-    #     if "prefix_rep" in src:
-    #         extracted[PREFIX_EMBEDDING_NAME] = np.asarray(
-    #             src["prefix_rep"], dtype=np.float32
-    #         )
-    #         break
-
-    return extracted
-
-
-def _finalize_replay_observation(
-    current_obs: Dict[str, np.ndarray],
-    next_obs: Dict[str, np.ndarray] | None,
-) -> Dict[str, np.ndarray]:
-    """Fill next-observation fields from current observation when missing."""
-    if next_obs is None:
-        next_obs = {}
-
-    merged: Dict[str, np.ndarray] = {
-        "state": np.asarray(next_obs.get("state", current_obs["state"]), dtype=np.float32)
-    }
-    if "image" in next_obs or "image" in current_obs:
-        merged["image"] = np.asarray(
-            next_obs.get("image", current_obs.get("image")), dtype=np.uint8
-        )
-    if "wrist_image" in next_obs or "wrist_image" in current_obs:
-        merged["wrist_image"] = np.asarray(
-            next_obs.get("wrist_image", current_obs.get("wrist_image")), dtype=np.uint8
-        )
-    # Remove for testing
-    # prefix = next_obs.get(PREFIX_EMBEDDING_NAME, current_obs.get(PREFIX_EMBEDDING_NAME))
-    # if prefix is not None:
-    #     merged[PREFIX_EMBEDDING_NAME] = np.asarray(prefix, dtype=np.float32)
-    return merged
-
-
-def _build_replay_observation_template(
-    observation: Any,
-    *,
-    obs_prefix: str,
-    sac_image_size: int = 0,
-) -> Dict[str, np.ndarray]:
-    """Build fixed-shape replay template preserving image/state modalities."""
-    extracted = _extract_replay_observation(observation, obs_prefix=obs_prefix, sac_image_size=sac_image_size,)
-    template: Dict[str, np.ndarray] = {}
-    if "image" in extracted:
-        template["image"] = np.zeros_like(np.asarray(extracted["image"]), dtype=np.uint8)
-    if "wrist_image" in extracted:
-        template["wrist_image"] = np.zeros_like(np.asarray(extracted["wrist_image"]), dtype=np.uint8)
-    template["state"] = np.zeros_like(np.asarray(extracted["state"]), dtype=np.float32)
-    return template
-
-
-def _copy_with_batch_dim(x: Any, *, dtype: Any | None = None) -> np.ndarray:
-    arr = np.asarray(x, dtype=dtype)
-    return np.array(arr[None, ...], copy=True)
-
-
-# ---------------------------------------------------------------------------
-# DSRLLearner
-# ---------------------------------------------------------------------------
 
 class DSRLLearner(Agent):
 
-    def __init__(self,
+    # Subclasses override to change the checkpoint subdirectory name.
+    _ckpt_subdir: str = "dsrl_state"
+
+    def __init__(
+        self,
         config: OnlineTrainConfig,
         dummy_obs: ObsType,
         dummy_act: ActionType,
         state_action_critic_def: StateActionCriticDef,
         policy_def: PolicyDef,
-        task_description: str,):
+        task_description: str,
+    ):
         self._config = config
-        if bool(getattr(self._config.collect, "store_prefix_rep", False)):
-            raise ValueError(
-                "DSRL does not support collect.store_prefix_rep=True in this integration path."
-            )
         self._rng = jax.random.key(config.seed)
         devices = mesh_utils.create_device_mesh((jax.device_count(),))
         self._mesh = jax.sharding.Mesh(devices, axis_names=("batch",))
@@ -256,24 +79,24 @@ class DSRLLearner(Agent):
         )
         self._sac_image_size = int(getattr(config.rl, "sac_image_size", 64))
         self._crop_padding = int(getattr(config.rl, "random_crop_padding", 4))
+
         raw_dummy_obs = jax.tree.map(lambda x: np.asarray(x), dummy_obs)
         replay_dummy_obs = _build_replay_observation_template(
             raw_dummy_obs,
-            obs_prefix="pi0", # str(self._config.collect.obs_prefix_key)
+            obs_prefix="pi0",
             sac_image_size=self._sac_image_size,
         )
-        dummy_obs = normalize_observation_for_model(raw_dummy_obs)
-        # Resize image keys to match SAC image size so that network init
-        # (encoder → bottleneck) uses the same spatial dims as training data.
-        if self._sac_image_size > 0 and isinstance(dummy_obs, dict):
+
+        dummy_obs_normalized = self._normalize_obs(raw_dummy_obs)
+        if self._sac_image_size > 0 and isinstance(dummy_obs_normalized, dict):
             for img_key in ("image", "wrist_image"):
-                if img_key in dummy_obs:
-                    dummy_obs[img_key] = jnp.asarray(
+                if img_key in dummy_obs_normalized:
+                    dummy_obs_normalized[img_key] = jnp.asarray(
                         _resize_image_np(
-                            np.asarray(dummy_obs[img_key]), self._sac_image_size
+                            np.asarray(dummy_obs_normalized[img_key]), self._sac_image_size
                         )
                     )
-        self._dummy_obs = dummy_obs
+        self._dummy_obs = dummy_obs_normalized
         self._dummy_act = dummy_act
         self._expected_action_shape = expected_chunk_action_shape(np.asarray(dummy_act))
         self._action_dim = int(np.prod(np.asarray(dummy_act).shape[1:]))
@@ -299,35 +122,33 @@ class DSRLLearner(Agent):
             load_paths=list(getattr(rl_cfg, "buffer_load_paths", ())),
             save_path=getattr(rl_cfg, "buffer_save_path", None),
         )
-        # Keep attribute parity with existing DSRL collection code paths.
         self.replay = self._online_data_buffer
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 
-        # Gaussian noise flag: use random noise instead of untrained policy
-        # for the very first data collection round (matching reference i==0).
-        rl_cfg = getattr(self._config, "rl", None)
         self._use_random_noise = bool(getattr(rl_cfg, "warmup_gaussian_noise", True))
 
         q_init_rng, policy_init_rng, alpha_init_rng, self._rng = jax.random.split(self._rng, 4)
-        self._state_action_critic_state, self._state_action_critic_state_sharding = init_state_action_critic_train_state(
+        self._state_action_critic_state, self._state_action_critic_state_sharding = (
+            init_state_action_critic_train_state(
                 self._config,
                 q_init_rng,
                 self._mesh,
                 critic_def=state_action_critic_def,
-                dummy_obs=dummy_obs,
+                dummy_obs=dummy_obs_normalized,
                 dummy_act=dummy_act,
-                use_sharding=False
+                use_sharding=False,
             )
+        )
 
         self._policy_state, self._policy_state_sharding = init_policy_state(
             self._config,
             policy_init_rng,
             self._mesh,
             policy_def=policy_def,
-            dummy_obs=dummy_obs,
+            dummy_obs=dummy_obs_normalized,
             dummy_act=dummy_act,
-            use_sharding=False
+            use_sharding=False,
         )
         self._alpha_state, self._alpha_state_sharding = init_alpha_state(
             self._config,
@@ -340,11 +161,11 @@ class DSRLLearner(Agent):
 
         self.training_steps = 0
 
-        dsrl_ckpt_dir = epath.Path(self._config.checkpoint_dir) / "dsrl_state"
-        dsrl_ckpt_dir.mkdir(parents=True, exist_ok=True)
-        self._dsrl_ckpt_dir = dsrl_ckpt_dir
-        self._dsrl_checkpointer = ocp.StandardCheckpointer()
-        
+        ckpt_dir = epath.Path(self._config.checkpoint_dir) / self._ckpt_subdir
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self._ckpt_dir = ckpt_dir
+        self._checkpointer = ocp.StandardCheckpointer()
+
         if self._resuming:
             self._restore_checkpoint()
 
@@ -366,7 +187,7 @@ class DSRLLearner(Agent):
 
         self._sample_policy_actions_jit = jax.jit(_sample_policy_actions)
         self._eval_policy_actions_jit = jax.jit(_eval_policy_actions)
-        warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs)
+        warmup_obs = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), dummy_obs_normalized)
         warmup_rng = jax.random.fold_in(self._rng, 0)
         _ = jax.block_until_ready(
             self._sample_policy_actions_jit(self._policy_state.params, warmup_obs, warmup_rng)
@@ -379,11 +200,23 @@ class DSRLLearner(Agent):
         self._train_alpha_step = jax.jit(functools.partial(train_alpha_step, self._config))
 
         logger.info(
-            "DSRLLearner init: action_dim=%d, sac_image_size=%d, crop_padding=%d, "
+            "%s init: action_dim=%d, sac_image_size=%d, crop_padding=%d, "
             "target_entropy=%.3f, warmup_noise=%s",
-            self._action_dim, self._sac_image_size, self._crop_padding,
+            type(self).__name__, self._action_dim, self._sac_image_size, self._crop_padding,
             self._target_entropy, self._use_random_noise,
         )
+
+    # ------------------------------------------------------------------
+    # Observation normalization (override in subclasses)
+    # ------------------------------------------------------------------
+
+    def _normalize_obs(self, obs: Any) -> Any:
+        """Normalize raw observations for the SAC actor/critic networks."""
+        return normalize_observation_for_model(obs)
+
+    def _normalize_replay_obs(self, obs_dict: Dict[str, Any]) -> Any:
+        """Normalize a replay-buffer observation dict for the SAC model."""
+        return normalize_observation_for_model(obs_dict)
 
     # ------------------------------------------------------------------
     # Action sampling
@@ -397,8 +230,7 @@ class DSRLLearner(Agent):
         deterministic: bool = False,
         batch_actions: bool = True,
     ) -> np.ndarray:
-        processed_obs = normalize_observation_for_model(observations)
-        # Resize images to SAC resolution (e.g. 64×64) to match network init.
+        processed_obs = self._normalize_obs(observations)
         if self._sac_image_size > 0 and isinstance(processed_obs, dict):
             for img_key in ("image", "wrist_image"):
                 if img_key in processed_obs:
@@ -413,12 +245,18 @@ class DSRLLearner(Agent):
             sampled_actions = self._sample_policy_actions_jit(self._policy_state.params, obs, rng)
 
         actions = np.asarray(sampled_actions, dtype=np.float32)
+        actions = self._post_process_actions(actions)
+
         if not batch_actions:
             return actions
 
         if actions.ndim == 1:
             actions = actions[None, ...]
         actions = normalize_action_batch_shape(actions, self._expected_action_shape)
+        return actions
+
+    def _post_process_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Hook for subclasses to scale/transform sampled actions."""
         return actions
 
     def _generate_actions(
@@ -439,7 +277,10 @@ class DSRLLearner(Agent):
                 batch_dim = np.asarray(obs_leaves[0]).shape[0]
             else:
                 batch_dim = 1
-            noise = np.asarray(jax.random.normal(rng, (batch_dim, self._action_dim)),dtype=np.float32,)
+            noise = np.asarray(
+                jax.random.normal(rng, (batch_dim, self._action_dim)),
+                dtype=np.float32,
+            )
             if batch_actions:
                 noise = normalize_action_batch_shape(noise, self._expected_action_shape)
             return noise
@@ -459,21 +300,6 @@ class DSRLLearner(Agent):
 
     def sample_actions(self, observations, **kwargs):
         return self._generate_actions(observations, deterministic=False, **kwargs)
-
-    # def sample_online_transitions(self) -> Dict[str, Any]:
-    #     """Sample transitions from the shared online replay buffer interface."""
-    #     if self._online_data_buffer.size == 0:
-    #         raise ValueError("Cannot sample transitions from an empty online replay buffer.")
-    #     batch = self._online_data_buffer.sample()
-
-    #     return {
-    #         "observation": batch["observation"],
-    #         "actions": np.asarray(batch["actions"], dtype=np.float32),
-    #         "next_observation": batch["next_observation"],
-    #         "reward": np.asarray(batch["reward"], dtype=np.float32),
-    #         "mc_return": np.asarray(batch["mc_return"], dtype=np.float32),
-    #         "discount": np.asarray(batch["discount"], dtype=np.float32),
-    #     }
 
     def add_data(self, step_data: StepData):
         def get_env_value(vec, env_id):
@@ -507,10 +333,10 @@ class DSRLLearner(Agent):
         return alpha_info
 
     # ------------------------------------------------------------------
-    # Image augmentation applied to observation dicts at training time
+    # Image augmentation
     # ------------------------------------------------------------------
+
     def _random_crop_single(self, rng: jax.Array, img: jax.Array, padding: int = 4) -> jax.Array:
-        """Random crop with edge-replicated padding for a single (H, W, C) image."""
         crop_from = jax.random.randint(rng, (2,), 0, 2 * padding + 1)
         crop_from = jnp.concatenate([crop_from, jnp.zeros((1,), dtype=jnp.int32)])
         padded = jnp.pad(
@@ -521,12 +347,10 @@ class DSRLLearner(Agent):
         return jax.lax.dynamic_slice(padded, crop_from, img.shape)
 
     def _batched_random_crop(self, rng: jax.Array, imgs: jax.Array, padding: int = 4) -> jax.Array:
-        """Random crop with edge padding for a (B, H, W, C) batch."""
         keys = jax.random.split(rng, imgs.shape[0])
         return jax.vmap(lambda k, i: self._random_crop_single(k, i, padding))(keys, imgs)
 
     def _augment_images(self, obs_dict: Dict[str, jax.Array], rng: jax.Array) -> tuple[Dict[str, jax.Array], jax.Array]:
-        """Apply random crop augmentation to image keys (matching reference)."""
         if self._crop_padding <= 0:
             return obs_dict, rng
         augmented = dict(obs_dict)
@@ -534,7 +358,6 @@ class DSRLLearner(Agent):
             if img_key not in augmented:
                 continue
             img = augmented[img_key]
-            # Only augment spatial images (B, H, W, C) where H, W > 1.
             if img.ndim == 4 and img.shape[1] > 1 and img.shape[2] > 1:
                 rng, crop_rng = jax.random.split(rng)
                 augmented[img_key] = self._batched_random_crop(
@@ -549,14 +372,16 @@ class DSRLLearner(Agent):
     def update(self):
         self.training_steps += 1
 
-        # After first real update, disable Gaussian noise exploration.
         batch_size = int(getattr(self._config, "batch_size", 128))
         if self._online_data_buffer.size < batch_size:
             return {}
 
         if self._use_random_noise:
             self._use_random_noise = False
-            logger.info("Disabling warmup Gaussian noise (buffer size=%d >= batch_size=%d).", self._online_data_buffer.size, batch_size,)
+            logger.info(
+                "Disabling warmup Gaussian noise (buffer size=%d >= batch_size=%d).",
+                self._online_data_buffer.size, batch_size,
+            )
 
         info = {}
         latest_actor_observation = None
@@ -568,14 +393,12 @@ class DSRLLearner(Agent):
                     f"{batch_size} vs {self._online_data_buffer.batch_size}."
                 )
             batch = self._online_data_buffer.sample()
-            batch_observation = normalize_observation_for_model(batch["observation"])
-            batch_next_observation = normalize_observation_for_model(batch["next_observation"])
+            batch_observation = self._normalize_replay_obs(batch["observation"])
+            batch_next_observation = self._normalize_replay_obs(batch["next_observation"])
 
-            # Convert to jax arrays.
             observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
             next_observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_next_observation)
 
-            # Random crop augmentation
             aug_rng, self._rng = jax.random.split(self._rng)
             observation, aug_rng = self._augment_images(observation, aug_rng)
             next_observation, aug_rng = self._augment_images(next_observation, aug_rng)
@@ -600,7 +423,7 @@ class DSRLLearner(Agent):
         if self.training_steps % int(getattr(self._config.rl, "actor_update_frequency", 1)) == 0:
             if latest_actor_observation is None:
                 batch = self._online_data_buffer.sample()
-                batch_observation = normalize_observation_for_model(batch["observation"])
+                batch_observation = self._normalize_replay_obs(batch["observation"])
                 observation = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), batch_observation)
                 aug_rng, self._rng = jax.random.split(self._rng)
                 observation, _ = self._augment_images(observation, aug_rng)
@@ -627,7 +450,7 @@ class DSRLLearner(Agent):
         return info
 
     # ------------------------------------------------------------------
-    # Episode saving with sparse -1/0 reward (matching reference)
+    # Episode saving with sparse -1/0 reward
     # ------------------------------------------------------------------
 
     def save_episode(self, is_success: bool = False, env_index: int = 0, **kwargs):
@@ -645,14 +468,11 @@ class DSRLLearner(Agent):
         if not episode:
             return
 
-        obs_prefix = "pi0"#str(self._config.collect.obs_prefix_key)
+        obs_prefix = "pi0"
         query_freq = int(getattr(self._config.collect, "replan_steps", 1))
         bootstrap_discount = float(self._config.rl.discount) ** query_freq
         episode_len = len(episode)
 
-        # Reward-threshold success detection
-        # is_success = (reward == env_max_reward)
-        # Override the terminated-based flag with a reward check when possible.
         env_max_reward = float(getattr(self._config.collect, "env_max_reward", 0.0))
         if env_max_reward > 0 and episode:
             final_ep = episode[-1]
@@ -674,7 +494,6 @@ class DSRLLearner(Agent):
             mc_returns[idx] = running_return
 
         for idx, ep in enumerate(episode):
-            # --- Extract observations (resized, no prefix embedding) ---
             obs = _extract_replay_observation(
                 ep["observation"],
                 obs_prefix=obs_prefix,
@@ -719,6 +538,10 @@ class DSRLLearner(Agent):
         self._collection_success_episodes = 0
         return collected_episodes
 
+    # ------------------------------------------------------------------
+    # Checkpointing
+    # ------------------------------------------------------------------
+
     def _checkpoint_state(self) -> dict[str, Any]:
         return {
             "training_steps": np.asarray(self.training_steps, dtype=np.int32),
@@ -733,22 +556,21 @@ class DSRLLearner(Agent):
         if step is None:
             step = int(self.training_steps)
 
-        path = self._dsrl_ckpt_dir / str(step)
+        path = self._ckpt_dir / str(step)
         state = self._checkpoint_state()
 
-        # Orbax requires the target path not to already exist.
         if path.exists():
             return
 
-        self._dsrl_checkpointer.save(path, state)
+        self._checkpointer.save(path, state)
 
     def _restore_checkpoint(self):
-        if not self._dsrl_ckpt_dir.exists():
-            logger.info("No DSRL checkpoint directory found, starting from scratch.")
+        if not self._ckpt_dir.exists():
+            logger.info("No %s checkpoint directory found, starting from scratch.", self._ckpt_subdir)
             return
 
         steps = []
-        for p in self._dsrl_ckpt_dir.iterdir():
+        for p in self._ckpt_dir.iterdir():
             if p.is_dir():
                 try:
                     steps.append(int(p.name))
@@ -756,13 +578,13 @@ class DSRLLearner(Agent):
                     pass
 
         if not steps:
-            logger.info("No DSRL checkpoints found, starting from scratch.")
+            logger.info("No %s checkpoints found, starting from scratch.", self._ckpt_subdir)
             return
 
         step = max(steps)
-        path = self._dsrl_ckpt_dir / str(step)
+        path = self._ckpt_dir / str(step)
 
-        restored = self._dsrl_checkpointer.restore(
+        restored = self._checkpointer.restore(
             path,
             self._checkpoint_state(),
         )
@@ -774,4 +596,4 @@ class DSRLLearner(Agent):
         self._alpha_state = restored["alpha_state"]
         self._use_random_noise = bool(restored["use_random_noise"])
 
-        logger.info("Restored DSRL checkpoint from step %d", step)
+        logger.info("Restored %s checkpoint from step %d", self._ckpt_subdir, step)
