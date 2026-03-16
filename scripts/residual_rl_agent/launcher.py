@@ -32,6 +32,13 @@ DEFAULT_SEED = 0
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
+    "collect.collect_interval": [2500],
+    "collect.env_num": [4],
+    "collect.num_rollouts": [25],
+    "collect.eval_interval": [2500],
+    "num_train_steps": [500_000],
+    "rl.buffer_capacity": [100_000],
+    "rl.discount": [0.999],
 }
 
 
