@@ -2,38 +2,40 @@ import collections
 import dataclasses
 import importlib
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import numpy as np
 import tyro
+import cv2
 
 from molmo_spaces.policy.learned_policy.utils import PromptSampler
 from molmo_spaces.utils.save_utils import save_frames_to_mp4
+from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
+import openpi.models.pi0_config as _pi0_config
+import openpi.policies.droid_policy as _droid_policy
+import openpi.transforms as _openpi_transforms
+from openpi.training import config as _openpi_config
 from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
 from src.envs.molmo import MolmoSpacesGymConfig
 from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 from openpi.policies import policy_config as _policy_config
-import src.training.config as _config
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+from openpi.shared import download as _openpi_download
 
 
 @dataclasses.dataclass
 class Args:
     # OpenPI policy selection.
-    config_name: str = "pi05_droid_jointpos_polaris"
-    checkpoint_dir: str = "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris"
+    checkpoint_dir: str | None = "gs://openpi-assets/checkpoints/pi05_droid_jointpos"
     default_prompt: str | None = None
 
     # MolmoSpaces benchmark/env setup.
     benchmark_path: str = (
-        "/capstor/store/cscs/swissai/a143/molmo-assets/benchmarks/"
-        "molmospaces-bench-v1/ithor/FrankaPickHardBench/"
-        "FrankaPickHardBench_20260206_json_benchmark"
+        "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/"
+        "molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/"
+        "FrankaPickDroidMiniBench_json_benchmark_20251231"
     )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
@@ -47,14 +49,14 @@ class Args:
     wrist_camera_key: str = "wrist_camera"
 
     # Action mapping from OpenPI output to MolmoSpaces action dict.
-    execute_horizon: int | None = None  # defaults to train_cfg.model.action_horizon
+    execute_horizon: int = 8  # defaults to train_cfg.model.action_horizon
     grasping_type: str | None = None  # one of {"continuous", "binary"}; defaults to eval config
     gripper_threshold: float | None = None  # defaults to eval config
     gripper_scale: float = 255.0
 
     # Rollout control.
-    num_episodes: int = 1
-    max_steps: int = 300
+    num_episodes: int | None = None
+    max_steps: int = 450
 
     # Video visualization.
     save_trajectory_video: bool = True
@@ -99,16 +101,6 @@ class _RegisteredPolicyAdapter:
     def get_info(self) -> dict[str, Any]:
         return {"policy_name": self._policy_name}
 
-
-def _as_uint8_hwc(image: Any) -> np.ndarray:
-    image = np.asarray(image)
-    if image.ndim == 3 and image.shape[0] == 3:
-        image = np.transpose(image, (1, 2, 0))
-    if np.issubdtype(image.dtype, np.floating):
-        image = np.clip(image, 0.0, 1.0) * 255.0 if image.max() <= 1.0 else image
-    return np.clip(image, 0, 255).astype(np.uint8)
-
-
 def _resolve_eval_config(eval_config_cls: str):
     if ":" not in eval_config_cls:
         raise ValueError(
@@ -123,23 +115,6 @@ def _resolve_eval_config(eval_config_cls: str):
             f"Could not resolve class '{class_name}' in module '{module_name}'."
         ) from exc
     return cls()
-
-def _resize_nearest(image: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
-    src_h, src_w = image.shape[:2]
-    if src_h == target_h and src_w == target_w:
-        return image
-    y_idx = np.linspace(0, src_h - 1, num=target_h, dtype=np.int32)
-    x_idx = np.linspace(0, src_w - 1, num=target_w, dtype=np.int32)
-    return image[y_idx][:, x_idx]
-
-
-def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
-    src_h, src_w = image.shape[:2]
-    if src_h == target_h:
-        return image
-    target_w = max(1, int(round((target_h / float(src_h)) * src_w)))
-    return _resize_nearest(image, target_h, target_w)
-
 
 def _action_overlay(action: np.ndarray, width: int, height: int) -> np.ndarray:
     action = np.asarray(action, dtype=np.float32)
@@ -248,13 +223,9 @@ def _compose_rollout_frame(
     action: np.ndarray | None,
     args: Args,
 ) -> np.ndarray:
-    exo = _as_uint8_hwc(model_input["observation/exterior_image_1_left"])
-    wrist = _as_uint8_hwc(model_input["observation/wrist_image_left"])
-
-    target_h = max(exo.shape[0], wrist.shape[0])
-    exo = _resize_to_height(exo, target_h)
-    wrist = _resize_to_height(wrist, target_h)
-    separator = np.full((target_h, 4, 3), 255, dtype=np.uint8)
+    exo = model_input["observation/exterior_image_1_left"]
+    wrist = model_input["observation/wrist_image_left"]
+    separator = np.full((max(exo.shape[0], wrist.shape[0]), 4, 3), 255, dtype=np.uint8)
     frame = np.concatenate([exo, separator, wrist], axis=1)
 
     # Always include the action panel so all video frames have identical shape.
@@ -277,20 +248,6 @@ def _compose_rollout_frame(
     )
 
 
-def _obs_to_openpi_input(
-    obs: dict[str, Any],
-    args: Args,
-    registered_policy: _RegisteredPolicyAdapter,
-) -> dict[str, Any]:
-    return _shared_obs_to_openpi_input(
-        obs,
-        exo_camera_key=args.exo_camera_key,
-        wrist_camera_key=args.wrist_camera_key,
-        gripper_obs_norm=0.824033,
-        prompt=registered_policy.get_prompt(args.default_prompt),
-    )
-
-
 def _model_action_to_env_action(
     model_action: np.ndarray,
     grasping_type: str,
@@ -298,13 +255,7 @@ def _model_action_to_env_action(
     gripper_scale: float,
 ) -> dict[str, np.ndarray]:
     model_action = np.asarray(model_action, dtype=np.float32)
-    if model_action.shape[0] < 8:
-        raise ValueError(
-            "Expected at least 8 action dims from OpenPI policy, got shape "
-            f"{model_action.shape}."
-        )
 
-    arm = model_action[:7]
     if grasping_type == "continuous":
         gripper = np.asarray([model_action[7] * gripper_scale], dtype=np.float32)
     elif grasping_type == "binary":
@@ -318,12 +269,74 @@ def _model_action_to_env_action(
             "Use 'continuous' or 'binary'."
         )
 
-    return {"arm": arm, "gripper": gripper}
+    return {"arm": model_action[:7], "gripper": gripper}
 
 
-def _resolve_execute_horizon(args: Args, train_cfg: Any) -> int:
+def _resolve_checkpoint_path(args: Args, eval_config: Any) -> str:
+    checkpoint_path = args.checkpoint_dir or getattr(
+        eval_config.policy_config, "checkpoint_path", None
+    )
+    if not checkpoint_path:
+        raise ValueError(
+            "No checkpoint path configured. Set eval_config.policy_config.checkpoint_path "
+            "or pass --checkpoint-dir."
+        )
+
+    if urlparse(checkpoint_path).scheme:
+        return checkpoint_path
+
+    return str(Path(checkpoint_path).expanduser())
+
+
+def _load_local_openpi_policy(
+    checkpoint_path: str,
+    *,
+    default_prompt: str | None,
+) -> tuple[Any, Any]:
+    config_name = os.path.basename(checkpoint_path.rstrip("/"))
+    checkpoint_path = str(_openpi_download.maybe_download(checkpoint_path))
+
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
+
+    if config_name != "pi05_droid_jointpos":
+        raise ValueError(
+            f"Unsupported checkpoint config '{config_name}'. "
+            "This demo currently defines an explicit TrainConfig only for "
+            "'pi05_droid_jointpos'."
+        )
+    # https://github.com/omarrayyann/openpi/blob/711487f019e5f03b254d427d4523b1f0805a4814/src/openpi/training/config.py#L682-L698
+    train_cfg = _openpi_config.TrainConfig(
+        name="pi05_droid_jointpos",
+        model=_pi0_config.Pi0Config(action_horizon=15, pi05=True),
+        data=_openpi_config.SimpleDataConfig(
+            assets=_openpi_config.AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _openpi_transforms.Group(
+                inputs=[_droid_policy.DroidInputs(model_type=_openpi_config.ModelType.PI05)],
+                outputs=[
+                    _openpi_transforms.AbsoluteActions(
+                        _openpi_transforms.make_bool_mask(7, -1)
+                    ),
+                    _droid_policy.DroidOutputs(),
+                ],
+            ),
+            base_config=_openpi_config.DataConfig(prompt_from_task=True),
+        ),
+    )
+    policy = _policy_config.create_trained_policy(
+        train_cfg,
+        checkpoint_path,
+        default_prompt=default_prompt,
+    )
+    return policy, train_cfg
+
+
+def _resolve_execute_horizon(args: Args, train_cfg: Any, eval_config: Any) -> int:
     model_horizon = int(getattr(train_cfg.model, "action_horizon", 0) or 0)
+    config_chunk_size = int(getattr(eval_config.policy_config, "chunk_size", 0) or 0)
     requested = args.execute_horizon
+    if requested is None and config_chunk_size > 0:
+        requested = config_chunk_size
 
     if requested is None:
         if model_horizon <= 0:
@@ -352,14 +365,21 @@ def run(args: Args) -> None:
     if args.episode_sampling not in {"sequential", "random"}:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
 
-    train_cfg = _config.get_config(args.config_name)
-    execute_horizon = _resolve_execute_horizon(args, train_cfg)
-    policy = _policy_config.create_trained_policy(
-        train_cfg,
-        args.checkpoint_dir,
+    benchmark_path = Path(args.benchmark_path).expanduser().resolve()
+    benchmark_episodes = load_all_episodes(benchmark_path)
+    if not benchmark_episodes:
+        raise ValueError(
+            f"No benchmark episodes found in {benchmark_path}. "
+            "Expected benchmark.json or house_*/episode_*.json files."
+        )
+
+    eval_config = _resolve_eval_config(args.eval_config_cls)
+    checkpoint_path = _resolve_checkpoint_path(args, eval_config)
+    policy, train_cfg = _load_local_openpi_policy(
+        checkpoint_path,
         default_prompt=args.default_prompt,
     )
-    eval_config = _resolve_eval_config(args.eval_config_cls)
+    execute_horizon = _resolve_execute_horizon(args, train_cfg, eval_config)
     grasping_type = args.grasping_type or eval_config.policy_config.grasping_type
     gripper_threshold = (
         args.gripper_threshold
@@ -373,126 +393,130 @@ def run(args: Args) -> None:
     )
 
     env_cfg = MolmoSpacesGymConfig(
-        benchmark_dir=args.benchmark_path,
+        benchmark_dir=str(benchmark_path),
         eval_config_cls=args.eval_config_cls,
         episode_sampling=args.episode_sampling,
         seed=args.seed,
         task_horizon_steps=args.task_horizon_steps,
     )
     env = MolmoSpacesBenchmarkGymEnv(env_cfg)
-    registered_policy = _RegisteredPolicyAdapter(policy, args.config_name, prompt_sampler)
+    num_episodes = args.num_episodes if args.num_episodes is not None else len(benchmark_episodes)
+    policy_name = getattr(train_cfg, "name", os.path.basename(checkpoint_path))
+    registered_policy = _RegisteredPolicyAdapter(policy, policy_name, prompt_sampler)
     env.register_policy(registered_policy)
     video_dir = Path(args.video_dir).expanduser()
     video_fps = 1000.0 / float(eval_config.policy_dt_ms)
     logging.info(
         "OpenPI config=%s model_type=%s action_horizon=%s execute_horizon=%d checkpoint=%s",
-        args.config_name,
+        policy_name,
         getattr(train_cfg.model, "model_type", "unknown"),
         getattr(train_cfg.model, "action_horizon", "unknown"),
         execute_horizon,
-        args.checkpoint_dir,
+        checkpoint_path,
     )
 
-    try:
-        total_success = 0
-        total_reward = 0.0
-        total_steps = 0
-        for episode_idx in range(args.num_episodes):
-            obs, info = env.reset(seed=args.seed + episode_idx)
-            action_buffer: collections.deque[np.ndarray] = collections.deque()
-            episode_prompt = registered_policy.get_prompt(args.default_prompt)
-            video_frames: list[np.ndarray] = []
+    total_success = 0
+    total_reward = 0.0
+    total_steps = 0
+    for episode_idx in range(num_episodes):
+        obs, info = env.reset(seed=args.seed + episode_idx)
+        action_buffer: collections.deque[np.ndarray] = collections.deque()
+        episode_prompt = registered_policy.get_prompt(args.default_prompt)
+        video_frames: list[np.ndarray] = []
 
-            if args.save_trajectory_video:
-                try:
-                    initial_model_input = _obs_to_openpi_input(obs, args, registered_policy)
-                    video_frames.append(
-                        _compose_rollout_frame(
-                            initial_model_input,
-                            episode_prompt,
-                            action=None,
-                            args=args,
-                        )
-                    )
-                except KeyError as exc:
-                    logging.warning("Video frame capture skipped at reset: %s", exc)
-
-            success = False
-            episode_reward = 0.0
-            episode_steps = 0
-            for step_idx in range(args.max_steps):
-                model_input = _obs_to_openpi_input(obs, args, registered_policy)
-
-                if not action_buffer:
-                    action_chunk = np.asarray(
-                        policy.infer(model_input, sharding_spec=None)["actions"]
-                    )
-                    if action_chunk.ndim == 1:
-                        action_chunk = action_chunk[None, :]
-                    action_buffer.extend(action_chunk[:execute_horizon])
-
-                raw_action = action_buffer.popleft()
-                if args.save_trajectory_video:
-                    video_frames.append(
-                        _compose_rollout_frame(
-                            model_input,
-                            episode_prompt,
-                            action=raw_action,
-                            args=args,
-                        )
-                    )
-
-                env_action = _model_action_to_env_action(
-                    raw_action,
-                    grasping_type=grasping_type,
-                    gripper_threshold=gripper_threshold,
-                    gripper_scale=args.gripper_scale,
-                )
-                obs, reward, terminated, truncated, info = env.step(env_action)
-                episode_reward += float(reward)
-                episode_steps = step_idx + 1
-
-                if info.get("success") is True:
-                    success = True
-
-                if terminated or truncated:
-                    break
-
-            total_success += int(success)
-            total_reward += episode_reward
-            total_steps += episode_steps
-            logging.info(
-                (
-                    "Episode %d/%d finished: success=%s, steps=%d, "
-                    "accumulated_reward=%.4f, success_so_far=%d"
-                ),
-                episode_idx + 1,
-                args.num_episodes,
-                success,
-                episode_steps,
-                episode_reward,
-                total_success,
+        success = False
+        episode_reward = 0.0
+        episode_steps = 0
+        for step_idx in range(args.max_steps):
+            model_input = _shared_obs_to_openpi_input(
+                obs,
+                exo_camera_key=args.exo_camera_key,
+                wrist_camera_key=args.wrist_camera_key,
+                gripper_obs_norm=0.824033,
+                prompt=registered_policy.get_prompt(args.default_prompt),
             )
 
-            if args.save_trajectory_video and video_frames:
-                video_path = video_dir / f"episode_{episode_idx:04d}.mp4"
-                save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
-                logging.info("Saved trajectory video with prompt overlay: %s", video_path)
+            if not action_buffer:
+                action_chunk = np.asarray(
+                    policy.infer(model_input, sharding_spec=None)["actions"]
+                )
+                chunk_len = int(action_chunk.shape[0]) if action_chunk.ndim > 0 else 0
+                if chunk_len != execute_horizon:
+                    logging.warning(
+                        (
+                            "Policy returned action chunk length %d while "
+                            "execute_horizon=%d; %s."
+                        ),
+                        chunk_len,
+                        execute_horizon,
+                        "truncating to execute_horizon"
+                        if chunk_len > execute_horizon
+                        else "buffer may run short before the next inference call",
+                    )
+                action_buffer.extend(action_chunk[:execute_horizon])
 
-        num_episodes = max(args.num_episodes, 1)
+            raw_action = action_buffer.popleft()
+            if args.save_trajectory_video:
+                video_frames.append(
+                    _compose_rollout_frame(
+                        model_input,
+                        episode_prompt,
+                        action=raw_action,
+                        args=args,
+                    )
+                )
+
+            env_action = _model_action_to_env_action(
+                raw_action,
+                grasping_type=grasping_type,
+                gripper_threshold=gripper_threshold,
+                gripper_scale=args.gripper_scale,
+            )
+            obs, reward, terminated, truncated, info = env.step(env_action)
+            episode_reward += float(reward)
+            episode_steps = step_idx + 1
+
+            if info["success"]:
+                success = True
+                break
+
+            if terminated or truncated:
+                break
+
+        total_success += int(success)
+        total_reward += episode_reward
+        total_steps += episode_steps
         logging.info(
             (
-                "Done. Success rate: %.3f, total_steps=%d, "
-                "total_accumulated_reward=%.4f, avg_steps=%.2f, avg_reward=%.4f"
+                "Episode %d/%d finished: success=%s, steps=%d, "
+                "accumulated_reward=%.4f, success_so_far=%d"
             ),
-            total_success / num_episodes,
-            total_steps,
-            total_reward,
-            total_steps / num_episodes,
-            total_reward / num_episodes,
+            episode_idx + 1,
+            num_episodes,
+            success,
+            episode_steps,
+            episode_reward,
+            total_success,
         )
-    finally:
-        env.close()
+
+        if args.save_trajectory_video and video_frames:
+            video_path = video_dir / f"episode_{episode_idx:04d}.mp4"
+            save_frames_to_mp4(np.asarray(video_frames, dtype=np.uint8), str(video_path), fps=video_fps)
+            logging.info("Saved trajectory video with prompt overlay: %s", video_path)
+
+    num_episodes = max(num_episodes, 1)
+    logging.info(
+        (
+            "Done. Success rate: %.3f, total_steps=%d, "
+            "total_accumulated_reward=%.4f, avg_steps=%.2f, avg_reward=%.4f"
+        ),
+        total_success / num_episodes,
+        total_steps,
+        total_reward,
+        total_steps / num_episodes,
+        total_reward / num_episodes,
+    )
+    env.close()
 
 
 def main() -> None:
