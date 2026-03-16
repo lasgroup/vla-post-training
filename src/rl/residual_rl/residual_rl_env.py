@@ -278,6 +278,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         checkpoint_manager: _checkpoints.CheckpointManager | None = None,
         resuming: bool = False,
         data_loader: Any = None,
+        sampler: ResidualRLBaseActionSampler | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(env_fns, **kwargs)
@@ -290,12 +291,15 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         self._resize_image = int(config.collect.resize_image)
         self._residual_action_clip_range = residual_action_clip_range
 
-        self._sampler = ResidualRLBaseActionSampler(
-            config,
-            checkpoint_manager=checkpoint_manager,
-            resuming=resuming,
-            data_loader=data_loader,
-        )
+        if sampler is not None:
+            self._sampler = sampler
+        else:
+            self._sampler = ResidualRLBaseActionSampler(
+                config,
+                checkpoint_manager=checkpoint_manager,
+                resuming=resuming,
+                data_loader=data_loader,
+            )
         self._last_obs: Optional[Dict[str, Any]] = None
         self._base_actions: Optional[np.ndarray] = None
         self._query_count = 0
@@ -467,8 +471,13 @@ def residual_rl_wrap_env(
     task_description: list[str] | str,
     residual_action_clip_range: tuple[float, float] = (-1.0, 1.0),
     env_num: int | None = None,
+    sampler: ResidualRLBaseActionSampler | None = None,
 ) -> tuple[ResidualRLVectorEnv, list[str]]:
-    """Build a ResidualRLVectorEnv with all necessary wrappers."""
+    """Build a ResidualRLVectorEnv with all necessary wrappers.
+
+    Pass an existing *sampler* to share the OpenPI model across envs
+    and avoid loading it multiple times.
+    """
     if env_num is None:
         env_num = int(config.collect.env_num)
     replan_steps = int(config.collect.replan_steps)
@@ -503,6 +512,7 @@ def residual_rl_wrap_env(
         config=config,
         task_description=task_description,
         residual_action_clip_range=residual_action_clip_range,
+        sampler=sampler,
     )
     env.seed(int(config.seed))
     return env, task_description

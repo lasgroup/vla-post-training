@@ -75,7 +75,9 @@ def main(config: _config.OnlineTrainConfig):
 
     eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
     eval_env, eval_task_description = residual_rl_wrap_env(
-        eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num
+        eval_env_fn, config, eval_task_description,
+        env_num=config.collect.eval_env_num,
+        sampler=env.sampler,
     )
 
     # Dummy observation and action
