@@ -53,33 +53,25 @@ def main(config: _config.OnlineTrainConfig):
     env, task_description = residual_rl_wrap_env(env_fn, config, task_description)
 
     eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
-    eval_env, eval_task_description = residual_rl_wrap_env(
-        eval_env_fn, config, eval_task_description,
-        env_num=config.collect.eval_env_num,
-        sampler=env.sampler,
-    )
+    eval_env, eval_task_description = residual_rl_wrap_env(eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num, sampler=env.sampler,)
 
     # Dummy observation and action
     reset_out = env.reset()
     model_obs_batch = _unwrap_residual_observation(reset_out[0])
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(lambda x: np.asarray(x)[0:1], model_obs_batch)
-    # Infer the true robot action dim from the base_action attached by the env
-    # (e.g. 7), not config.model.action_dim (latent/noise dim, e.g. 32).
     base_action = np.asarray(model_obs_batch["base_action"])
     action_dim = int(base_action.shape[-1])
-    action_horizon = 1
+    action_horizon = 1  # One residual for the action chunk
     dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
-    # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
     action_low = jnp.asarray(-1.0, dtype=jnp.float32)
     action_high = jnp.asarray(1.0, dtype=jnp.float32)
 
-    policy_distribution = getattr(config.rl, "policy_distribution", "tanh_normal")
     state_action_critic_def, policy_def = _build_actor_critic_defs(
         config,
         action_low=action_low,
         action_high=action_high,
-        policy_distribution=policy_distribution,
+        policy_distribution=getattr(config.rl, "policy_distribution", "tanh_normal"),
     )
 
     agent = ResidualRLLearner(

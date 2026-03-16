@@ -81,11 +81,7 @@ class DSRLActionDecoder:
                 setattr(self._policy, attr, None)
         gc.collect()
 
-    def infer(
-        self,
-        obs: Dict[str, Any],
-        noise: np.ndarray,
-    ) -> Dict[str, Any]:
+    def infer(self, obs: Dict[str, Any],noise: np.ndarray,) -> Dict[str, Any]:
         """Run policy inference, returning actions and prefix_rep."""
         outputs = self._policy.infer_with_model(
             model=self.model,
@@ -203,7 +199,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
 
     # ----- noise -> full-horizon expansion -----
 
-    def _expand_noise(self, noise: np.ndarray) -> np.ndarray:
+    def _expand_noise(self, noise: np.ndarray) -> np.ndarray: # TODO: Simplify function
         """Expand (B, 1, A) or (B, H, A) noise to (B, policy_horizon, A)."""
         arr = np.asarray(noise, dtype=np.float32)
         B = self.env_num
@@ -325,10 +321,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
 
         batch_size = len(reset_ids)
         processed_obs = self._process_obs_for_pi0(obs, env_ids=reset_ids)
-        dummy_noise = np.zeros(
-            (batch_size, self._decoder.action_horizon, self._decoder.action_dim),
-            dtype=np.float32,
-        )
+        dummy_noise = np.zeros((batch_size, self._decoder.action_horizon, self._decoder.action_dim),dtype=np.float32)
         outputs = self._decoder.infer(processed_obs, dummy_noise)
         prefix_rep = self._get_prefix_rep(outputs, batch_size=batch_size)
         obs_with_prefix = self._attach_prefix_rep(obs, prefix_rep, batch_size)

@@ -54,9 +54,7 @@ def main(config: _config.OnlineTrainConfig):
     env, task_description = dsrl_wrap_env(env_fn, config, task_description)
     
     eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
-    eval_env, eval_task_description = dsrl_wrap_env(
-        eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num
-    )
+    eval_env, eval_task_description = dsrl_wrap_env(eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num)
 
     # Dummy observation and action
     reset_out = env.reset()
@@ -64,18 +62,16 @@ def main(config: _config.OnlineTrainConfig):
     # Keep exactly one env sample while preserving wrapper-provided dimensions.
     dummy_obs = jax.tree.map(lambda x: np.asarray(x)[0:1], model_obs_batch,)
     action_dim = int(getattr(env, "policy_action_dim", int(getattr(config.model, "action_dim", 32))))
-    action_horizon = 1
+    action_horizon = 1 # One residual for the action chunk
     dummy_act = jnp.zeros((1, action_horizon, action_dim), dtype=jnp.float32)
-    # Use scalar bounds to avoid TFP broadcast issues with chunked action shapes.
     action_low = jnp.asarray(-1.0, dtype=jnp.float32)
     action_high = jnp.asarray(1.0, dtype=jnp.float32)
 
-    policy_distribution = getattr(config.rl, "policy_distribution", "tanh_normal")
     state_action_critic_def, policy_def = _build_actor_critic_defs(
         config,
         action_low=action_low,
         action_high=action_high,
-        policy_distribution=policy_distribution,
+        policy_distribution=getattr(config.rl, "policy_distribution", "tanh_normal"),
     )
 
     agent = DSRLLearner(config=config, 

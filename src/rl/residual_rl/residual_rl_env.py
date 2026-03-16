@@ -48,10 +48,10 @@ class ResidualRLBaseActionSampler:
     def __init__(
         self,
         config: OnlineTrainConfig,
-        *,
-        checkpoint_manager: _checkpoints.CheckpointManager | None = None,
-        resuming: bool = False,
-        data_loader: Any = None,
+        # *,
+        # checkpoint_manager: _checkpoints.CheckpointManager | None = None,
+        # resuming: bool = False,
+        # data_loader: Any = None,
     ) -> None:
         self._rng = jax.random.key(config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
@@ -66,38 +66,31 @@ class ResidualRLBaseActionSampler:
         )
 
         # Initialize checkpoint manager if not provided.
-        if checkpoint_manager is None:
-            checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
-                config.checkpoint_dir,
-                keep_period=config.keep_period,
-                overwrite=config.overwrite,
-                resume=config.resume,
-            )
-        self._checkpoint_manager = checkpoint_manager
+        # if checkpoint_manager is None:
+        #     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
+        #         config.checkpoint_dir,
+        #         keep_period=config.keep_period,
+        #         overwrite=config.overwrite,
+        #         resume=config.resume,
+        #     )
+        # self._checkpoint_manager = checkpoint_manager
 
         # Load model weights.
-        train_state, self._train_state_sharding = init_train_state(
-            config, init_rng, self._mesh, resume=resuming,
-        )
+        train_state, self._train_state_sharding = init_train_state(config, init_rng, self._mesh, resume=resuming,)
         jax.block_until_ready(train_state)
         logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
 
-        if resuming:
-            train_state = _checkpoints.restore_state(
-                checkpoint_manager, train_state, data_loader,
-            )
+        # if resuming:
+        #     train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader,)
 
         self._train_state = train_state
-        params = (
-            train_state.ema_params
-            if train_state.ema_params is not None
-            else train_state.params
-        )
+        params = train_state.ema_params if train_state.ema_params is not None else train_state.params
         self.model = nnx.merge(train_state.model_def, params)
 
         # Load policy (for tokenization / action sampling), then drop its
         # redundant copy of the model to free memory.
-        checkpoint_dir = _resolve_policy_checkpoint_dir(config, checkpoint_manager)
+        #checkpoint_dir = _resolve_policy_checkpoint_dir(config, checkpoint_manager)
+        checkpoint_dir = _resolve_policy_checkpoint_dir(config)
         self._policy = policy_config.create_trained_policy(config, checkpoint_dir)
         self._drop_policy_model()
 
@@ -112,9 +105,9 @@ class ResidualRLBaseActionSampler:
     def train_state_sharding(self) -> Any:
         return self._train_state_sharding
 
-    @property
-    def checkpoint_manager(self) -> _checkpoints.CheckpointManager:
-        return self._checkpoint_manager
+    # @property
+    # def checkpoint_manager(self) -> _checkpoints.CheckpointManager:
+    #     return self._checkpoint_manager
 
     def _drop_policy_model(self) -> None:
         if getattr(self._policy, "_is_pytorch_model", False):
@@ -179,9 +172,9 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         else:
             self._sampler = ResidualRLBaseActionSampler(
                 config,
-                checkpoint_manager=checkpoint_manager,
-                resuming=resuming,
-                data_loader=data_loader,
+                #checkpoint_manager=checkpoint_manager,
+                #resuming=resuming,
+                #data_loader=data_loader,
             )
         self._last_obs: Optional[Dict[str, Any]] = None
         self._base_actions: Optional[np.ndarray] = None
@@ -275,7 +268,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
 
     # ----- reset / step -----
 
-    def reset(
+    def reset( # TODO: Why do we need seperate handling here?
         self,
         id: Optional[Union[int, List[int], np.ndarray]] = None,
         **kwargs: Any,
@@ -290,15 +283,12 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         if id is None:
             # Full reset: re-sample base actions for all envs.
             self._clear_base_actions()
-            #logging.info("[reset: sampling base actions]")
             self._base_actions = self._sample_base_actions(obs)
             base_action_chunk = self._base_actions[:, :self._query_frequency]
             obs_with_base = self._attach_base_action(obs, base_action_chunk)
             self._last_obs = obs_with_base
         else:
-            # Partial reset (single env done during collection).
-            # Don't re-sample base actions — keep the existing ones.
-            # Just attach the current base action chunk to the new obs.
+            # Partial reset: single env done
             if self._base_actions is not None and self._last_obs is not None:
                 obs_with_base = self._attach_base_action(
                     obs, self._last_obs["base_action"][:1]
@@ -306,9 +296,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
             else:
                 # Fallback: no base actions yet, attach zeros.
                 action_dim = self._sampler.action_dim
-                dummy = np.zeros(
-                    (1, self._query_frequency, action_dim), dtype=np.float32,
-                )
+                dummy = np.zeros((1, self._query_frequency, action_dim), dtype=np.float32,)
                 obs_with_base = self._attach_base_action(obs, dummy)
 
         return (obs_with_base, info) if info is not None else obs_with_base
@@ -319,9 +307,7 @@ class ResidualRLVectorEnv(SubprocVectorEnv):
         id: Optional[Union[int, List[int], np.ndarray]] = None,
     ):
         if id is not None:
-            raise NotImplementedError(
-                "Partial stepping is not supported due to state tracking complexity."
-            )
+            raise NotImplementedError("Partial stepping is not supported due to state tracking complexity.")
         assert self._last_obs is not None, "Call reset() before step()."
 
         lo, hi = self._residual_action_clip_range
@@ -362,11 +348,7 @@ def residual_rl_wrap_env(
     env_num: int | None = None,
     sampler: ResidualRLBaseActionSampler | None = None,
 ) -> tuple[ResidualRLVectorEnv, list[str]]:
-    """Build a ResidualRLVectorEnv with all necessary wrappers.
-
-    Pass an existing *sampler* to share the OpenPI model across envs
-    and avoid loading it multiple times.
-    """
+    """Build a ResidualRLVectorEnv with all necessary wrappers."""
     if env_num is None:
         env_num = int(config.collect.env_num)
     replan_steps = int(config.collect.replan_steps)
