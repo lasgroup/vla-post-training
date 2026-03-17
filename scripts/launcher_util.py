@@ -170,6 +170,7 @@ def generate_run_commands(
     mode: str = "swiss-ai",
     dry: bool = False,
     prompt: bool = True,
+    job_names: Optional[List[str]] = None,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -184,27 +185,37 @@ def generate_run_commands(
         mode: "swiss-ai" for sbatch submission, "local" for sequential local execution.
         dry: If True, only print commands without executing.
         prompt: If True, ask for confirmation before submitting.
+        job_names: Optional list of job names (one per command). Used for SLURM
+            --job-name and log file names instead of the default 'slurm-%j'.
     """
     if mode == "swiss-ai":
         os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = (
-            f"sbatch --account={account} --time={duration} "
-            f"--output={shlex.quote(os.path.join(log_dir, 'slurm-%j.out'))} "
-            f"--error={shlex.quote(os.path.join(log_dir, 'slurm-%j.err'))} "
-        )
 
+        base_cmd = f"sbatch --account={account} --time={duration} "
         if num_tasks > 0:
-            bsub_cmd += f"--ntasks={num_tasks} "
+            base_cmd += f"--ntasks={num_tasks} "
         if num_cpus > 0:
-            bsub_cmd += f"--cpus-per-task={num_cpus} "
+            base_cmd += f"--cpus-per-task={num_cpus} "
         if num_gpus > 0:
-            bsub_cmd += f"-G {num_gpus} "
+            base_cmd += f"-G {num_gpus} "
         if mem > 0:
-            bsub_cmd += f"--mem-per-cpu={mem} "
+            base_cmd += f"--mem-per-cpu={mem} "
 
-        for cmd in command_list:
-            cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+        for i, cmd in enumerate(command_list):
+            if job_names is not None and i < len(job_names):
+                name = job_names[i]
+                log_prefix = os.path.join(log_dir, f"{name}-%j")
+            else:
+                log_prefix = os.path.join(log_dir, "slurm-%j")
+            sbatch_cmd = (
+                base_cmd
+                + f"--output={shlex.quote(log_prefix + '.out')} "
+                + f"--error={shlex.quote(log_prefix + '.err')} "
+            )
+            if job_names is not None and i < len(job_names):
+                sbatch_cmd += f"--job-name={shlex.quote(job_names[i])} "
+            cluster_cmds.append(sbatch_cmd + f'--wrap="{cmd}"')
 
         if dry:
             for cmd in cluster_cmds:

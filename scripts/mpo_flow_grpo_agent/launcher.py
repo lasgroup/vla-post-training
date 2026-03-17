@@ -128,6 +128,7 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
+    job_names = []
     tracked_name_keys = [
         "collect.tasks",
         *applicable_configs.keys(),
@@ -184,12 +185,14 @@ def main() -> None:
 
             cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
             command_list.append(cmd)
+            job_names.append(flags["exp_name"])
 
     generate_run_commands(
         command_list,
         mode=args.mode,
         duration=args.duration,
         dry=args.dry,
+        job_names=job_names,
     )
 
 
