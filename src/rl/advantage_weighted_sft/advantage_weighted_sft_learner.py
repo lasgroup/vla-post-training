@@ -132,7 +132,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,  # q_state
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
-                self._replicated_sharding,  # mc_return
+                self._data_sharding,  # mc_return
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
