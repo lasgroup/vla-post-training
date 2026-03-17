@@ -62,11 +62,32 @@ def _sanitize_name_value(value: Any) -> str:
     return value or "none"
 
 
+_SHORT_LABELS: Dict[str, str] = {
+    "collect.tasks": "task",
+    "collect.eval_tasks": "evaltask",
+    "collect.num_initial_rollouts": "initroll",
+    "collect.use_time_to_success_as_reward": "tts",
+    "rl.use_deterministic_anchor": "anchor",
+    "rl.drop_low_diversity_groups": "dropdiv",
+    "rl.align_critic_sampling": "aligncrit",
+    "rl.reset_policy_params_to_ema_period": "emareset",
+    "rl.policy_training_start_step": "polstart",
+    "rl.td_weight_schedule.switch_step": "tdswitch",
+    "rl.td_weight_schedule.ramp_steps": "tdramp",
+    "rl.num_critic_updates_per_batch": "ncriticup",
+    "rl.policy_only_successful": "polsucc",
+    "rl.save_all_episodes": "saveall",
+    "rl.normalize_adv": "normadv",
+    "rl.use_mpo_advantage_weight": "mpoadv",
+    "rl.noise_level": "noise",
+    "rl.online_ratio": "onratio",
+    "rl.kl_coef": "kl",
+}
+
+
 def _name_label(flag: str) -> str:
-    if flag == "collect.tasks":
-        return "task"
-    if flag == "collect.eval_tasks":
-        return "evaltask"
+    if flag in _SHORT_LABELS:
+        return _SHORT_LABELS[flag]
     return flag.rsplit(".", 1)[-1]
 
 
