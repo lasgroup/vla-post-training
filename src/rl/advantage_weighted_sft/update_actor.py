@@ -67,7 +67,7 @@ def train_step(
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
 
     score = jnp.exp(score)
-    score = score / jnp.exp(config.rl.weight_clip)  # Normalize to [0, 1]
+    score = score / config.rl.advantage_scale  # Normalize advantage w.r.t scale
 
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 

@@ -105,6 +105,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_ema_decay: float = 0.995
     beta: float = 0.05
     weight_clip: float = 20.0
+    advantage_scale: float = 10.0
     critic_reduction: str = "min"
     critic_lr_schedule = ConstantSchedule(value=1e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
