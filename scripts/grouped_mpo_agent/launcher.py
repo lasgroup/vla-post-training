@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name grouped_mpo_debug
+    ./scripts/grouped_mpo_agent/launcher.py --project_name flowgrpo_debug_march17
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """

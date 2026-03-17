@@ -2,7 +2,7 @@
 """Launcher for MPO-FlowGRPO hybrid experiments.
 
 Usage:
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name flow_grpo_debug
+    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march17
     ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --mode local
 """

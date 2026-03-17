@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name flow_grpo_debug
+    ./scripts/flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march17
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
