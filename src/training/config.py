@@ -117,6 +117,7 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     online_ratio: float = 0.5
     save_all_episodes: bool = False
     policy_only_successful: bool = False
+    reset_policy_params_to_ema_period: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)

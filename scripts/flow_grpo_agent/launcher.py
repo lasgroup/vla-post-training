@@ -184,6 +184,7 @@ def main() -> None:
                     idx * len(TASK_SWEEP) + task_idx,
                     defaults=default_name_flags,
                     tracked_keys=tracked_name_keys,
+                    algorithm_name="flow_grpo",
                 ),
             )
 

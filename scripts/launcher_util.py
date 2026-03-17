@@ -77,16 +77,18 @@ def auto_exp_name(
     *,
     defaults: Optional[Dict[str, Any]] = None,
     tracked_keys: Optional[Iterable[str]] = None,
+    algorithm_name: Optional[str] = None,
 ) -> str:
     """Generate a unique experiment name suitable for checkpoint directories."""
+    prefix = algorithm_name if algorithm_name is not None else project_name
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     suffix = secrets.token_hex(3)
     if defaults is None and tracked_keys is None:
         if "seed" in combo:
-            return f"{project_name}_{timestamp}_{suffix}_seed{combo['seed']}"
-        return f"{project_name}_{timestamp}_{suffix}_run{run_idx}"
+            return f"{prefix}_{timestamp}_{suffix}_seed{combo['seed']}"
+        return f"{prefix}_{timestamp}_{suffix}_run{run_idx}"
 
-    parts = [project_name, timestamp, suffix]
+    parts = [prefix, timestamp, suffix]
     seen = set()
     name_keys = list(tracked_keys or [])
     if "collect.tasks" in combo and "collect.tasks" not in name_keys:

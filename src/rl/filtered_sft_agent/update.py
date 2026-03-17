@@ -51,6 +51,14 @@ def train_step(
                 lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new, state.ema_params, new_params
             ),
         )
+        reset_period = config.rl.reset_policy_params_to_ema_period
+        if reset_period is not None:
+            new_state = jax.lax.cond(
+                new_state.step % reset_period == 0,
+                lambda s: s.replace(params=jax.tree.map(lambda x: x, s.ema_params)),
+                lambda s: s,
+                new_state,
+            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(
