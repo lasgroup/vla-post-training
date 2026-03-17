@@ -62,11 +62,14 @@ applicable_configs: Dict[str, List[Any]] = {
     "batch_size": [64],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "collect.num_initial_rollouts": [5, 10],
+    "collect.num_initial_rollouts": [10],
     "rl.kl_coef": [0.0, 0.01],
-    "rl.td_weight_schedule.switch_step": [900, 3000],
-    "rl.save_all_episodes": [True],
-    "rl.policy_only_successful": [False, True],
+    "rl.td_weight_schedule.switch_step": [900],
+    "rl.save_all_episodes": [False],
+    "rl.policy_only_successful": [True],
+    "rl.use_deterministic_anchor": [False, True],
+    "rl.drop_low_diversity_groups": [False, True],
+    "rl.align_critic_sampling": [False, True],
 }
 
 

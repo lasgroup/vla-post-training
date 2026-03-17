@@ -59,11 +59,14 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [128],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5],
-    "collect.num_initial_rollouts": [5, 10],
-    "rl.td_weight_schedule.switch_step": [900, 3000],
-    "rl.save_all_episodes": [True],
-    "rl.policy_only_successful": [False, True],
+    "rl.online_ratio": [1.0],
+    "collect.num_initial_rollouts": [10],
+    "rl.td_weight_schedule.switch_step": [900],
+    "rl.save_all_episodes": [False],
+    "rl.policy_only_successful": [True],
+    "rl.use_deterministic_anchor": [False, True],
+    "rl.drop_low_diversity_groups": [False, True],
+    "rl.align_critic_sampling": [False, True],
 }
 
 

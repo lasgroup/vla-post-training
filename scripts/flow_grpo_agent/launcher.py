@@ -58,19 +58,22 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [64],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "collect.num_initial_rollouts": [5, 10],
+    "collect.num_initial_rollouts": [10],
     "rl.normalize_adv": [False, True],
     "rl.kl_coef": [0.0, 0.01],
-    "rl.td_weight_schedule.switch_step": [900, 3000],
-    "rl.save_all_episodes": [True], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
-    "rl.policy_only_successful": [False, True], # Default value is True. This flag controls whether to use all episodes for policy updates or only successful ones. It is added to investigate whether using only successful episodes can improve performance, especially when the success rate is low.
+    "rl.td_weight_schedule.switch_step": [900],
+    "rl.save_all_episodes": [False], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
+    "rl.policy_only_successful": [True],
+    "rl.use_deterministic_anchor": [False, True],
+    "rl.drop_low_diversity_groups": [False, True],
+    "rl.align_critic_sampling": [False, True],
 }
 
 
