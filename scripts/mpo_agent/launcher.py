@@ -56,7 +56,7 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
@@ -65,6 +65,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "rl.normalize_adv": [False, True],
+    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
 }
 
 

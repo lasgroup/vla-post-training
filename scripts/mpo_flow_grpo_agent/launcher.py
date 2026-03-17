@@ -55,7 +55,7 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 ]
 
 applicable_configs: Dict[str, List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
@@ -67,9 +67,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.td_weight_schedule.switch_step": [900],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
-    "rl.use_deterministic_anchor": [False, True],
+    "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [False, True],
     "rl.align_critic_sampling": [False, True],
+    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
 }
 
 

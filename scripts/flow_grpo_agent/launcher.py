@@ -71,9 +71,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.td_weight_schedule.switch_step": [900],
     "rl.save_all_episodes": [False], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
     "rl.policy_only_successful": [False],
-    "rl.use_deterministic_anchor": [False, True],
+    "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [False, True],
     "rl.align_critic_sampling": [False, True],
+    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
 }
 
 

@@ -61,7 +61,7 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 
 # ---------- Hyperparameter grid ----------
 applicable_configs: Dict[str, List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
@@ -72,6 +72,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.noise_level": [0.05, 0.1],
     "rl.kl_coef": [0.0, 0.01],
     "rl.normalize_adv": [True],
+    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
 }
 
 
