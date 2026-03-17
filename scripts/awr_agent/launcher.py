@@ -35,7 +35,7 @@ DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 1
-DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
@@ -58,6 +58,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.use_mc_returns": [True, False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
+    "rl.td_weight_schedule.switch_step": [-1, 1_000_000],
     "collect.tasks": [
         # "libero_90_2",
         # "libero_90_7",
@@ -156,8 +157,9 @@ def main() -> None:
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
+        if flags["rl.td_weight_schedule.switch_step"] == -1:
+            flags["rl.td_weight_schedule.switch_step"] = policy_start
 
         task = flags["collect.tasks"]
         train_envs = flags["collect.env_num"]
