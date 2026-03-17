@@ -53,7 +53,35 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [1.0],
+    "rl.reset_policy_params_to_ema_period": [500],
+    "rl.use_mc_returns": [True, False],
+    "collect.num_initial_rollouts": [5],
+    "lr_schedule.value": [2.5e-5],
+    "collect.tasks": [
+        # "libero_90_2",
+        # "libero_90_7",
+        # "libero_90_9",
+        # "libero_90_11",
+        "libero_90_14",
+        # "libero_90_26",
+        # "libero_90_28",
+        # "libero_90_30",
+        # "libero_90_31",
+        # "libero_90_35",
+        "libero_90_38",
+        # "libero_90_41",
+        # "libero_90_53",
+        "libero_90_59",
+        # "libero_90_60",
+        # "libero_90_61",
+        # "libero_90_62",
+        "libero_90_64",
+        # "libero_90_74",
+        # "libero_90_77",
+        # "libero_90_79",
+        "libero_90_82",
+    ],
 }
 
 
@@ -130,6 +158,12 @@ def main() -> None:
         policy_start = flags["rl.policy_training_start_step"]
         flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
+
+        task = flags["collect.tasks"]
+        train_envs = flags["collect.env_num"]
+        flags["collect.tasks"] = [f'{task}x{train_envs}']
+        eval_envs = flags["collect.eval_env_num"]
+        flags["collect.eval_tasks"] = [f'{task}x{eval_envs}']
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 

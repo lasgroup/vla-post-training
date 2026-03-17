@@ -436,10 +436,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if self.debug:
                 log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
-            reset_period = rl_config.reset_policy_params_to_ema_period
-            reset_policy_params_to_ema_params = (
-                reset_period and self._train_state.ema_params is not None
-            )
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,
