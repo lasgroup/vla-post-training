@@ -63,7 +63,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [900],
     "rl.save_all_episodes": [False],
-    "rl.policy_only_successful": [True],
+    "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [False, True],
     "rl.drop_low_diversity_groups": [False, True],
     "rl.align_critic_sampling": [False, True],

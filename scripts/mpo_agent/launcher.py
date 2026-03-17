@@ -43,9 +43,13 @@ DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
-        "collect.tasks": DEFAULT_TASKS,
-        "collect.eval_tasks": DEFAULT_EVAL_TASKS,
-    }
+        "collect.tasks": ["libero_90_59x1"],
+        "collect.eval_tasks": ["libero_90_59x4"],
+    },
+    {
+        "collect.tasks": ["libero_90_62x1"],
+        "collect.eval_tasks": ["libero_90_62x4"],
+    },
 ]
 
 # ---------- Hyperparameter grid ----------
