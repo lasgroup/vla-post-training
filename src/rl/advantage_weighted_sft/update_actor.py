@@ -52,7 +52,6 @@ def train_step(
     else:
         state_action_critic = create_critic(state_action_critic_state, config)
         state_action_critic.eval()
-
         value_critic = create_critic(value_state, config)
         value_critic.eval()
         # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
@@ -69,7 +68,6 @@ def train_step(
 
     score = jnp.exp(score)
     score = score / jnp.exp(config.rl.weight_clip)  # Normalize to [0, 1]
-    score = score / score.shape[0]  # Divide by batch size
 
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
@@ -90,7 +88,7 @@ def train_step(
         aux_data = {
             "chunked_loss": jnp.mean(chunked_loss),
         }
-        return jnp.sum(score * chunked_loss), aux_data
+        return jnp.mean(score * chunked_loss), aux_data
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
 
