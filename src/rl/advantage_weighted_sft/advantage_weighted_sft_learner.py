@@ -95,13 +95,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
                 q_state=q_state,
                 value_state=value_state,
                 rng=rng,
+                mc_return=mc_return,
             )
 
         # 3. JIT the wrappers with your distributed shardings
@@ -131,6 +132,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,  # q_state
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
+                self._replicated_sharding,  # mc_return
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -289,6 +291,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         q_state: training_utils.TrainState,
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
+        mc_return: at.Array | None = None,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -302,6 +305,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             q_state,
             value_state,
             batch,
+            mc_return=mc_return,
         )
 
         return policy_state, info
@@ -363,6 +367,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         use_online = self._online_data_buffer.size >= online_batch_size
 
         critic_info, actor_info = {}, {}
+        mc_return = None
         if use_online:
             online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
@@ -391,6 +396,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
+            if rl_config.use_mc_returns:
+                mc_return = online_batch["mc_return"]
+                assert rl_config.online_ratio >= 1.0, (
+                    "use_mc_returns requires online_ratio >= 1.0 "
+                    "(MC returns are not available for offline data)"
+                )
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
@@ -436,6 +447,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
+                    mc_return,
                 )
 
             self._train_state = policy_state

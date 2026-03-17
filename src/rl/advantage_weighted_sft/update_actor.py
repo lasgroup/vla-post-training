@@ -33,26 +33,35 @@ def train_step(
     state_action_critic_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
+    mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 
     policy = nnx.merge(policy_state.model_def, policy_state.params)
     policy.train()
 
-    state_action_critic = create_critic(state_action_critic_state, config)
-    state_action_critic.eval()
-
-    value_critic = create_critic(value_state, config)
-    value_critic.eval()
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     reset_period = config.rl.reset_policy_params_to_ema_period
-    # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
-    critic_actions = flatten_action_horizon(actions)
-    value = summarize_critic_values(value_critic(critic_observation))  # (B,)
-    q_value = summarize_critic_values(
-        state_action_critic(critic_observation, critic_actions)
-    )  # (B,)
-    advantage = q_value - value  # (B, )
+
+    if config.rl.use_mc_returns:
+        assert mc_return is not None, "mc_return must be provided when use_mc_returns=True"
+        value_critic = create_critic(value_state, config)
+        value_critic.eval()
+        value = summarize_critic_values(value_critic(critic_observation))  # (B,)
+        advantage = mc_return - value  # (B, )
+    else:
+        state_action_critic = create_critic(state_action_critic_state, config)
+        state_action_critic.eval()
+
+        value_critic = create_critic(value_state, config)
+        value_critic.eval()
+        # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
+        critic_actions = flatten_action_horizon(actions)
+        value = summarize_critic_values(value_critic(critic_observation))  # (B,)
+        q_value = summarize_critic_values(
+            state_action_critic(critic_observation, critic_actions)
+        )  # (B,)
+        advantage = q_value - value  # (B, )
 
     score = advantage / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)

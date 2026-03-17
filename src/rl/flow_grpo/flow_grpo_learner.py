@@ -21,13 +21,14 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         self._train_step = functools.partial(flow_grpo_train_step, self._config)
 
         # Re-create policy JIT wrapper
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
                 q_state=q_state,
                 value_state=value_state,
                 rng=rng,
+                mc_return=mc_return,
             )
 
         self._update_policy_jitted = jax.jit(
@@ -38,6 +39,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 self._state_action_critic_state_sharding,  # q_state
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
+                self._replicated_sharding,  # mc_return
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -139,6 +141,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
+                    None,
                 )
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
