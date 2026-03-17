@@ -306,6 +306,14 @@ class OnlineTrainConfig(TrainConfig):
                 else:
                     lower = 0.0
                     upper = 1.0
+                # Add half-bin-width padding on each side so that the actual extreme
+                # return values (e.g. mc_return=0 at terminal step) never land exactly
+                # on a bin center, which would degenerate two_hot into one_hot.
+                num_bins = self.rl.num_value_bins
+                if num_bins > 1:
+                    half_bw = (upper - lower) / (2 * (num_bins - 1))
+                    lower -= half_bw
+                    upper += half_bw
                 object.__setattr__(self, "rl", dataclasses.replace(
                     self.rl, value_lower_bound=lower, value_upper_bound=upper
                 ))
