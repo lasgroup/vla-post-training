@@ -127,6 +127,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_ema_decay: float = 0.995
     beta: float = 0.05
     weight_clip: float = 20.0
+    normalize_adv: bool = False
     critic_reduction: str = "min"
     critic_lr_schedule = ConstantSchedule(value=1e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
@@ -151,6 +152,10 @@ class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
     noise_level: float = 0.3
+    use_deterministic_anchor: bool = False
+    drop_low_diversity_groups: bool = False
+    diversity_threshold: float = 0.01
+    align_critic_sampling: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -161,6 +166,10 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     normalize_adv: bool = True
     use_mpo_advantage_weight: bool = False
     kl_coef: float = 1e-2
+    use_deterministic_anchor: bool = False
+    drop_low_diversity_groups: bool = False
+    diversity_threshold: float = 0.01
+    align_critic_sampling: bool = False
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):

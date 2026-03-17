@@ -7,8 +7,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
+import openpi.training.utils as training_utils
 from src.rl.grouped_mpo.update_actor import train_step as grouped_mpo_train_step
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
 from src.training.config import GroupedMPOWeightedSFTLearnerConfig
@@ -45,6 +47,39 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
                 self._replicated_sharding,
             ),
             donate_argnums=(1,),
+        )
+
+    @at.typecheck
+    def _get_on_policy_action(
+        self,
+        online_observation: _model.Observation,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ) -> _model.Actions:
+        model = self._get_policy_model(policy_state)
+        rl_config = self._config.rl
+        assert isinstance(rl_config, GroupedMPOWeightedSFTLearnerConfig)
+        if rl_config.align_critic_sampling:
+            sample_rng, noise_rng = jax.random.split(rng)
+            batch_size = online_observation.state.shape[0]
+            noise = jax.random.normal(
+                noise_rng,
+                (batch_size, model.action_horizon, model.action_dim),
+            )
+            return model.sample_actions(
+                rng=sample_rng,
+                observation=online_observation,
+                noise=noise,
+                num_steps=rl_config.num_steps,
+                noise_level=rl_config.noise_level,
+                return_info_dict=False,
+                return_prefix_rep=False,
+            )
+        return model.sample_actions(
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
         )
 
     @at.typecheck

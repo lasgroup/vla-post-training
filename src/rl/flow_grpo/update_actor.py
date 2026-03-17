@@ -120,6 +120,8 @@ def train_step(
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
     kl_coef = config.rl.kl_coef
+    drop_low_diversity = config.rl.drop_low_diversity_groups
+    diversity_threshold = config.rl.diversity_threshold
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -130,14 +132,21 @@ def train_step(
     train_rng = jax.random.fold_in(rng, policy_state.step)
     sample_rng, noise_rng = jax.random.split(train_rng)
 
+    total_expanded = expanded_policy_obs.state.shape[0]
     noise = jax.random.normal(
         noise_rng,
         (
-            expanded_policy_obs.state.shape[0],
+            total_expanded,
             policy_model.action_horizon,
             policy_model.action_dim,
         ),
     )
+
+    # Deterministic anchor: zero initial noise for the first sample in each group.
+    if config.rl.use_deterministic_anchor and group_size > 1:
+        anchor_indices = jnp.arange(0, total_expanded, group_size)
+        noise = noise.at[anchor_indices].set(0.0)
+
     sampled_actions, rollout_info = policy_model.sample_actions(
         rng=sample_rng,
         observation=expanded_policy_obs,
@@ -210,11 +219,24 @@ def train_step(
                 if weight_clip is not None:
                     score = jnp.clip(score, -weight_clip, weight_clip)
                 score = jax.nn.softmax(score, axis=-1)
+
+                # Drop low-diversity groups: use uniform weights when
+                # within-group advantage std is below the threshold.
+                if drop_low_diversity:
+                    group_adv = advantage.reshape(B, group_size)
+                    group_std = jnp.std(group_adv, axis=-1, keepdims=True)
+                    low_div = group_std < diversity_threshold
+                    uniform = jnp.ones_like(score) / group_size
+                    score = jnp.where(low_div, uniform, score)
+
                 score = score[:, jnp.newaxis, :]
                 log_probs = jnp.swapaxes(
                     log_probs.reshape(B, group_size, -1), 1, 2
                 )
             else:
+                # Flow-MPO path (group_size=1): global softmax.
+                if normalize_adv:
+                    advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
                 score = advantage / beta
                 if weight_clip is not None:
                     score = jnp.clip(score, -weight_clip, weight_clip)
@@ -237,6 +259,12 @@ def train_step(
                 group_mean = jnp.mean(adv, axis=-1, keepdims=True)
                 group_std = jnp.std(adv, axis=-1, keepdims=True)
                 adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
+
+                # Drop low-diversity groups: zero out normalized advantages
+                # so these groups contribute no gradient.
+                if drop_low_diversity:
+                    low_div = group_std < diversity_threshold
+                    adv = jnp.where(low_div, 0.0, adv)
             if weight_clip is not None:
                 adv = jnp.clip(adv, -weight_clip, weight_clip)
             score = jax.lax.stop_gradient(adv)

@@ -53,8 +53,11 @@ def train_step(
     )  # (B,)
     advantage = q_value - value  # (B, )
 
-    score = advantage / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    if config.rl.normalize_adv:
+        advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
+
+    score = advantage / _awr_beta(config)
     score = jnp.clip(score, -config.rl.weight_clip, config.rl.weight_clip)  # Clipping
     score = jax.nn.softmax(score, axis=0)  # (B, )
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients

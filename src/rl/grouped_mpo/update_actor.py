@@ -55,14 +55,21 @@ def train_step(
     train_rng = jax.random.fold_in(rng, policy_state.step)
     sample_rng, loss_rng, noise_rng = jax.random.split(train_rng, 3)
 
+    total_expanded = expanded_policy_obs.state.shape[0]
     noise = jax.random.normal(
         noise_rng,
         (
-            expanded_policy_obs.state.shape[0],
+            total_expanded,
             policy.action_horizon,
             policy.action_dim,
         ),
     )
+
+    # Deterministic anchor: zero initial noise for the first sample in each group.
+    if config.rl.use_deterministic_anchor and group_size > 1:
+        anchor_indices = jnp.arange(0, total_expanded, group_size)
+        noise = noise.at[anchor_indices].set(0.0)
+
     sampled_actions = policy.sample_actions(
         rng=sample_rng,
         observation=expanded_policy_obs,
@@ -94,6 +101,16 @@ def train_step(
         if weight_clip is not None:
             score = jnp.clip(score, -weight_clip, weight_clip)
         score = jax.nn.softmax(score, axis=-1)
+
+        # Drop low-diversity groups: replace with uniform weights when
+        # the within-group advantage std is below the threshold.
+        if config.rl.drop_low_diversity_groups:
+            group_adv = advantage.reshape(base_batch_size, group_size)
+            group_std = jnp.std(group_adv, axis=-1, keepdims=True)
+            low_div = group_std < config.rl.diversity_threshold
+            uniform = jnp.ones_like(score) / group_size
+            score = jnp.where(low_div, uniform, score)
+
         score_stats = score
         score = jax.lax.stop_gradient(score[..., jnp.newaxis])
     else:

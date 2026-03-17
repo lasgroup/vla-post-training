@@ -56,6 +56,39 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         model.eval()
         return model
 
+    @at.typecheck
+    def _get_on_policy_action(
+        self,
+        online_observation: _model.Observation,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+    ) -> _model.Actions:
+        model = self._get_policy_model(policy_state)
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FlowGRPOSFTLearnerConfig)
+        if rl_config.align_critic_sampling:
+            sample_rng, noise_rng = jax.random.split(rng)
+            batch_size = online_observation.state.shape[0]
+            noise = jax.random.normal(
+                noise_rng,
+                (batch_size, model.action_horizon, model.action_dim),
+            )
+            return model.sample_actions(
+                rng=sample_rng,
+                observation=online_observation,
+                noise=noise,
+                num_steps=rl_config.num_steps,
+                noise_level=rl_config.noise_level,
+                return_info_dict=False,
+                return_prefix_rep=False,
+            )
+        return model.sample_actions(
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
+        )
+
     def _use_ema_for_data_collection(self) -> bool:
         return False
 
