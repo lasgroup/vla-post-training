@@ -58,7 +58,6 @@ def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str], en
                 env=base_env,
                 env_class=env_class,
                 task_description=task_description,
-                molmo_config=getattr(config, "molmo", None),
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -225,11 +224,28 @@ class FilteredSFTLearner(Agent):
 
         # initialize data loader
         assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
-        self._data_loader = create_data_loader(
-            config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+        self._data_config = self._config.data.create(
+            self._config.assets_dirs,
+            self._config.model,
         )
-        self._data_iter = iter(self._data_loader)
+        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+
+        if self._config.rl.online_ratio < 1.0:
+            self._data_loader = create_data_loader(
+                config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+            )
+            self._data_iter = iter(self._data_loader)
+        else:
+            class DummyDataLoader:
+                def __init__(self, data_config):
+                    self._data_config = data_config
+
+                def data_config(self):
+                    return self._data_config
+
+            self._data_loader = DummyDataLoader(self._data_config)
+            self._data_iter = None
+
         self._online_data_buffer = self._get_online_replay_buffer()
         self._collection_success_episodes = 0
 
@@ -312,7 +328,7 @@ class FilteredSFTLearner(Agent):
     ) -> ShardedReplayBuffer:
 
         # prepare transforms for preprocessing episode data into model input format
-        data_config = self._data_loader.data_config()
+        data_config = self._data_config
         tt_types = (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
         token_transforms = [t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)]
         non_token_transforms = [t for t in data_config.model_transforms.inputs if not isinstance(t, tt_types)]
@@ -371,8 +387,8 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
-        size = int(self._config.collect.resize_image)
-        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
+        h, w = int(self._config.collect.resize_image_h), int(self._config.collect.resize_image_w)
+        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, h, w))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs

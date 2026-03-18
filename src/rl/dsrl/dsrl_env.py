@@ -512,7 +512,6 @@ def dsrl_wrap_env(
                 env=base_env,
                 env_class=domain,
                 task_description=task_description_single,
-                molmo_config=getattr(config, "molmo", None),
             )
             base_env = QueryFrequencyWrapper(
                 env=base_env,

@@ -6,12 +6,17 @@ from openpi.training.config import (
     TrainConfig,
     DataConfig,
     pi0_config,
+    SimpleDataConfig,
+    AssetsConfig,
+    ModelType,
     LeRobotLiberoDataConfig,
 )
 from typing import Literal, Sequence
 import re
 
 import openpi.training.optimizer as _optimizer
+import openpi.policies.droid_policy as _droid_policy
+import openpi.transforms as _openpi_transforms
 import optax
 import openpi.training.weight_loaders as weight_loaders
 
@@ -162,33 +167,12 @@ class DSRLLearnerConfig(RLAlgorithmConfig):
 
 
 @dataclasses.dataclass(frozen=True)
-class MolmoConfig:
-    benchmark_dir: str = ""
-    eval_config_cls: str = (
-        "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
-    )
-    episode_sampling: Literal["sequential", "random"] = "sequential"
-    task_horizon_steps: int | None = None
-    # If None, the environment task description from benchmark metadata is used.
-    task_description: str | None = None
-
-    # Observation mapping from Molmo observations to OpenPI input keys.
-    exo_camera_key: str = "exo_camera_1"
-    wrist_camera_key: str = "wrist_camera"
-    gripper_obs_norm: float = 0.824033
-
-    # Action mapping from OpenPI output to Molmo env actions.
-    grasping_type: Literal["continuous", "binary"] = "binary"
-    gripper_threshold: float = 0.5
-    gripper_scale: float = 255.0
-
-
-@dataclasses.dataclass(frozen=True)
 class CollectionConfig:
     collect_interval: int = 200
     env_num: int = 4
     env_resolution: int = 256
-    resize_image: int = 224
+    resize_image_h: int = 224
+    resize_image_w: int = 224
     num_rollouts: int = 50
     num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
@@ -282,7 +266,7 @@ class OnlineTrainConfig(TrainConfig):
     default_prompt: str | None = None
 
 
-def make_base_online_config(
+def make_base_libero_config(
     name: str, rl_config: RLAlgorithmConfig
 ) -> OnlineTrainConfig:
     """
@@ -318,6 +302,56 @@ def make_base_online_config(
     )
 
 
+def make_base_molmo_config(
+    name: str, rl_config: RLAlgorithmConfig
+) -> OnlineTrainConfig:
+    """
+    Factory function to generate a base OnlineTrainConfig for Molmo.
+    Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+    """
+    return OnlineTrainConfig(
+        name=name,
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=15,
+        ),
+        data=SimpleDataConfig(
+            repo_id=None,
+            assets=AssetsConfig(asset_id="droid"),
+            data_transforms=lambda model: _openpi_transforms.Group(
+                inputs=[_droid_policy.DroidInputs(model_type=ModelType.PI05)],
+                outputs=[
+                    _openpi_transforms.AbsoluteActions(
+                        _openpi_transforms.make_bool_mask(7, -1)
+                    ),
+                    _droid_policy.DroidOutputs(),
+                ],
+            ),
+            base_config=OnlineDataConfig(prompt_from_task=True),
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=100,  # override default warmup steps
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_droid_jointpos/params"
+        ),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=10_000,
+        num_workers=4,  # override default num_workers
+        rl=rl_config,
+        collect=CollectionConfig(
+            domain="molmo",
+            resize_image_h=352,
+            resize_image_w=624,
+        )
+    )
+
+
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS.extend(
     [
@@ -326,12 +360,16 @@ _CONFIGS.extend(
         #
         # These train configs define the hyperparameters for online data collection and fine-tuning.
         # 1. Filtered SFT
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_filtered_sft",
             rl_config=FilteredSFTLearnerConfig(),
         ),
+        make_base_molmo_config(
+            name="pi05_molmo_online_filtered_sft",
+            rl_config=FilteredSFTLearnerConfig(online_ratio=1.0),
+        ),
         # 2. Advantage Weighted SFT (AWSFT)
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_aw_sft",
             rl_config=AdvantageWeightedSFTLearnerConfig(
                 policy_update_interval=20,
@@ -339,7 +377,7 @@ _CONFIGS.extend(
             ),
         ),
         # 3. MPO Weighted SFT
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_mpo_sft",
             rl_config=MPOWeightedSFTLearnerConfig(
                 store_buffer_actions_in_batch=False,
@@ -347,7 +385,7 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_flow_grpo_sft",
             rl_config=FlowGRPOSFTLearnerConfig(
                 store_buffer_actions_in_batch=True,
@@ -356,11 +394,11 @@ _CONFIGS.extend(
             ),
         ),
         # 4. Best of N
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_best_of_n",
             rl_config=BestofNLearnerConfig(),
         ),
-        make_base_online_config(
+        make_base_libero_config(
             name="pi05_libero_online_dsrl",
             rl_config=DSRLLearnerConfig(),
         )
