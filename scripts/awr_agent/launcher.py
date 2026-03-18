@@ -58,7 +58,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.use_mc_returns": [True, False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.td_weight_schedule.switch_step": [-1, 1_000_000],
+    "rl.td_weight_schedule.switch_step": [1_000_000],
+    "rl.critic_lr_schedule.value": [3e-4],
     "collect.tasks": [
         # "libero_90_2",
         # "libero_90_7",
@@ -160,6 +161,9 @@ def main() -> None:
         flags["rl.critic_pre_training_steps"] = policy_start
         if flags["rl.td_weight_schedule.switch_step"] == -1:
             flags["rl.td_weight_schedule.switch_step"] = policy_start
+        # If we only train on the mc returns, we do not need a target critic for policy updates.
+        elif flags["rl.td_weight_schedule.switch_step"] >= NUM_TRAIN_STEPS:
+            flags["rl.use_ema_critic"] = False
 
         task = flags["collect.tasks"]
         train_envs = flags["collect.env_num"]
