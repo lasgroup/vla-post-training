@@ -59,6 +59,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
     "rl.td_weight_schedule.switch_step": [1_000_000],
+    "rl.store_success_episodes_only": [True],
     "collect.tasks": [
         # "libero_90_2",
         # "libero_90_7",

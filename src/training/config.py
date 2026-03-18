@@ -119,6 +119,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
+    store_success_episodes_only: bool = False
 
 
 @dataclasses.dataclass(frozen=True)

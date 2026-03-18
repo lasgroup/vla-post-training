@@ -240,8 +240,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        self._save_episode_in_buffer(episode_data, task_description)
+        rl_config = self._config.rl
+        assert isinstance(rl_config, AdvantageWeightedSFTLearnerConfig)
+        if rl_config.store_success_episodes_only:
+            if is_success:
+                self._save_episode_in_buffer(episode_data, task_description)
+        else:
+            self._save_episode_in_buffer(episode_data, task_description)
 
     @at.typecheck
     def _update_critics(
