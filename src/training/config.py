@@ -76,7 +76,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     use_ema_critic: bool = True
     critic_ema_decay: float = 0.995
     critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=1e-4)
+    critic_lr_schedule = ConstantSchedule(value=3e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
