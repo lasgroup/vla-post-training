@@ -717,5 +717,9 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
-
+        info = info | {
+            "online_buffer_size": jnp.asarray(
+                float(self._online_data_buffer.size), dtype=jnp.float32
+            )
+        }
         return info
