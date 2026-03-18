@@ -193,23 +193,25 @@ class CollectionConfig:
     num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
     molmo: MolmoConfig = MolmoConfig()
-    tasks: list[str] = dataclasses.field(
-        default_factory=lambda: ["libero_90_59x4"],
+    tasks: list[str] | str = dataclasses.field(
+        default_factory=lambda: ["libero_90_59"],
         metadata={
             "help": (
-                "List of tasks to collect. Supports individual task names (e.g., 'libero_90_34'), "
-                "ranges (e.g., 'libero_90_22-56'), and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). The total number of expanded tasks must be divisible by 4."
+                "Task(s) to collect. Can be a single string (e.g., 'libero_90_59') or a list. "
+                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). After expansion, the number of tasks must divide env_num evenly; "
+                "tasks are then repeated to fill all env_num environments."
             )
         },
     )
-    eval_tasks: list[str] = dataclasses.field(
-        default_factory=lambda: ["libero_90_59x4"],
+    eval_tasks: list[str] | str = dataclasses.field(
+        default_factory=lambda: ["libero_90_59"],
         metadata={
             "help": (
-                "List of tasks to evaluate. Supports individual task names (e.g., 'libero_90_34'), "
-                "ranges (e.g., 'libero_90_22-56'), and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). The total number of expanded tasks must be divisible by 4."
+                "Task(s) to evaluate. Can be a single string (e.g., 'libero_90_59') or a list. "
+                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). After expansion, the number of eval tasks must divide eval_env_num "
+                "evenly; tasks are then repeated to fill all eval_env_num environments."
             )
         },
     )
@@ -251,12 +253,19 @@ class CollectionConfig:
         return expanded_tasks
 
     def __post_init__(self):
-        expanded_tasks = self.expand_tasks(self.tasks)
-        object.__setattr__(self, 'tasks', expanded_tasks)
-        assert len(self.tasks) == self.env_num, f"Total number of tasks ({len(self.tasks)}) must match env_num ({self.env_num})."
-        expanded_eval_tasks = self.expand_tasks(self.eval_tasks)
-        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks)
-        assert len(self.eval_tasks) == self.eval_env_num, f"Total number of eval tasks ({len(self.eval_tasks)}) must match eval_env_num ({self.eval_env_num})."
+        tasks = [self.tasks] if isinstance(self.tasks, str) else self.tasks
+        expanded_tasks = self.expand_tasks(tasks)
+        assert self.env_num % len(expanded_tasks) == 0, (
+            f"env_num ({self.env_num}) must be divisible by the number of expanded tasks ({len(expanded_tasks)})."
+        )
+        object.__setattr__(self, 'tasks', expanded_tasks * (self.env_num // len(expanded_tasks)))
+
+        eval_tasks = [self.eval_tasks] if isinstance(self.eval_tasks, str) else self.eval_tasks
+        expanded_eval_tasks = self.expand_tasks(eval_tasks)
+        assert self.eval_env_num % len(expanded_eval_tasks) == 0, (
+            f"eval_env_num ({self.eval_env_num}) must be divisible by the number of expanded eval tasks ({len(expanded_eval_tasks)})."
+        )
+        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks * (self.eval_env_num // len(expanded_eval_tasks)))
 
 
 @dataclasses.dataclass(frozen=True)
