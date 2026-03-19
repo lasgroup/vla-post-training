@@ -53,6 +53,18 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
+    agent = FilteredSFTLearner(config)
+    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+
+    start_step = int(jax.device_get(agent._train_state.step))
+    agent.training_steps = start_step
+    pbar = tqdm.tqdm(
+        range(start_step, config.num_train_steps),
+        initial=start_step,
+        total=config.num_train_steps,
+        dynamic_ncols=True,
+    )
+
     env_fn, task_description = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
@@ -65,18 +77,6 @@ def main(config: _config.OnlineTrainConfig):
         config=config,
         task_description=eval_task_description,
         env_num=config.collect.eval_env_num,
-    )
-
-    agent = FilteredSFTLearner(config)
-    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
-
-    start_step = int(jax.device_get(agent._train_state.step))
-    agent.training_steps = start_step
-    pbar = tqdm.tqdm(
-        range(start_step, config.num_train_steps),
-        initial=start_step,
-        total=config.num_train_steps,
-        dynamic_ncols=True,
     )
 
     infos = []

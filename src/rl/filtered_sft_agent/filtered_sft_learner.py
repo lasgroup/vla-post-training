@@ -179,10 +179,17 @@ def _get_post_step_action_filter(domain: str):
     return lambda x: x
 
 
+def _get_obs_key_process_fn(domain: str):
+    if domain == "libero":
+        return lambda k: k.replace("observation/", "")
+    return lambda k: k
+
+
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
+        self.obs_key_process_fn = _get_obs_key_process_fn(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -559,8 +566,8 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        _obs = {k[len("observation/") :]: v[:n_windows] for k, v in episode_data["observation"].items()}
-        _next_obs = {k[len("observation/") :]: v[act_h-1:act_h-1+n_windows] for k, v in episode_data["next_observation"].items()}
+        _obs = {self.obs_key_process_fn(k): v[:n_windows] for k, v in episode_data["observation"].items()}
+        _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])

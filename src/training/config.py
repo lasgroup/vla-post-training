@@ -176,7 +176,6 @@ class CollectionConfig:
     num_rollouts: int = 50
     num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
-    molmo: MolmoConfig = MolmoConfig()
     tasks: list[str] | str = dataclasses.field(
         default_factory=lambda: ["libero_90_59"],
         metadata={
@@ -312,7 +311,7 @@ def make_base_molmo_config(
     return OnlineTrainConfig(
         name=name,
         model=pi0_config.Pi0Config(
-            pi05=True, action_horizon=15,
+            pi05=True, action_horizon=15, discrete_state_input=False
         ),
         data=SimpleDataConfig(
             repo_id=None,

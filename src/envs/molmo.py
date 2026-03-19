@@ -69,9 +69,10 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, episode_id: int | None = None, config: MolmoSpacesGymConfig = MolmoSpacesGymConfig()):
+    def __init__(self, episode_id: int | None = None, render_device: int = 0, config: MolmoSpacesGymConfig = MolmoSpacesGymConfig()):
         super().__init__()
         self._episode_id = episode_id
+        self._render_device = render_device
         self._config = config
         self._benchmark_dir = Path(config.benchmark_dir).expanduser().resolve()
         self._episodes = load_all_episodes(self._benchmark_dir)
@@ -153,6 +154,7 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         # for episodes that were generated from another source (e.g. ithor).
         exp_config.scene_dataset = episode.scene_dataset
         exp_config.data_split = episode.data_split
+        exp_config.task_sampler_config.render_device = self._render_device
 
         self._sampler = JsonEvalTaskSampler(exp_config, episode)
         self._task = self._sampler.sample_task(
@@ -191,7 +193,7 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         return (
             observations[0],
             float(rewards[0]),
-            bool(terminated[0]),
+            bool(infos[0]["success"]),
             bool(truncated[0]),
             infos[0],
         )
@@ -257,9 +259,7 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
 
     def env_fn(rank: int):
         task_index = rank % len(task_ids)
-        args = {}
-        args["render_gpu_device_id"] = rank % num_devices
-        env = MolmoSpacesBenchmarkGymEnv(episode_id=task_ids[task_index])
+        env = MolmoSpacesBenchmarkGymEnv(episode_id=task_ids[task_index], render_device=rank % num_devices)
         env = MolmoActionAdapter(env=env)        
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
