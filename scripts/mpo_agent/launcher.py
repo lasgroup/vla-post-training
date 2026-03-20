@@ -10,11 +10,12 @@ Usage:
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
+    DEFAULT_LOG_DIR,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
@@ -35,7 +36,7 @@ DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 1
-DEFAULT_TASKS = ["libero_90_59x1"]
+DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
@@ -45,7 +46,7 @@ USE_SAME_EVAL_AND_TRAIN_TASK = True
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
-applicable_configs: Dict[str, List[Any]] = {
+applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
@@ -55,29 +56,29 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
     "collect.num_initial_rollouts": [5],
-    "collect.tasks": [
-        "libero_90_2",
-        "libero_90_7",
-        "libero_90_9",
-        "libero_90_11",
-        "libero_90_14",
-        "libero_90_26",
-        "libero_90_28",
-        "libero_90_30",
-        "libero_90_31",
-        "libero_90_35",
-        "libero_90_38",
-        "libero_90_41",
-        "libero_90_53",
-        "libero_90_59",
-        "libero_90_60",
-        "libero_90_61",
-        "libero_90_62",
-        "libero_90_64",
-        "libero_90_74",
-        "libero_90_77",
-        "libero_90_79",
-        "libero_90_82",
+    ("collect.tasks", "collect.eval_tasks"): [
+        ("libero_90_2", "libero_90_2"),
+        ("libero_90_7", "libero_90_7"),
+        ("libero_90_9", "libero_90_9"),
+        ("libero_90_11", "libero_90_11"),
+        ("libero_90_14", "libero_90_14"),
+        ("libero_90_26", "libero_90_26"),
+        ("libero_90_28", "libero_90_28"),
+        ("libero_90_30", "libero_90_30"),
+        ("libero_90_31", "libero_90_31"),
+        ("libero_90_35", "libero_90_35"),
+        ("libero_90_38", "libero_90_38"),
+        ("libero_90_41", "libero_90_41"),
+        ("libero_90_53", "libero_90_53"),
+        ("libero_90_59", "libero_90_59"),
+        ("libero_90_60", "libero_90_60"),
+        ("libero_90_61", "libero_90_61"),
+        ("libero_90_62", "libero_90_62"),
+        ("libero_90_64", "libero_90_64"),
+        ("libero_90_74", "libero_90_74"),
+        ("libero_90_77", "libero_90_77"),
+        ("libero_90_79", "libero_90_79"),
+        ("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -93,6 +94,7 @@ def main() -> None:
         help="Execution mode",
     )
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
@@ -121,6 +123,7 @@ def main() -> None:
         "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
     )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
     args = parser.parse_args()
 
@@ -155,12 +158,6 @@ def main() -> None:
         flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
 
-        task = flags["collect.tasks"]
-        train_envs = flags["collect.env_num"]
-        flags["collect.tasks"] = [f'{task}x{train_envs}']
-        eval_envs = flags["collect.eval_env_num"]
-        flags["collect.eval_tasks"] = [f'{task}x{eval_envs}']
-
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
@@ -170,7 +167,9 @@ def main() -> None:
         command_list,
         mode=args.mode,
         duration=args.duration,
+        partition=args.partition,
         dry=args.dry,
+        log_dir=args.log_dir,
     )
 
 

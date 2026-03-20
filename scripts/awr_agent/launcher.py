@@ -10,11 +10,12 @@ Usage:
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
+    DEFAULT_LOG_DIR,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
@@ -44,7 +45,7 @@ NUM_TRAIN_STEPS = 5_000
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
-applicable_configs: Dict[str, List[Any]] = {
+applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [
@@ -60,29 +61,29 @@ applicable_configs: Dict[str, List[Any]] = {
     "lr_schedule.value": [2.5e-5],
     "rl.td_weight_schedule.switch_step": [1_000_000],
     "rl.store_success_episodes_only": [True],
-    "collect.tasks": [
+    ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
         # "libero_90_7",
         # "libero_90_9",
         # "libero_90_11",
-        "libero_90_14",
+        ("libero_90_14", "libero_90_14"),
         # "libero_90_26",
         # "libero_90_28",
         # "libero_90_30",
         # "libero_90_31",
         # "libero_90_35",
-        "libero_90_38",
+        ("libero_90_38", "libero_90_38"),
         # "libero_90_41",
         # "libero_90_53",
-        "libero_90_59",
+        ("libero_90_59", "libero_90_59"),
         # "libero_90_60",
         # "libero_90_61",
         # "libero_90_62",
-        "libero_90_64",
+        ("libero_90_64", "libero_90_64"),
         # "libero_90_74",
         # "libero_90_77",
         # "libero_90_79",
-        "libero_90_82",
+        ("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -99,6 +100,7 @@ def main() -> None:
         help="Execution mode",
     )
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
@@ -109,6 +111,7 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
     # AWR defaults matching submit_train.sh
     parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
@@ -165,12 +168,6 @@ def main() -> None:
         elif flags["rl.td_weight_schedule.switch_step"] >= NUM_TRAIN_STEPS:
             flags["rl.use_ema_critic"] = False
 
-        task = flags["collect.tasks"]
-        train_envs = flags["collect.env_num"]
-        flags["collect.tasks"] = [f'{task}x{train_envs}']
-        eval_envs = flags["collect.eval_env_num"]
-        flags["collect.eval_tasks"] = [f'{task}x{eval_envs}']
-
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
@@ -180,7 +177,9 @@ def main() -> None:
         command_list,
         mode=args.mode,
         duration=args.duration,
+        partition=args.partition,
         dry=args.dry,
+        log_dir=args.log_dir,
     )
 
 
