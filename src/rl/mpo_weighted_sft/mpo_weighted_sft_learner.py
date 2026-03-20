@@ -28,13 +28,14 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
                 q_state=q_state,
                 value_state=value_state,
                 rng=rng,
+                mc_return=mc_return,
             )
 
         # 3. JIT the wrappers with your distributed shardings
@@ -64,6 +65,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
                 self._state_action_critic_state_sharding,  # q_state
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
+                self._replicated_sharding,  # mc_return
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -156,6 +158,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         q_state: training_utils.TrainState,
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
+        mc_return: at.Array | None = None,
     ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         if not self._config.rl.store_buffer_actions_in_batch:
@@ -178,6 +181,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
             q_state,
             value_state,
             batch,
+            mc_return=mc_return,
         )
 
         return policy_state, info

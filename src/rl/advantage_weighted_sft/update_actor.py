@@ -33,30 +33,43 @@ def train_step(
     state_action_critic_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
+    mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 
     policy = nnx.merge(policy_state.model_def, policy_state.params)
     policy.train()
 
-    state_action_critic = create_critic(state_action_critic_state, config)
-    state_action_critic.eval()
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    reset_period = config.rl.reset_policy_params_to_ema_period
 
-    value_critic = create_critic(value_state, config)
-    value_critic.eval()
-
-    # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
-    critic_actions = flatten_action_horizon(actions)
-    value = summarize_critic_values(value_critic(critic_observation))  # (B,)
-    q_value = summarize_critic_values(
-        state_action_critic(critic_observation, critic_actions)
-    )  # (B,)
-    advantage = q_value - value  # (B, )
+    if config.rl.use_mc_returns:
+        assert mc_return is not None, "mc_return must be provided when use_mc_returns=True"
+        value_critic = create_critic(value_state, config)
+        value_critic.eval()
+        value = summarize_critic_values(value_critic(critic_observation))  # (B,)
+        advantage = mc_return - value  # (B, )
+    else:
+        state_action_critic = create_critic(state_action_critic_state, config)
+        state_action_critic.eval()
+        value_critic = create_critic(value_state, config)
+        value_critic.eval()
+        # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
+        critic_actions = flatten_action_horizon(actions)
+        value = summarize_critic_values(value_critic(critic_observation))  # (B,)
+        q_value = summarize_critic_values(
+            state_action_critic(critic_observation, critic_actions)
+        )  # (B,)
+        advantage = q_value - value  # (B, )
 
     score = advantage / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
-    score = jax.nn.softmax(score, axis=0)  # (B, )
+
+    score = jnp.exp(score)
+    score = score / config.rl.advantage_scale  # Normalize advantage w.r.t scale
+    score = jnp.clip(score, min=1e-6)
+
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
     @at.typecheck
@@ -76,7 +89,7 @@ def train_step(
         aux_data = {
             "chunked_loss": jnp.mean(chunked_loss),
         }
-        return jnp.sum(score * chunked_loss), aux_data
+        return jnp.mean(score * chunked_loss), aux_data
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
 
@@ -118,6 +131,18 @@ def train_step(
                 new_params,
             ),
         )
+        if reset_period:
+            step = new_state.step
+
+            def keep_state(state):
+                return state
+
+            def revert_to_ema(state):
+                return state.replace(params=jax.tree.map(lambda x: x, state.ema_params))
+
+            new_state = jax.lax.cond(
+                step % reset_period == 0, revert_to_ema, keep_state, new_state
+            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(

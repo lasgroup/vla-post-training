@@ -85,7 +85,12 @@ def main(config: _config.OnlineTrainConfig):
         infos.append(info)
 
         if step % config.log_interval == 0:
-            stacked_infos = common_utils.stack_forest(infos)
+            # Infos may have different keys (actor-only, critic-only, or both),
+            # so we normalize them before stacking.
+            all_keys = set().union(*(d.keys() for d in infos))
+            nan = jnp.array(float("nan"))
+            normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
+            stacked_infos = common_utils.stack_forest(normalized)
             reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")

@@ -23,6 +23,7 @@ class Agent(object):
     _actor: training_utils.TrainState
     _rng: jax.random.PRNGKey
     training_steps: int = 0
+    policy_update_count: int = 0
     env_steps: int = 0
     episodes: int = 0
     total_collected_episodes: int = 0

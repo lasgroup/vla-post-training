@@ -33,14 +33,14 @@ from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerCo
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(
-            self,
-            config: OnlineTrainConfig,
-            dummy_obs: ObsType,
-            dummy_act: ActionType,
-            state_action_critic_def: StateActionCriticDef,
-            state_value_def: StateValueDef,
-            task_description: str,
-            debug: bool = False,
+        self,
+        config: OnlineTrainConfig,
+        dummy_obs: ObsType,
+        dummy_act: ActionType,
+        state_action_critic_def: StateActionCriticDef,
+        state_value_def: StateValueDef,
+        task_description: str,
+        debug: bool = False,
     ):
         self.task_description = task_description
         self.debug = debug
@@ -95,13 +95,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
                 q_state=q_state,
                 value_state=value_state,
                 rng=rng,
+                mc_return=mc_return,
             )
 
         # 3. JIT the wrappers with your distributed shardings
@@ -131,6 +132,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,  # q_state
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
+                self._data_sharding,  # mc_return
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -140,10 +142,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _recompute_prefix_embedding(
-            self,
-            *,
-            observation: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        *,
+        observation: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
@@ -169,9 +171,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def _online_batch_to_critic_batch(
-            self,
-            online_batch: dict[str, Any],
-            policy_state: training_utils.TrainState,
+        self,
+        online_batch: dict[str, Any],
+        policy_state: training_utils.TrainState,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -211,9 +213,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
     def _sft_batch_to_actor_batch(
-            self,
-            sft_batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
+        self,
+        sft_batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
         policy_obs_dict = policy_observation.to_dict()
@@ -232,22 +234,28 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return policy_observation, critic_observation, actions
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
-        assert env_index in range(len(self._episode_storage)), \
-            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        assert env_index in range(
+            len(self._episode_storage)
+        ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        self._save_episode_in_buffer(episode_data, task_description)
+        rl_config = self._config.rl
+        assert isinstance(rl_config, AdvantageWeightedSFTLearnerConfig)
+        if rl_config.store_success_episodes_only:
+            if is_success:
+                self._save_episode_in_buffer(episode_data, task_description)
+        else:
+            self._save_episode_in_buffer(episode_data, task_description)
 
     @at.typecheck
     def _update_critics(
-            self,
-            batch: Dict[str, Any],
-            q_state: training_utils.TrainState,
-            value_state: training_utils.TrainState,
-            policy_state: training_utils.TrainState,
-            rng: at.KeyArrayLike,
+        self,
+        batch: Dict[str, Any],
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        policy_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
     ) -> Tuple[
         training_utils.TrainState,
         training_utils.TrainState,
@@ -282,12 +290,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return q_state, value_state, q_info, value_info
 
     def _update_policy(
-            self,
-            batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
-            q_state: training_utils.TrainState,
-            value_state: training_utils.TrainState,
-            rng: at.KeyArrayLike,
+        self,
+        batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
+        q_state: training_utils.TrainState,
+        value_state: training_utils.TrainState,
+        rng: at.KeyArrayLike,
+        mc_return: at.Array | None = None,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -301,14 +310,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             q_state,
             value_state,
             batch,
+            mc_return=mc_return,
         )
 
         return policy_state, info
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), "Only Advantage SFT config should " \
-                                                                                "be passed to the filtered SFT agent"
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (
+            "Only Advantage SFT config should " "be passed to the filtered SFT agent"
+        )
         rl_config = self._config.rl
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
@@ -318,7 +329,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             q_opt_state = self._state_action_critic_state.tx.init(
                 nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
             )
-            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
+            new_ema_state_action_critic_params = jax.tree.map(
+                jnp.copy, self._state_action_critic_state.params
+            )
             self._state_action_critic_state = dataclasses.replace(
                 self._state_action_critic_state,
                 opt_state=q_opt_state,
@@ -339,12 +352,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-                self.training_steps >= rl_config.critic_training_start_step
-                and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic_training_start_step
+            and self.training_steps % rl_config.critic_update_interval == 0
         )
         update_policy = (
-                self.training_steps >= rl_config.policy_training_start_step
-                and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy_training_start_step
+            and self.training_steps % rl_config.policy_update_interval == 0
         )
         if not update_critic and not update_policy:
             return {
@@ -353,18 +366,21 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
             }
 
-        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
-        use_online = (
-                self._online_data_buffer.size >= online_batch_size
+        online_batch_size = int(
+            self._config.batch_size * min(1.0, self._config.rl.online_ratio)
         )
+        use_online = self._online_data_buffer.size >= online_batch_size
 
         critic_info, actor_info = {}, {}
+        mc_return = None
         if use_online:
             online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
                 if self.debug:
                     log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=online_batch
+                        "before_critics",
+                        train_state=self._train_state,
+                        batch=online_batch,
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -381,10 +397,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._value_state = value_state
 
                 critic_info = {
-                                  f"critic/q_{key}": value for key, value in q_info.items()
-                              } | {f"critic/value_{key}": value for key, value in value_info.items()}
+                    f"critic/q_{key}": value for key, value in q_info.items()
+                } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
+            if rl_config.use_mc_returns:
+                mc_return = online_batch["mc_return"]
+                assert rl_config.online_ratio >= 1.0, (
+                    "use_mc_returns requires online_ratio >= 1.0 "
+                    "(MC returns are not available for offline data)"
+                )
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
@@ -426,17 +448,20 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
+                    mc_return,
                 )
+
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
+
         info = (
-                actor_info
-                | critic_info
-                | {
-                    "online_buffer_size": jnp.asarray(
-                        float(self._online_data_buffer.size), dtype=jnp.float32
-                    )
-                }
+            actor_info
+            | critic_info
+            | {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
         )
         info = jax.tree.map(np.asarray, info)
         return info

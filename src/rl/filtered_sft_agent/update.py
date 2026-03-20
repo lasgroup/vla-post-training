@@ -1,4 +1,4 @@
-from src.training.config import OnlineTrainConfig
+from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
@@ -20,6 +20,8 @@ def train_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     model = nnx.merge(state.model_def, state.params)
     model.train()
+    assert isinstance(config.rl, FilteredSFTLearnerConfig)
+    reset_period = config.rl.reset_policy_params_to_ema_period
 
     @at.typecheck
     def loss_fn(
@@ -51,6 +53,23 @@ def train_step(
                 lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new, state.ema_params, new_params
             ),
         )
+        if reset_period:
+            step = new_state.step
+
+            def keep_state(state):
+                return state
+
+            def revert_to_ema(state):
+                return state.replace(
+                    params=jax.tree.map(lambda x: x, state.ema_params)
+                )
+
+            new_state = jax.lax.cond(
+                step % reset_period == 0,
+                revert_to_ema,
+                keep_state,
+                new_state
+            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(

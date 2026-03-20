@@ -1,3 +1,4 @@
+import dataclasses
 import functools
 import gc
 import logging
@@ -40,7 +41,12 @@ from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
-def filtered_sft_wrap_env(env_fn: EnvFn, config, task_description: list[str], env_num: int | None = None):
+def filtered_sft_wrap_env(
+    env_fn: EnvFn,
+    config,
+    task_description: list[str],
+    env_num: int | None = None,
+):
     env_num = env_num if env_num is not None else config.collect.env_num
     replan_steps = config.collect.replan_steps
     env_class = config.collect.domain
@@ -183,7 +189,9 @@ def _get_post_step_action_filter(domain: str):
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
+        self.post_step_action_filter = _get_post_step_action_filter(
+            self._config.collect.domain
+        )
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -224,10 +232,18 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
-        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+        assert (
+            0.0 <= self._config.rl.online_ratio <= 1.0
+        ), "Online ratio must be between 0 and 1."
+        self._offline_batch_size = max(
+            len(jax.devices()),
+            int(self._config.batch_size * (1 - self._config.rl.online_ratio)),
+        )
         self._data_loader = create_data_loader(
-            config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+            config,
+            batch_size=self._offline_batch_size,
+            sharding=self._data_sharding,
+            shuffle=True,
         )
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer()
@@ -261,7 +277,9 @@ class FilteredSFTLearner(Agent):
         # Create temporary episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
 
-        def _get_prefix_rep_with_model_fn(m: _model.BaseModel, observation: _model.Observation):
+        def _get_prefix_rep_with_model_fn(
+            m: _model.BaseModel, observation: _model.Observation
+        ):
             prefix_rep = m.get_prefix_rep(observation)
             # TODO: remove if below
             return prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
@@ -269,7 +287,9 @@ class FilteredSFTLearner(Agent):
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
         # Create policy for data collection
-        policy_checkpoint_dir = self._config.weight_loader.params_path[: -len("/params")]
+        policy_checkpoint_dir = self._config.weight_loader.params_path[
+            : -len("/params")
+        ]
         self._policy = policy_config.create_trained_policy(
             self._config,
             policy_checkpoint_dir,
@@ -314,9 +334,17 @@ class FilteredSFTLearner(Agent):
         # prepare transforms for preprocessing episode data into model input format
         data_config = self._data_loader.data_config()
         tt_types = (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
-        token_transforms = [t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)]
-        non_token_transforms = [t for t in data_config.model_transforms.inputs if not isinstance(t, tt_types)]
-        assert len(token_transforms) == 1, f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
+        token_transforms = [
+            t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)
+        ]
+        non_token_transforms = [
+            t
+            for t in data_config.model_transforms.inputs
+            if not isinstance(t, tt_types)
+        ]
+        assert (
+            len(token_transforms) == 1
+        ), f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
         self._token_transform = token_transforms[0]
         self._pre_token_transform = _transforms.compose(
             [
@@ -334,18 +362,22 @@ class FilteredSFTLearner(Agent):
         # TODO: this might need to be updated to store prefixes
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
         obs_spec_dict = obs_spec.to_dict()
-        dummy_obs_dict = jax.tree.map(lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict)
+        dummy_obs_dict = jax.tree.map(
+            lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict
+        )
         dummy_obs_dict = {k: v for k, v in dummy_obs_dict.items() if v is not None}
         if "image" in dummy_obs_dict:
-            dummy_obs_dict["image"] = jax.tree.map(lambda v: v.astype(np.uint8), dummy_obs_dict["image"])
+            dummy_obs_dict["image"] = jax.tree.map(
+                lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
+            )
         dummy_data = {
-                "observation": dummy_obs_dict,
-                "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
-                "next_observation": dummy_obs_dict,
-                "reward": np.zeros((1,), dtype=np.float32),
-                "mc_return": np.zeros((1,), dtype=np.float32),
-                "discount": np.zeros((1,), dtype=np.float32),
-            }
+            "observation": dummy_obs_dict,
+            "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
+            "next_observation": dummy_obs_dict,
+            "reward": np.zeros((1,), dtype=np.float32),
+            "mc_return": np.zeros((1,), dtype=np.float32),
+            "discount": np.zeros((1,), dtype=np.float32),
+        }
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
             self._config.rl.buffer_capacity,
@@ -372,7 +404,9 @@ class FilteredSFTLearner(Agent):
         # observations. Use the most recent one for policy inference.
         obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
         size = int(self._config.collect.resize_image)
-        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, size, size))
+        resize_fn = lambda x: image_tools.convert_to_uint8(
+            image_tools.resize_with_pad(x, size, size)
+        )
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs
@@ -402,7 +436,9 @@ class FilteredSFTLearner(Agent):
         # Vector envs expect a batch dimension for actions. Policy inference
         # unbatches when batch_size == 1, so add it back for single-env runs.
         num_devices = len(jax.devices())
-        sharding_spec = self._policy_sharding_spec if batch_size % num_devices == 0 else None
+        sharding_spec = (
+            self._policy_sharding_spec if batch_size % num_devices == 0 else None
+        )
         actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
@@ -420,7 +456,8 @@ class FilteredSFTLearner(Agent):
         return (actions, prefix) if return_prefix_rep else actions
 
     def _generate_actions(
-        self, observations: np.ndarray | Dict,
+        self,
+        observations: np.ndarray | Dict,
         task_description: list[str],
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         rng, self._rng = jax.random.split(self._rng)
@@ -445,7 +482,9 @@ class FilteredSFTLearner(Agent):
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         return self._generate_actions(observations, **kwargs)
 
-    def sample_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    def sample_actions(
+        self, observations: np.ndarray | Dict, **kwargs
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
 
     def _online_batch_to_sft_batch(
@@ -484,7 +523,9 @@ class FilteredSFTLearner(Agent):
 
         # TODO: this function is untested
         # TODO: check if last observation needs to be taken
-        next_observation = jax.tree.map(lambda x: x[[-1]], episode_data[-1]["next_observation"])
+        next_observation = jax.tree.map(
+            lambda x: x[[-1]], episode_data[-1]["next_observation"]
+        )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
         params = (
             self._train_state.ema_params
@@ -505,15 +546,20 @@ class FilteredSFTLearner(Agent):
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
-            horizon = ep["observation"]['state'].shape[0]
-            ep["observation"][PREFIX_EMBEDDING_NAME] = np.repeat(prefix[None, ...], horizon, axis=0)
-            ep["next_observation"][PREFIX_EMBEDDING_NAME] = np.repeat(next_prefix[None, ...], horizon, axis=0)
+            horizon = ep["observation"]["state"].shape[0]
+            ep["observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+                prefix[None, ...], horizon, axis=0
+            )
+            ep["next_observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+                next_prefix[None, ...], horizon, axis=0
+            )
             next_prefix = prefix
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
 
-        assert env_index in range(len(self._episode_storage)), \
-            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        assert env_index in range(
+            len(self._episode_storage)
+        ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
@@ -528,10 +574,14 @@ class FilteredSFTLearner(Agent):
         )
 
         if self._config.collect.store_prefix_rep:
-            self._attach_prefix_embeddings_to_episode_data(episode_data, task_description=task_description)
+            self._attach_prefix_embeddings_to_episode_data(
+                episode_data, task_description=task_description
+            )
 
         # concatenate all chunks
-        episode_data = jax.tree_util.tree_map(lambda *xs: np.concatenate(xs, axis=0), *episode_data)
+        episode_data = jax.tree_util.tree_map(
+            lambda *xs: np.concatenate(xs, axis=0), *episode_data
+        )
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
@@ -543,27 +593,62 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        _obs = {k[len("observation/") :]: v[:n_windows] for k, v in episode_data["observation"].items()}
-        _next_obs = {k[len("observation/") :]: v[act_h-1:act_h-1+n_windows] for k, v in episode_data["next_observation"].items()}
-        _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
+        _obs = {
+            k[len("observation/") :]: v[:n_windows]
+            for k, v in episode_data["observation"].items()
+        }
+        _next_obs = {
+            k[len("observation/") :]: v[act_h - 1 : act_h - 1 + n_windows]
+            for k, v in episode_data["next_observation"].items()
+        }
+        _actions = np.stack(
+            [
+                episode_data["action"][start : start + act_h]
+                for start in range(n_windows)
+            ]
+        )
         _actions = self.post_step_action_filter(_actions)
-        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
-        _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
+        _reward = np.asarray(
+            [
+                (episode_data["reward"][start : start + act_h] * w_gammas).sum()
+                for start in range(n_windows)
+            ]
+        )
+        _discount = np.asarray(
+            [
+                0.0 if np.any(done[start : start + act_h]) else last_gamma
+                for start in range(n_windows)
+            ]
+        )
+        _mc_return = (
+            (all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1]
+            / all_gammas
+        )[:n_windows]
 
         def transform(obs, act, prompt):
             obs.update({"actions": act, "prompt": prompt})
             obs = self._pre_token_transform(obs)
-            obs["image_mask"] = {k: np.full((n_windows,), bool(v)) for k, v in obs["image_mask"].items()}
+            obs["image_mask"] = {
+                k: np.full((n_windows,), bool(v)) for k, v in obs["image_mask"].items()
+            }
             if isinstance(self._token_transform, _transforms.TokenizePrompt):
                 if prompt not in self._token_cache:
                     tok = self._token_transform({"prompt": prompt})
-                    self._token_cache[prompt] = (tok["tokenized_prompt"], tok["tokenized_prompt_mask"])
+                    self._token_cache[prompt] = (
+                        tok["tokenized_prompt"],
+                        tok["tokenized_prompt_mask"],
+                    )
                 tokens, token_masks = self._token_cache[prompt]
-                obs["tokenized_prompt"] = np.broadcast_to(tokens, (n_windows, ) + tokens.shape).copy()
-                obs["tokenized_prompt_mask"] = np.broadcast_to(token_masks, (n_windows, ) + token_masks.shape).copy()
+                obs["tokenized_prompt"] = np.broadcast_to(
+                    tokens, (n_windows,) + tokens.shape
+                ).copy()
+                obs["tokenized_prompt_mask"] = np.broadcast_to(
+                    token_masks, (n_windows,) + token_masks.shape
+                ).copy()
             else:
-                raise TypeError(f"Unsupported token transform: {type(self._token_transform)}")
+                raise TypeError(
+                    f"Unsupported token transform: {type(self._token_transform)}"
+                )
             actions = obs.pop("actions")
             prompt = obs.pop("prompt")
             return obs, actions
@@ -572,14 +657,16 @@ class FilteredSFTLearner(Agent):
         _next_obs, _ = transform(_next_obs, _actions, str(task_description))
         _obs, _actions = transform(_obs, _actions, str(task_description))
 
-        self._online_data_buffer.insert({
-            "observation": _obs,
-            "actions": _actions.astype(np.float32),
-            "next_observation": _next_obs,
-            "reward": _reward.astype(np.float32),
-            "mc_return": _mc_return.astype(np.float32),
-            "discount": _discount.astype(np.float32),
-        })
+        self._online_data_buffer.insert(
+            {
+                "observation": _obs,
+                "actions": _actions.astype(np.float32),
+                "next_observation": _next_obs,
+                "reward": _reward.astype(np.float32),
+                "mc_return": _mc_return.astype(np.float32),
+                "discount": _discount.astype(np.float32),
+            }
+        )
         self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
@@ -610,15 +697,29 @@ class FilteredSFTLearner(Agent):
             batch = next(self._data_iter)
         if online_ratio > 0.0:
             online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
-            online_batch_raw = self._online_data_buffer.sample(batch_size=online_batch_size)
+            online_batch_raw = self._online_data_buffer.sample(
+                batch_size=online_batch_size
+            )
             online_batch = self._online_batch_to_sft_batch(online_batch_raw)
-            batch = online_batch if online_ratio >= 1.0 else jax.tree.map(
-                lambda x, y: jnp.concatenate([x, y], axis=0),
-                batch,
-                online_batch,
+            batch = (
+                online_batch
+                if online_ratio >= 1.0
+                else jax.tree.map(
+                    lambda x, y: jnp.concatenate([x, y], axis=0),
+                    batch,
+                    online_batch,
+                )
             )
 
         train_rng, self._rng = jax.random.split(self._rng)
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
         with sharding.set_mesh(self._mesh):
-            self._train_state, info = self._train_step(train_rng, self._train_state, batch)
+            policy_state, info = self._train_step(train_rng, self._train_state, batch)
+        self._train_state = policy_state
+        info = info | {
+            "online_buffer_size": jnp.asarray(
+                float(self._online_data_buffer.size), dtype=jnp.float32
+            )
+        }
         return info
