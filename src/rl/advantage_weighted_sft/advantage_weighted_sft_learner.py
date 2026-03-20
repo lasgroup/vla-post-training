@@ -370,6 +370,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._config.batch_size * min(1.0, self._config.rl.online_ratio)
         )
         use_online = self._online_data_buffer.size >= online_batch_size
+        if rl_config.use_mc_returns and not use_online:
+            update_policy = False
 
         critic_info, actor_info = {}, {}
         mc_return = None
