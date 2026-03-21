@@ -40,6 +40,7 @@ def train_step(
     value_critic.eval()
 
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
+    reset_period = config.rl.reset_policy_params_to_ema_period
     group_size = config.rl.group_size
     normalize_adv = config.rl.normalize_adv
     use_mpo_advantage_weight = config.rl.use_mpo_advantage_weight
@@ -120,9 +121,7 @@ def train_step(
                 # NOTE: jnp.transpose requires a full permutation for all dimensions;
                 # swapaxes is the intended "swap last two dims" operation.
                 adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-                log_probs = jnp.swapaxes(
-                    log_probs.reshape(B, group_size, -1), 1, 2
-                )
+                log_probs = jnp.swapaxes(log_probs.reshape(B, group_size, -1), 1, 2)
                 group_mean = jnp.mean(adv, axis=-1, keepdims=True)
                 group_std = jnp.std(adv, axis=-1, keepdims=True)
                 adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
@@ -186,6 +185,18 @@ def train_step(
                 new_params,
             ),
         )
+        if reset_period:
+            step = new_state.step
+
+            def keep_state(state):
+                return state
+
+            def revert_to_ema(state):
+                return state.replace(params=jax.tree.map(lambda x: x, state.ema_params))
+
+            new_state = jax.lax.cond(
+                step % reset_period == 0, revert_to_ema, keep_state, new_state
+            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(

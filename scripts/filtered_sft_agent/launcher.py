@@ -13,6 +13,7 @@ import sys
 from typing import Any, Dict, List, Union
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
     DEFAULT_LOG_DIR,
@@ -37,7 +38,7 @@ DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-
+USE_SAME_EVAL_AND_TRAIN_TASK = True
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -45,8 +46,36 @@ NUM_TRAIN_STEPS = 5_000
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
+    "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [1.0],
+    "rl.reset_policy_params_to_ema_period": [500],
+    "collect.num_initial_rollouts": [5],
+    "lr_schedule.value": [2.5e-5],
+    ("collect.tasks", "collect.eval_tasks"): [
+        # "libero_90_2",
+        # "libero_90_7",
+        # "libero_90_9",
+        # "libero_90_11",
+        ("libero_90_14", "libero_90_14"),
+        # "libero_90_26",
+        # "libero_90_28",
+        # "libero_90_30",
+        # "libero_90_31",
+        # "libero_90_35",
+        ("libero_90_38", "libero_90_38"),
+        # "libero_90_41",
+        # "libero_90_53",
+        ("libero_90_59", "libero_90_59"),
+        # "libero_90_60",
+        # "libero_90_61",
+        # "libero_90_62",
+        ("libero_90_64", "libero_90_64"),
+        # "libero_90_74",
+        # "libero_90_77",
+        # "libero_90_79",
+        ("libero_90_82", "libero_90_82"),
+    ],
 }
 
 

@@ -28,7 +28,7 @@ CriticBatch = tuple[
     ObsType,
     at.Float[at.Array, " b"],
     at.Float[at.Array, " b"],
-    at.Float[at.Array, " b"],       # MC returns
+    at.Float[at.Array, " b"],  # MC returns
 ]
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
@@ -232,7 +232,7 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = (q_state.step // config.rl.num_critic_updates_per_batch)
+    step = q_state.step // config.rl.num_critic_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
@@ -259,6 +259,7 @@ def train_q_step(
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         if q_values.ndim > 1:
             td_targets = td_targets[jnp.newaxis]
+            mc_return = mc_return[jnp.newaxis]
 
         td_errors = q_values - td_targets
         mc_errors = q_values - mc_return
@@ -309,7 +310,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = (value_state.step // config.rl.num_critic_updates_per_batch)
+    step = value_state.step // config.rl.num_critic_updates_per_batch
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
@@ -336,6 +337,11 @@ def train_value_step(
             target_q_model(observation, actions),
             critic_reduction=config.rl.critic_reduction,
         )
+
+        if values.ndim > 1:
+            q_values = q_values[jnp.newaxis]
+            mc_return = mc_return[jnp.newaxis]
+
         mc_errors = values - mc_return
         td_error = values - jax.lax.stop_gradient(q_values)
         td_loss = jnp.mean(jnp.square(td_error))
