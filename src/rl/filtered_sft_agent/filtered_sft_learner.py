@@ -237,20 +237,29 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
-        assert (
-            0.0 <= self._config.rl.online_ratio <= 1.0
-        ), "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(
-            len(jax.devices()),
-            int(self._config.batch_size * (1 - self._config.rl.online_ratio)),
+        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        self._data_config = self._config.data.create(
+            self._config.assets_dirs,
+            self._config.model,
         )
-        self._data_loader = create_data_loader(
-            config,
-            batch_size=self._offline_batch_size,
-            sharding=self._data_sharding,
-            shuffle=True,
-        )
-        self._data_iter = iter(self._data_loader)
+        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+
+        if self._config.rl.online_ratio < 1.0:
+            self._data_loader = create_data_loader(
+                config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+            )
+            self._data_iter = iter(self._data_loader)
+        else:
+            class DummyDataLoader:
+                def __init__(self, data_config):
+                    self._data_config = data_config
+
+                def data_config(self):
+                    return self._data_config
+
+            self._data_loader = DummyDataLoader(self._data_config)
+            self._data_iter = None
+
         self._online_data_buffer = self._get_online_replay_buffer()
         self._collection_success_episodes = 0
 
