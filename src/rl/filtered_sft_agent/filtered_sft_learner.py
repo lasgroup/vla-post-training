@@ -194,9 +194,8 @@ def _get_obs_key_process_fn(domain: str):
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self.post_step_action_filter = _get_post_step_action_filter(
-            self._config.collect.domain
-        )
+        self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
+        self.obs_key_process_fn = _get_obs_key_process_fn(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -605,37 +604,13 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        _obs = {
-            k[len("observation/") :]: v[:n_windows]
-            for k, v in episode_data["observation"].items()
-        }
-        _next_obs = {
-            k[len("observation/") :]: v[act_h - 1 : act_h - 1 + n_windows]
-            for k, v in episode_data["next_observation"].items()
-        }
-        _actions = np.stack(
-            [
-                episode_data["action"][start : start + act_h]
-                for start in range(n_windows)
-            ]
-        )
+        _obs = {self.obs_key_process_fn(k): v[:n_windows] for k, v in episode_data["observation"].items()}
+        _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
+        _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
-        _reward = np.asarray(
-            [
-                (episode_data["reward"][start : start + act_h] * w_gammas).sum()
-                for start in range(n_windows)
-            ]
-        )
-        _discount = np.asarray(
-            [
-                0.0 if np.any(done[start : start + act_h]) else last_gamma
-                for start in range(n_windows)
-            ]
-        )
-        _mc_return = (
-            (all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1]
-            / all_gammas
-        )[:n_windows]
+        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
+        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         def transform(obs, act, prompt):
             obs.update({"actions": act, "prompt": prompt})
