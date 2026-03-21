@@ -175,8 +175,7 @@ class CollectionConfig:
     collect_interval: int = 200
     env_num: int = 4
     env_resolution: int = 256
-    resize_image_h: int = 224
-    resize_image_w: int = 224
+    resize_image: int = 224
     num_rollouts: int = 50
     num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
