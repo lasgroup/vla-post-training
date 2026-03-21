@@ -417,10 +417,8 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
-        size = int(self._config.collect.resize_image)
-        resize_fn = lambda x: image_tools.convert_to_uint8(
-            image_tools.resize_with_pad(x, size, size)
-        )
+        h, w = int(self._config.collect.resize_image_h), int(self._config.collect.resize_image_w)
+        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, h, w))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs
