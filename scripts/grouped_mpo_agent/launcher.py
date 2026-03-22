@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name flowgrpo_debug_march17
+    ./scripts/grouped_mpo_agent/launcher.py --project_name flowgrpo_debug_march22
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -66,9 +66,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
-    "rl.align_critic_sampling": [False],
+    "rl.align_critic_sampling": [False, True],
+    "rl.normalize_adv": [False, True],
     "rl.reset_policy_params_to_ema_period": [50, 100],
-    "rl.policy_update_interval": [1, 10, 50],
+    "rl.policy_update_interval": [1, 50],
 }
 
 

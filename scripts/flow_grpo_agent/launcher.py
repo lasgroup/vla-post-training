@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march17
+    ./scripts/flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march22
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -67,14 +67,15 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "rl.normalize_adv": [False, True],
-    "rl.kl_coef": [0.0, 0.01],
+    "rl.kl_coef": [0.01, 0.10],
     "rl.td_weight_schedule.switch_step": [900],
+    "rl.policy_update_interval": [1, 50],
     "rl.save_all_episodes": [False], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
-    "rl.drop_low_diversity_groups": [False, True],
+    "rl.drop_low_diversity_groups": [True],
     "rl.align_critic_sampling": [False, True],
-    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
+    "rl.reset_policy_params_to_ema_period": [50, 100],
 }
 
 
