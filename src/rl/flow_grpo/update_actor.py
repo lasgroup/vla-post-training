@@ -208,6 +208,8 @@ def train_step(
             kl_loss = jnp.mean(policy_log_probs - reference_log_probs)
             ref_log_prob_mean = jnp.mean(reference_log_probs)
 
+        advantage_scale = config.rl.advantage_scale
+
         if use_mpo_advantage_weight:
             if group_size > 1:
                 total_batch_size = advantage.shape[0]
@@ -217,8 +219,10 @@ def train_step(
                 B = total_batch_size // group_size
                 score = advantage.reshape(B, group_size) / beta
                 if weight_clip is not None:
-                    score = jnp.clip(score, -weight_clip, weight_clip)
-                score = jax.nn.softmax(score, axis=-1)
+                    score = jnp.minimum(score, weight_clip)
+                score = jnp.exp(score)
+                score = score / advantage_scale
+                score = jnp.clip(score, min=1e-6)
 
                 # Drop low-diversity groups: use uniform weights when
                 # within-group advantage std is below the threshold.
@@ -234,13 +238,15 @@ def train_step(
                     log_probs.reshape(B, group_size, -1), 1, 2
                 )
             else:
-                # Flow-MPO path (group_size=1): global softmax.
+                # Flow-MPO path (group_size=1): global exp/scale.
                 if normalize_adv:
                     advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
                 score = advantage / beta
                 if weight_clip is not None:
-                    score = jnp.clip(score, -weight_clip, weight_clip)
-                score = jax.nn.softmax(score, axis=0)
+                    score = jnp.minimum(score, weight_clip)
+                score = jnp.exp(score)
+                score = score / advantage_scale
+                score = jnp.clip(score, min=1e-6)
             score = jax.lax.stop_gradient(score)
         else:
             adv = advantage

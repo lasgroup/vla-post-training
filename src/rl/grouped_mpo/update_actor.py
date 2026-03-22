@@ -91,6 +91,8 @@ def train_step(
     )
     advantage = jax.lax.stop_gradient(q_value - value)
 
+    advantage_scale = config.rl.advantage_scale
+
     if group_size > 1:
         total_batch_size = advantage.shape[0]
         assert (
@@ -99,8 +101,10 @@ def train_step(
         base_batch_size = total_batch_size // group_size
         score = advantage.reshape(base_batch_size, group_size) / beta
         if weight_clip is not None:
-            score = jnp.clip(score, -weight_clip, weight_clip)
-        score = jax.nn.softmax(score, axis=-1)
+            score = jnp.minimum(score, weight_clip)
+        score = jnp.exp(score)
+        score = score / advantage_scale
+        score = jnp.clip(score, min=1e-6)
 
         # Drop low-diversity groups: replace with uniform weights when
         # the within-group advantage std is below the threshold.
@@ -116,8 +120,10 @@ def train_step(
     else:
         score = advantage / beta
         if weight_clip is not None:
-            score = jnp.clip(score, -weight_clip, weight_clip)
-        score = jax.nn.softmax(score, axis=0)
+            score = jnp.minimum(score, weight_clip)
+        score = jnp.exp(score)
+        score = score / advantage_scale
+        score = jnp.clip(score, min=1e-6)
         score_stats = score
         score = jax.lax.stop_gradient(score)
 
@@ -138,11 +144,11 @@ def train_step(
 
         if group_size > 1:
             grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
-            loss = jnp.mean(jnp.sum(score * grouped_chunked_loss, axis=1))
+            loss = jnp.mean(score * grouped_chunked_loss)
         else:
             while score.ndim < chunked_loss.ndim:
                 score = score[..., jnp.newaxis]
-            loss = jnp.sum(score * chunked_loss)
+            loss = jnp.mean(score * chunked_loss)
 
         info = {
             "loss": loss,

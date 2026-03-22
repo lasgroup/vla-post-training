@@ -50,6 +50,30 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             donate_argnums=(1,),
         )
 
+    def _update_policy(
+        self,
+        batch,
+        policy_state,
+        q_state,
+        value_state,
+        rng,
+        **kwargs,
+    ):
+        # Skip MPO's _get_on_policy_action — flow GRPO train_step samples
+        # its own actions internally, so the MPO on-policy action is wasted.
+        batch = self._sft_batch_to_actor_batch(
+            batch,
+            policy_state=policy_state,
+        )
+        policy_state, info = self._train_step(
+            rng,
+            policy_state,
+            q_state,
+            value_state,
+            batch,
+        )
+        return policy_state, info
+
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
         model = nnx.merge(policy_state.model_def, policy_state.params)

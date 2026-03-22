@@ -79,6 +79,8 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.save_all_episodes": "saveall",
     "rl.normalize_adv": "normadv",
     "rl.use_mpo_advantage_weight": "mpoadv",
+    "rl.use_mc_returns": "mcret",
+    "rl.advantage_scale": "advscale",
     "rl.noise_level": "noise",
     "rl.online_ratio": "onratio",
     "rl.kl_coef": "kl",

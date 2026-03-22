@@ -49,6 +49,30 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
             donate_argnums=(1,),
         )
 
+    def _update_policy(
+        self,
+        batch,
+        policy_state,
+        q_state,
+        value_state,
+        rng,
+        **kwargs,
+    ):
+        # Skip MPO's _get_on_policy_action — grouped MPO train_step samples
+        # its own actions internally, so the MPO on-policy action is wasted.
+        batch = self._sft_batch_to_actor_batch(
+            batch,
+            policy_state=policy_state,
+        )
+        policy_state, info = self._train_step(
+            rng,
+            policy_state,
+            q_state,
+            value_state,
+            batch,
+        )
+        return policy_state, info
+
     @at.typecheck
     def _get_on_policy_action(
         self,

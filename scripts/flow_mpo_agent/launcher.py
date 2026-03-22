@@ -65,13 +65,14 @@ applicable_configs: Dict[str, List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [64],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "rl.noise_level": [0.05, 0.1],
     "rl.kl_coef": [0.0, 0.01],
     "rl.normalize_adv": [True],
+    "rl.use_mc_returns": [False, True],
     "rl.reset_policy_params_to_ema_period": [None, 100, 500],
 }
 
