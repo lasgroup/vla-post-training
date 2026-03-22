@@ -2,7 +2,7 @@
 """Launcher for MPO-agent experiments.
 
 Usage:
-    ./scripts/mpo_agent/launcher_try.py --project_name flowgrpo_debug_march17
+    ./scripts/mpo_agent/launcher_try.py --project_name flowgrpo_debug_march22
     ./scripts/mpo_agent/launcher_try.py --project_name my_project --dry
     ./scripts/mpo_agent/launcher_try.py --project_name my_project --mode local
 """
