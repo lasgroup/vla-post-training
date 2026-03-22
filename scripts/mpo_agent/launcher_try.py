@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launcher for MPO-FlowGRPO hybrid experiments.
+"""Launcher for MPO-agent experiments.
 
 Usage:
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march17
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/mpo_agent/launcher_try.py --project_name flowgrpo_debug_march17
+    ./scripts/mpo_agent/launcher_try.py --project_name my_project --dry
+    ./scripts/mpo_agent/launcher_try.py --project_name my_project --mode local
 """
 
 import argparse
@@ -21,9 +21,9 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/flow_grpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
-PROJECT_NAME = "mpo_flow_grpo_sweep"
+SCRIPT = "scripts/mpo_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_mpo_sft"
+PROJECT_NAME = "mpo_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
@@ -33,7 +33,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 64
+DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59x1"]
 DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
@@ -41,36 +41,29 @@ DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-DEFAULT_GROUP_SIZE = 8
-DEFAULT_NUM_STEPS = 5
-DEFAULT_NORMALIZE_ADV = True
-DEFAULT_KL_COEF = 0.0
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
-DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
-        "collect.tasks": DEFAULT_TASKS,
-        "collect.eval_tasks": DEFAULT_EVAL_TASKS,
-    }
+        "collect.tasks": ["libero_90_62x1"],
+        "collect.eval_tasks": ["libero_90_62x4"],
+    },
 ]
 
+# ---------- Hyperparameter grid ----------
+# Keys can be any `_config.cli()` override.
+# If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [64],
+    "batch_size": [256],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
-    "rl.kl_coef": [0.0, 0.01],
-    "rl.td_weight_schedule.switch_step": [900],
-    "rl.save_all_episodes": [False],
-    "rl.policy_only_successful": [False],
-    "rl.use_deterministic_anchor": [True],
-    "rl.drop_low_diversity_groups": [False, True],
-    "rl.align_critic_sampling": [False, True],
-    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
+    "rl.normalize_adv": [False, True],
+    "rl.save_all_episodes": [True],
+    "rl.policy_only_successful": [False, True],
+    "rl.reset_policy_params_to_ema_period": [50, 100, 250, 500],
 }
 
 
@@ -114,28 +107,13 @@ def main() -> None:
         "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
     )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
-    parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
-    parser.add_argument("--num_steps", type=int, default=DEFAULT_NUM_STEPS)
-    parser.add_argument("--kl_coef", type=float, default=DEFAULT_KL_COEF)
-    parser.add_argument(
-        "--normalize_adv",
-        action='store_true',
-        default=DEFAULT_NORMALIZE_ADV,
-    )
-    parser.add_argument("--td_weight_switch_step", type=int, default=DEFAULT_TD_WEIGHT_SWITCH_STEP)
-    parser.add_argument("--td_weight_ramp_steps", type=int, default=DEFAULT_TD_WEIGHT_RAMP_STEPS)
 
     args = parser.parse_args()
 
     combos = dict_permutations(applicable_configs)
     command_list = []
     job_names = []
-    tracked_name_keys = [
-        "collect.tasks",
-        *applicable_configs.keys(),
-        "rl.kl_coef",
-        "collect.eval_tasks",
-    ]
+    tracked_name_keys = ["collect.tasks", *applicable_configs.keys(), "collect.eval_tasks"]
     for idx, combo in enumerate(combos):
         for task_idx, task_flags in enumerate(TASK_SWEEP):
             flags: Dict[str, Any] = {
@@ -157,19 +135,15 @@ def main() -> None:
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
-            "rl.group_size": args.group_size,
-            "rl.num_steps": args.num_steps,
-            "rl.kl_coef": args.kl_coef,
-            "rl.normalize_adv": args.normalize_adv,
-            "rl.use_mpo_advantage_weight": True,
         }
             default_name_flags = dict(flags)
             default_name_flags.update(TASK_SWEEP[0])
             flags.update(combo)
             flags.update(task_flags)
 
+            # Keep these in sync with policy_training_start_step
             policy_start = flags["rl.policy_training_start_step"]
-            flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
+            flags["rl.td_weight_schedule.switch_step"] = policy_start
             flags["rl.critic_pre_training_steps"] = policy_start
 
             flags.setdefault(
@@ -180,7 +154,7 @@ def main() -> None:
                     idx * len(TASK_SWEEP) + task_idx,
                     defaults=default_name_flags,
                     tracked_keys=tracked_name_keys,
-                    algorithm_name="mpo_flow_grpo",
+                    algorithm_name="mpo",
                 ),
             )
 

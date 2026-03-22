@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launcher for MPO-FlowGRPO hybrid experiments.
+"""Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name flowgrpo_debug_march17
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/mpo_flow_grpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/flow_grpo_agent/launcher_try.py --project_name flowgrpo_debug_march17
+    ./scripts/flow_grpo_agent/launcher_try.py --project_name my_project --dry
+    ./scripts/flow_grpo_agent/launcher_try.py --project_name my_project --mode local
 """
 
 import argparse
@@ -23,7 +23,7 @@ from launcher_util import (
 
 SCRIPT = "scripts/flow_grpo_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
-PROJECT_NAME = "mpo_flow_grpo_sweep"
+PROJECT_NAME = "flow_grpo_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
@@ -54,6 +54,9 @@ TASK_SWEEP: List[Dict[str, Any]] = [
     }
 ]
 
+# ---------- Hyperparameter grid ----------
+# Keys can be any `_config.cli()` override.
+# If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
@@ -63,15 +66,19 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
-    "rl.kl_coef": [0.0, 0.01],
-    "rl.td_weight_schedule.switch_step": [900],
-    "rl.save_all_episodes": [False],
+    "rl.normalize_adv": [False],
+    "rl.kl_coef": [0.01, 0.05],
+    "rl.td_weight_schedule.switch_step": [900, 1000000],
+    "rl.policy_update_interval": [1, 10],
+    "rl.save_all_episodes": [False], # Default value is False, which saves only successful episodes. Setting it to True allows us to investigate the impact of using all episodes for training, which can be beneficial when the success rate is low and we want to leverage the information from unsuccessful attempts.
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
-    "rl.drop_low_diversity_groups": [False, True],
-    "rl.align_critic_sampling": [False, True],
-    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
+    "rl.drop_low_diversity_groups": [True],
+    "rl.align_critic_sampling": [False],
+    "rl.reset_policy_params_to_ema_period": [50, 100],
+
 }
+
 
 
 def main() -> None:
@@ -133,6 +140,7 @@ def main() -> None:
     tracked_name_keys = [
         "collect.tasks",
         *applicable_configs.keys(),
+        "rl.group_size",
         "rl.kl_coef",
         "collect.eval_tasks",
     ]
@@ -161,7 +169,7 @@ def main() -> None:
             "rl.num_steps": args.num_steps,
             "rl.kl_coef": args.kl_coef,
             "rl.normalize_adv": args.normalize_adv,
-            "rl.use_mpo_advantage_weight": True,
+            "rl.use_mpo_advantage_weight": False,
         }
             default_name_flags = dict(flags)
             default_name_flags.update(TASK_SWEEP[0])
@@ -180,7 +188,7 @@ def main() -> None:
                     idx * len(TASK_SWEEP) + task_idx,
                     defaults=default_name_flags,
                     tracked_keys=tracked_name_keys,
-                    algorithm_name="mpo_flow_grpo",
+                    algorithm_name="flow_grpo",
                 ),
             )
 

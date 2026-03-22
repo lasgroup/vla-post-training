@@ -65,9 +65,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
-    "rl.drop_low_diversity_groups": [False, True],
-    "rl.align_critic_sampling": [False, True],
-    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
+    "rl.drop_low_diversity_groups": [True],
+    "rl.align_critic_sampling": [False],
+    "rl.reset_policy_params_to_ema_period": [50, 100],
+    "rl.policy_update_interval": [1, 10, 50],
 }
 
 
