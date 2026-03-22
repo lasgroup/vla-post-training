@@ -66,10 +66,12 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
-    "rl.align_critic_sampling": [False, True],
-    "rl.normalize_adv": [False, True],
-    "rl.reset_policy_params_to_ema_period": [50, 100],
-    "rl.policy_update_interval": [1, 50],
+    "rl.align_critic_sampling": [False],
+    "rl.normalize_adv": [False],
+    "rl.reset_policy_params_to_ema_period": [100],
+    "rl.policy_update_interval": [1],
+    "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
+    "rl.min_advantage_std": [0.0, 0.01],
 }
 
 

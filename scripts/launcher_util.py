@@ -84,6 +84,8 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.noise_level": "noise",
     "rl.online_ratio": "onratio",
     "rl.kl_coef": "kl",
+    "rl.sft_anchor_coef": "sftanch",
+    "rl.min_advantage_std": "minadv",
 }
 
 

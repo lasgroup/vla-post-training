@@ -100,7 +100,7 @@ def train_step(
     batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    policy_observation, critic_observation, _ = batch
+    policy_observation, critic_observation, buffer_actions = batch
 
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()
@@ -122,6 +122,8 @@ def train_step(
     kl_coef = config.rl.kl_coef
     drop_low_diversity = config.rl.drop_low_diversity_groups
     diversity_threshold = config.rl.diversity_threshold
+    sft_anchor_coef = config.rl.sft_anchor_coef
+    min_advantage_std = config.rl.min_advantage_std
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -183,6 +185,10 @@ def train_step(
     if reference_log_probs is not None:
         reference_log_probs = jax.lax.stop_gradient(reference_log_probs)
 
+    # Global advantage gating: track whether advantage_std is too low.
+    global_adv_std = jnp.std(advantage)
+    skip_policy_update = global_adv_std < min_advantage_std
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -191,6 +197,7 @@ def train_step(
         advantage: at.Array,
         q_value: at.Array,
         reference_log_probs: at.Array | None,
+        buffer_actions: _model.Actions,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         policy_log_probs = _compute_rollout_log_probs(
             model=model,
@@ -279,21 +286,41 @@ def train_step(
         if score.ndim == 1:
             score = score[:, jnp.newaxis, jnp.newaxis]
 
-        policy_loss = -jnp.mean(score * log_probs)
+        flow_loss = -jnp.mean(score * log_probs)
+
+        # SFT anchor loss: supervised loss on demonstrated buffer actions.
+        anchor_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
+        if sft_anchor_coef > 0.0:
+            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
+            anchor_loss = jnp.mean(model.compute_loss(
+                anchor_rng,
+                policy_observation,
+                buffer_actions,
+                train=True,
+            ))
+
+        policy_loss = (1.0 - sft_anchor_coef) * flow_loss + sft_anchor_coef * anchor_loss
         loss = policy_loss + kl_coef * kl_loss
 
         info = {
             "loss": loss,
             "policy_loss": policy_loss,
+            "flow_loss": flow_loss,
+            "anchor_loss": anchor_loss,
             "kl_loss": kl_loss,
             "kl_coef": jnp.asarray(kl_coef, dtype=policy_log_probs.dtype),
             "q_mean": jnp.mean(q_value),
+            "advantage_std": global_adv_std,
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(policy_log_probs),
             "reference_log_prob_mean": ref_log_prob_mean,
+            "policy_update_skipped": skip_policy_update.astype(jnp.float32),
         }
 
         return loss, info
+
+    # For SFT anchor: expand buffer_actions to match expanded batch.
+    expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
@@ -306,6 +333,15 @@ def train_step(
         advantage,
         q_value,
         reference_log_probs,
+        expanded_buffer_actions,
+    )
+
+    # Global advantage gating: zero out gradients when advantage_std is too low.
+    grads = jax.lax.cond(
+        skip_policy_update,
+        lambda g: jax.tree.map(jnp.zeros_like, g),
+        lambda g: g,
+        grads,
     )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)

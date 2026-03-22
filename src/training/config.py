@@ -159,6 +159,8 @@ class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     drop_low_diversity_groups: bool = False
     diversity_threshold: float = 0.01
     align_critic_sampling: bool = False
+    sft_anchor_coef: float = 0.0
+    min_advantage_std: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -173,6 +175,8 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     drop_low_diversity_groups: bool = False
     diversity_threshold: float = 0.01
     align_critic_sampling: bool = False
+    sft_anchor_coef: float = 0.0
+    min_advantage_std: float = 0.0
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):

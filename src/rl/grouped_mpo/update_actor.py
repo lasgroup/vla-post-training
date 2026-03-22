@@ -29,7 +29,7 @@ def train_step(
     batch: tuple[_model.Observation, ObsType, _model.Actions],
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, GroupedMPOWeightedSFTLearnerConfig)
-    policy_observation, critic_observation, _ = batch
+    policy_observation, critic_observation, buffer_actions = batch
 
     policy = nnx.merge(policy_state.model_def, policy_state.params)
     policy.train()
@@ -45,6 +45,8 @@ def train_step(
     weight_clip = config.rl.weight_clip
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
+    sft_anchor_coef = config.rl.sft_anchor_coef
+    min_advantage_std = config.rl.min_advantage_std
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -127,6 +129,10 @@ def train_step(
         score_stats = score
         score = jax.lax.stop_gradient(score)
 
+    # Global advantage gating: track whether advantage_std is too low.
+    global_adv_std = jnp.std(advantage)
+    skip_policy_update = global_adv_std < min_advantage_std
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -134,6 +140,7 @@ def train_step(
         policy_observation: _model.Observation,
         actions: _model.Actions,
         score: at.Array,
+        buffer_actions: _model.Actions,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         chunked_loss = model.compute_loss(
             rng,
@@ -144,25 +151,45 @@ def train_step(
 
         if group_size > 1:
             grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
-            loss = jnp.mean(score * grouped_chunked_loss)
+            grouped_loss = jnp.mean(score * grouped_chunked_loss)
         else:
-            while score.ndim < chunked_loss.ndim:
-                score = score[..., jnp.newaxis]
-            loss = jnp.mean(score * chunked_loss)
+            s = score
+            while s.ndim < chunked_loss.ndim:
+                s = s[..., jnp.newaxis]
+            grouped_loss = jnp.mean(s * chunked_loss)
+
+        # SFT anchor loss: supervised loss on demonstrated buffer actions.
+        anchor_loss = jnp.asarray(0.0, dtype=chunked_loss.dtype)
+        if sft_anchor_coef > 0.0:
+            anchor_loss = jnp.mean(model.compute_loss(
+                rng,
+                policy_observation,
+                buffer_actions,
+                train=True,
+            ))
+
+        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss
 
         info = {
             "loss": loss,
+            "grouped_loss": grouped_loss,
+            "anchor_loss": anchor_loss,
             "chunked_loss": jnp.mean(chunked_loss),
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
             "advantage_mean": jnp.mean(advantage),
             "advantage_max": jnp.max(advantage),
             "advantage_min": jnp.min(advantage),
-            "advantage_std": jnp.std(advantage),
+            "advantage_std": global_adv_std,
             "score_mean": jnp.mean(score_stats),
             "score_max": jnp.max(score_stats),
+            "policy_update_skipped": skip_policy_update.astype(jnp.float32),
         }
         return loss, info
+
+    # For SFT anchor: expand buffer_actions to match expanded batch
+    # (only the first copy per group matters for anchor loss, but we need matching batch dim).
+    expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
 
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(
@@ -173,6 +200,15 @@ def train_step(
         expanded_policy_obs,
         sampled_actions,
         score,
+        expanded_buffer_actions,
+    )
+
+    # Global advantage gating: zero out gradients when advantage_std is too low.
+    grads = jax.lax.cond(
+        skip_policy_update,
+        lambda g: jax.tree.map(jnp.zeros_like, g),
+        lambda g: g,
+        grads,
     )
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
