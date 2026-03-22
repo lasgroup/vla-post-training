@@ -17,21 +17,46 @@ Example:
 import dataclasses
 import importlib
 import logging
+import os
+import warnings
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Literal
 
 import gymnasium as gym
 from gymnasium.wrappers import TimeLimit
-from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
-from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
-from molmo_spaces.policy.learned_policy.utils import PromptSampler
-from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
 import numpy as np
 
 from src.envs.wrappers import ensure_gymnasium_env
 
 
 logger = logging.getLogger(__name__)
+
+
+def _silence_molmo_spaces_logs() -> None:
+    # Keep errors visible, but suppress the INFO-level noise emitted by MolmoSpaces.
+    logging.getLogger("molmo_spaces").setLevel(logging.ERROR)
+
+
+@contextmanager
+def _suppress_molmo_spaces_output():
+    logging.getLogger("molmo_spaces").setLevel(logging.ERROR)
+    with open(os.devnull, "w") as devnull:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Using objaverse data version .*",
+                category=UserWarning,
+            )
+            with redirect_stdout(devnull), redirect_stderr(devnull):
+                yield
+
+
+with _suppress_molmo_spaces_output():
+    from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
+    from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
+    from molmo_spaces.policy.learned_policy.utils import PromptSampler
+    from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
 
 
 class _RegisteredPolicyAdapter:
@@ -156,11 +181,12 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         exp_config.data_split = episode.data_split
         exp_config.task_sampler_config.render_device = self._render_device
 
-        self._sampler = JsonEvalTaskSampler(exp_config, episode)
-        self._task = self._sampler.sample_task(
-            force_advance_scene=False,
-            house_index=episode.house_index,
-        )
+        with _suppress_molmo_spaces_output():
+            self._sampler = JsonEvalTaskSampler(exp_config, episode)
+            self._task = self._sampler.sample_task(
+                force_advance_scene=False,
+                house_index=episode.house_index,
+            )
         if self._task is None:
             raise RuntimeError("JsonEvalTaskSampler returned no task.")
 
@@ -226,13 +252,14 @@ class MolmoActionAdapter(gym.ActionWrapper):
             "gripper": np.asarray([255.0 if action[7] > 0.5 else 0.0], dtype=np.float32),
         }
 
-
 def make_env_molmo(config, tasks, num_devices: int = 4):
+    _silence_molmo_spaces_logs()
 
     task_descriptions = []
     task_ids = []
 
-    eval_config = PiPolicyEvalConfig()
+    with _suppress_molmo_spaces_output():
+        eval_config = PiPolicyEvalConfig()
     prompt_sampler = PromptSampler(
         task_type=eval_config.task_type,
         prompt_templates=eval_config.policy_config.prompt_templates,
@@ -240,7 +267,8 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
     )
 
     benchmark_dir = str(MolmoSpacesGymConfig().benchmark_dir).strip()
-    episodes = load_all_episodes(Path(benchmark_dir).expanduser().resolve())
+    with _suppress_molmo_spaces_output():
+        episodes = load_all_episodes(Path(benchmark_dir).expanduser().resolve())
 
     for task in tasks:
 
@@ -250,12 +278,15 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
 
         # TODO: is there a vleaner way to get prompts?
         episode = episodes[task_id]
-        ep_config = PiPolicyEvalConfig()
+        with _suppress_molmo_spaces_output():
+            ep_config = PiPolicyEvalConfig()
         ep_config.scene_dataset = episode.scene_dataset
         ep_config.data_split = episode.data_split
-        sampler = JsonEvalTaskSampler(ep_config, episode)
-        _task = sampler.sample_task(force_advance_scene=False, house_index=episode.house_index)
+        with _suppress_molmo_spaces_output():
+            sampler = JsonEvalTaskSampler(ep_config, episode)
+            _task = sampler.sample_task(force_advance_scene=False, house_index=episode.house_index)
         task_descriptions.append(prompt_sampler.get_prompt(_task).lower())
+        sampler.close()
 
     def env_fn(rank: int):
         task_index = rank % len(task_ids)
