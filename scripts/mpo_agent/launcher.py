@@ -42,10 +42,10 @@ DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
-    {
-        "collect.tasks": ["libero_90_59x1"],
-        "collect.eval_tasks": ["libero_90_59x4"],
-    },
+    # {
+    #     "collect.tasks": ["libero_90_59x1"],
+    #     "collect.eval_tasks": ["libero_90_59x4"],
+    # },
     {
         "collect.tasks": ["libero_90_62x1"],
         "collect.eval_tasks": ["libero_90_62x4"],
@@ -65,9 +65,9 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "rl.normalize_adv": [False, True],
-    "rl.use_mc_returns": [False, True],
+    "rl.use_mc_returns": [False],
     "rl.reset_policy_params_to_ema_period": [None, 100, 500],
-    "rl.save_all_episodes": [False, True],
+    "rl.save_all_episodes": [True],
 }
 
 
