@@ -72,7 +72,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.policy_update_interval": [1],
     "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
-    "rl.min_advantage_std": [0.0, 0.01],
+    "rl.min_advantage_std": [0.0, 0.01, 0.05],
 }
 
 

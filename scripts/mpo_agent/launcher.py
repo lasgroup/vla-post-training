@@ -62,11 +62,11 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [1.0],
+    "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [10],
     "rl.normalize_adv": [False, True],
     "rl.use_mc_returns": [False],
-    "rl.reset_policy_params_to_ema_period": [None, 100, 500],
+    "rl.reset_policy_params_to_ema_period": [None, 100],
     "rl.save_all_episodes": [True],
 }
 

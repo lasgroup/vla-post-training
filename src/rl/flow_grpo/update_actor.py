@@ -197,7 +197,6 @@ def train_step(
         advantage: at.Array,
         q_value: at.Array,
         reference_log_probs: at.Array | None,
-        buffer_actions: _model.Actions,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         policy_log_probs = _compute_rollout_log_probs(
             model=model,
@@ -287,26 +286,10 @@ def train_step(
             score = score[:, jnp.newaxis, jnp.newaxis]
 
         flow_loss = -jnp.mean(score * log_probs)
-
-        # SFT anchor loss: supervised loss on demonstrated buffer actions.
-        anchor_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
-        if sft_anchor_coef > 0.0:
-            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
-            anchor_loss = jnp.mean(model.compute_loss(
-                anchor_rng,
-                policy_observation,
-                buffer_actions,
-                train=True,
-            ))
-
-        policy_loss = (1.0 - sft_anchor_coef) * flow_loss + sft_anchor_coef * anchor_loss
-        loss = policy_loss + kl_coef * kl_loss
+        loss = (1.0 - sft_anchor_coef) * flow_loss + kl_coef * kl_loss
 
         info = {
-            "loss": loss,
-            "policy_loss": policy_loss,
             "flow_loss": flow_loss,
-            "anchor_loss": anchor_loss,
             "kl_loss": kl_loss,
             "kl_coef": jnp.asarray(kl_coef, dtype=policy_log_probs.dtype),
             "q_mean": jnp.mean(q_value),
@@ -319,12 +302,9 @@ def train_step(
 
         return loss, info
 
-    # For SFT anchor: expand buffer_actions to match expanded batch.
-    expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
-
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, aux_data), grads = nnx.value_and_grad(
+    (flow_total_loss, flow_aux), flow_grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(
         policy_model,
@@ -333,8 +313,35 @@ def train_step(
         advantage,
         q_value,
         reference_log_probs,
-        expanded_buffer_actions,
     )
+
+    # SFT anchor loss: computed in a SEPARATE gradient tape to avoid OOM.
+    # The flow loss_fn already stores activations for num_steps forward passes;
+    # adding compute_loss inside the same tape doubles peak memory.
+    anchor_loss_val = jnp.asarray(0.0)
+    if sft_anchor_coef > 0.0:
+        expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
+
+        def anchor_loss_fn(
+            model: _model.BaseModel,
+            policy_observation: _model.Observation,
+            actions: _model.Actions,
+        ):
+            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
+            loss = sft_anchor_coef * jnp.mean(model.compute_loss(
+                anchor_rng, policy_observation, actions, train=True,
+            ))
+            return loss, {"anchor_loss": loss}
+
+        anchor_diff_state = nnx.DiffState(0, config.trainable_filter)
+        (anchor_loss_val, _anchor_aux), anchor_grads = nnx.value_and_grad(
+            anchor_loss_fn, has_aux=True, argnums=anchor_diff_state,
+        )(policy_model, expanded_policy_obs, expanded_buffer_actions)
+
+        # Combine gradients: flow_grads + anchor_grads.
+        flow_grads = jax.tree.map(lambda f, a: f + a, flow_grads, anchor_grads)
+
+    grads = flow_grads
 
     # Global advantage gating: zero out gradients when advantage_std is too low.
     grads = jax.lax.cond(
@@ -343,6 +350,14 @@ def train_step(
         lambda g: g,
         grads,
     )
+
+    # Merge info from both losses.
+    loss = flow_total_loss + anchor_loss_val
+    aux_data = flow_aux | {
+        "loss": loss,
+        "policy_loss": loss,
+        "anchor_loss": anchor_loss_val,
+    }
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
     updates, new_opt_state = policy_state.tx.update(
