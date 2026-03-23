@@ -344,12 +344,15 @@ def train_step(
     grads = flow_grads
 
     # Global advantage gating: zero out gradients when advantage_std is too low.
-    grads = jax.lax.cond(
-        skip_policy_update,
-        lambda g: jax.tree.map(jnp.zeros_like, g),
-        lambda g: g,
-        grads,
-    )
+    # Guard with Python-level check to avoid tracing both cond branches over the
+    # entire gradient tree when gating is disabled (min_advantage_std == 0).
+    if min_advantage_std > 0.0:
+        grads = jax.lax.cond(
+            skip_policy_update,
+            lambda g: jax.tree.map(jnp.zeros_like, g),
+            lambda g: g,
+            grads,
+        )
 
     # Merge info from both losses.
     loss = flow_total_loss + anchor_loss_val
