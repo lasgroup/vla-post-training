@@ -86,6 +86,9 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.kl_coef": "kl",
     "rl.sft_anchor_coef": "sftanch",
     "rl.min_advantage_std": "minadv",
+    "rl.use_offline_for_critic": "offcritic",
+    "rl.offline_critic_reward": "offrew",
+    "rl.prefill_buffer_from_disk": "prefill",
 }
 
 

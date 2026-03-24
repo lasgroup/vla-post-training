@@ -140,7 +140,6 @@ def train_step(
         policy_observation: _model.Observation,
         actions: _model.Actions,
         score: at.Array,
-        buffer_actions: _model.Actions,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         chunked_loss = model.compute_loss(
             rng,
@@ -158,22 +157,10 @@ def train_step(
                 s = s[..., jnp.newaxis]
             grouped_loss = jnp.mean(s * chunked_loss)
 
-        # SFT anchor loss: supervised loss on demonstrated buffer actions.
-        anchor_loss = jnp.asarray(0.0, dtype=chunked_loss.dtype)
-        if sft_anchor_coef > 0.0:
-            anchor_loss = jnp.mean(model.compute_loss(
-                rng,
-                policy_observation,
-                buffer_actions,
-                train=True,
-            ))
-
-        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss
+        loss = (1.0 - sft_anchor_coef) * grouped_loss
 
         info = {
-            "loss": loss,
             "grouped_loss": grouped_loss,
-            "anchor_loss": anchor_loss,
             "chunked_loss": jnp.mean(chunked_loss),
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
@@ -187,12 +174,8 @@ def train_step(
         }
         return loss, info
 
-    # For SFT anchor: expand buffer_actions to match expanded batch
-    # (only the first copy per group matters for anchor loss, but we need matching batch dim).
-    expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
-
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, aux_data), grads = nnx.value_and_grad(
+    (grouped_loss_val, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(
         policy,
@@ -200,8 +183,32 @@ def train_step(
         expanded_policy_obs,
         sampled_actions,
         score,
-        expanded_buffer_actions,
     )
+
+    # SFT anchor loss: computed in a SEPARATE gradient tape to avoid OOM.
+    # Uses the original (non-expanded) batch — anchor is plain SFT, no grouping needed.
+    anchor_loss_val = jnp.asarray(0.0, dtype=jnp.float32)
+    if sft_anchor_coef > 0.0:
+        def anchor_loss_fn(
+            model: _model.BaseModel,
+            rng: at.KeyArrayLike,
+            policy_observation: _model.Observation,
+            actions: _model.Actions,
+        ):
+            loss = sft_anchor_coef * jnp.mean(model.compute_loss(
+                rng, policy_observation, actions, train=True,
+            ))
+            return loss, {"anchor_loss": loss}
+
+        anchor_diff_state = nnx.DiffState(0, config.trainable_filter)
+        (anchor_loss_val, _anchor_aux), anchor_grads = nnx.value_and_grad(
+            anchor_loss_fn, has_aux=True, argnums=anchor_diff_state,
+        )(policy, loss_rng, policy_observation, buffer_actions)
+
+        grads = jax.tree.map(lambda g, a: g + a, grads, anchor_grads)
+
+    loss = grouped_loss_val + anchor_loss_val
+    aux_data = aux_data | {"loss": loss, "anchor_loss": anchor_loss_val}
 
     # Global advantage gating: zero out gradients when advantage_std is too low.
     # Guard with Python-level check to avoid tracing both cond branches over the

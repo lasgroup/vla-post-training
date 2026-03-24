@@ -243,6 +243,36 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         if is_success or self._config.rl.save_all_episodes:
             self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
+    def _offline_sft_to_critic_batch(
+            self,
+            sft_batch: tuple[_model.Observation, _model.Actions],
+            policy_state: training_utils.TrainState,
+    ) -> dict[str, Any]:
+        """Convert an offline SFT batch into a pseudo-critic batch.
+
+        Offline demonstrations are assumed to come from successful episodes.
+        We assign a fixed pseudo-reward and compute synthetic mc_returns.
+        """
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
+        observation, actions = sft_batch
+        batch_size = jax.tree.leaves(observation)[0].shape[0]
+        reward_val = self._config.rl.offline_critic_reward
+        discount_val = self._config.rl.offline_critic_discount
+
+        # Build a dict matching the replay buffer format.
+        # Use observation as next_observation (offline data has no transitions;
+        # the critic just sees this as a single-step snapshot).
+        obs_dict = observation.to_dict() if hasattr(observation, "to_dict") else dict(observation)
+        return {
+            "observation": obs_dict,
+            "actions": actions,
+            "next_observation": obs_dict,
+            "reward": np.full((batch_size,), reward_val, dtype=np.float32),
+            "mc_return": np.full((batch_size,), reward_val, dtype=np.float32),
+            "discount": np.full((batch_size,), discount_val, dtype=np.float32),
+            "is_success": np.ones((batch_size,), dtype=np.float32),
+        }
+
     @at.typecheck
     def _update_critics(
             self,
@@ -365,6 +395,32 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         critic_info, actor_info = {}, {}
         mc_return = None
+
+        # Option C: train critic on offline SFT data with pseudo-rewards
+        # even when the online buffer is empty or has no successes.
+        if update_critic and rl_config.use_offline_for_critic:
+            offline_sft_batch = next(self._data_iter)
+            offline_critic_batch = self._offline_sft_to_critic_batch(
+                offline_sft_batch,
+                policy_state=self._train_state,
+            )
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        offline_critic_batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+            critic_info = {
+                f"critic/offline_q_{key}": value for key, value in q_info.items()
+            } | {f"critic/offline_value_{key}": value for key, value in value_info.items()}
+
         if use_online:
             online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
@@ -386,7 +442,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state = q_state
                 self._value_state = value_state
 
-                critic_info = {
+                critic_info |= {
                                   f"critic/q_{key}": value for key, value in q_info.items()
                               } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:

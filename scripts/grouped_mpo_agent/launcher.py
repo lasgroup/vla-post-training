@@ -120,8 +120,7 @@ def main() -> None:
     job_names = []
     tracked_name_keys = [
         "collect.tasks",
-        *applicable_configs.keys(),
-        "rl.group_size",
+        *[k for k, v in applicable_configs.items() if len(v) > 1],
         "collect.eval_tasks",
     ]
     for idx, combo in enumerate(combos):

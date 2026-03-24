@@ -316,12 +316,9 @@ def train_step(
     )
 
     # SFT anchor loss: computed in a SEPARATE gradient tape to avoid OOM.
-    # The flow loss_fn already stores activations for num_steps forward passes;
-    # adding compute_loss inside the same tape doubles peak memory.
+    # Uses the original (non-expanded) batch — anchor is plain SFT, no grouping needed.
     anchor_loss_val = jnp.asarray(0.0)
     if sft_anchor_coef > 0.0:
-        expanded_buffer_actions = jax.tree.map(expand_and_flatten, buffer_actions)
-
         def anchor_loss_fn(
             model: _model.BaseModel,
             policy_observation: _model.Observation,
@@ -336,7 +333,7 @@ def train_step(
         anchor_diff_state = nnx.DiffState(0, config.trainable_filter)
         (anchor_loss_val, _anchor_aux), anchor_grads = nnx.value_and_grad(
             anchor_loss_fn, has_aux=True, argnums=anchor_diff_state,
-        )(policy_model, expanded_policy_obs, expanded_buffer_actions)
+        )(policy_model, policy_observation, buffer_actions)
 
         # Combine gradients: flow_grads + anchor_grads.
         flow_grads = jax.tree.map(lambda f, a: f + a, flow_grads, anchor_grads)

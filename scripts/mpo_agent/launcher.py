@@ -68,6 +68,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.use_mc_returns": [False],
     "rl.reset_policy_params_to_ema_period": [None, 100],
     "rl.save_all_episodes": [True],
+    "rl.use_offline_for_critic": [False, True],
+    "rl.offline_critic_reward": [0.0],
 }
 
 
@@ -117,7 +119,11 @@ def main() -> None:
     combos = dict_permutations(applicable_configs)
     command_list = []
     job_names = []
-    tracked_name_keys = ["collect.tasks", *applicable_configs.keys(), "collect.eval_tasks"]
+    tracked_name_keys = [
+        "collect.tasks",
+        *[k for k, v in applicable_configs.items() if len(v) > 1],
+        "collect.eval_tasks",
+    ]
     for idx, combo in enumerate(combos):
         for task_idx, task_flags in enumerate(TASK_SWEEP):
             flags: Dict[str, Any] = {
