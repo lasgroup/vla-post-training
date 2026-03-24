@@ -180,6 +180,10 @@ def main() -> None:
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
 
+            # Halve batch size when SFT anchor is active (second grad tape needs extra memory).
+            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
+                flags["batch_size"] = flags["batch_size"] // 2
+
             flags.setdefault(
                 "exp_name",
                 auto_exp_name(

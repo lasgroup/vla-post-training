@@ -129,8 +129,14 @@ def train_step(
         score_stats = score
         score = jax.lax.stop_gradient(score)
 
-    # Global advantage gating: track whether advantage_std is too low.
-    global_adv_std = jnp.std(advantage)
+    # Global advantage gating: compute std of GROUP MEANS to filter out
+    # intra-group noise from the stochastic sampling. This measures whether
+    # the critic can truly distinguish between different states.
+    if group_size > 1:
+        group_means = jnp.mean(advantage.reshape(base_batch_size, group_size), axis=-1)
+        global_adv_std = jnp.std(group_means)
+    else:
+        global_adv_std = jnp.std(advantage)
     skip_policy_update = global_adv_std < min_advantage_std
 
     @at.typecheck

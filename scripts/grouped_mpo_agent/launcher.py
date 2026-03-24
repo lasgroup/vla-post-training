@@ -64,6 +64,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [900],
     "rl.save_all_episodes": [False],
+    "rl.kl_coef": [0.01],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
@@ -155,6 +156,10 @@ def main() -> None:
             policy_start = flags["rl.policy_training_start_step"]
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
+
+            # Halve batch size when SFT anchor is active (second grad tape needs extra memory).
+            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
+                flags["batch_size"] = flags["batch_size"] // 2
 
             flags.setdefault(
                 "exp_name",
