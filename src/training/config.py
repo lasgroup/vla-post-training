@@ -150,6 +150,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # with pseudo-reward (assumes offline data is from successful episodes).
     use_offline_for_critic: bool = False
     offline_critic_reward: float = 0.0
+    offline_critic_mc_return: float = -10.0
     offline_critic_discount: float = 0.99
 
 

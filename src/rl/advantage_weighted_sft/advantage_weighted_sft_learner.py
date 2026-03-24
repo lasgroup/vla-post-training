@@ -257,6 +257,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         observation, actions = sft_batch
         batch_size = jax.tree.leaves(observation)[0].shape[0]
         reward_val = self._config.rl.offline_critic_reward
+        mc_return_val = self._config.rl.offline_critic_mc_return
         discount_val = self._config.rl.offline_critic_discount
 
         # Build a dict matching the replay buffer format.
@@ -268,7 +269,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             "actions": actions,
             "next_observation": obs_dict,
             "reward": np.full((batch_size,), reward_val, dtype=np.float32),
-            "mc_return": np.full((batch_size,), reward_val, dtype=np.float32),
+            "mc_return": np.full((batch_size,), mc_return_val, dtype=np.float32),
             "discount": np.full((batch_size,), discount_val, dtype=np.float32),
             "is_success": np.ones((batch_size,), dtype=np.float32),
         }

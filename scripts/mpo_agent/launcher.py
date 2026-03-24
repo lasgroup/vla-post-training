@@ -70,6 +70,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.save_all_episodes": [True],
     "rl.use_offline_for_critic": [False, True],
     "rl.offline_critic_reward": [0.0],
+    "rl.offline_critic_mc_return": [-10.0],
 }
 
 
