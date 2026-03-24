@@ -237,7 +237,7 @@ class DSRLLearner(Agent):
         dummy_act: ActionType,
         state_action_critic_def: StateActionCriticDef,
         policy_def: PolicyDef,
-        task_description: str,):
+        ):
         self._config = config
         if bool(getattr(self._config.collect, "store_prefix_rep", False)):
             raise ValueError(

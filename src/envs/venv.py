@@ -704,6 +704,12 @@ class BaseVectorEnv(object):
                 i in self.ready_id
             ), f"Can only interact with ready environments {self.ready_id}."
 
+    def _filter_kwargs(self, kwargs: dict, id: Union[List[int], np.ndarray], i: int) -> dict:
+        if len(id) == 1:
+            return kwargs
+        local_kwargs = jax.tree_map(lambda v: v[i], kwargs, is_leaf=lambda x: isinstance(x, list))
+        return local_kwargs
+
     def reset(
         self,
         id: Optional[Union[int, List[int], np.ndarray]] = None,
@@ -722,7 +728,8 @@ class BaseVectorEnv(object):
 
         # send(None) == reset() in worker
         for i in id:
-            self.workers[i].send(None, **kwargs)
+            local_kwargs = self._filter_kwargs(kwargs, id, i)
+            self.workers[i].send(None, **local_kwargs)
         ret_list = [self.workers[i].recv() for i in id]
 
         reset_returns_info = (
@@ -747,6 +754,7 @@ class BaseVectorEnv(object):
 
         if reset_returns_info:
             infos = [r[1] for r in ret_list]
+            infos = {k: np.array([info[k] for info in infos]) for k in infos[0].keys()}
             return obs, infos  # type: ignore
         else:
             return obs
@@ -842,9 +850,11 @@ class BaseVectorEnv(object):
             obs_stack = jax.tree.map(lambda *args: np.stack(args), *obs_list)
         except ValueError:  # different len(obs)
             obs_stack = np.array(obs_list, dtype=object)
+        info_list = return_lists[-1]
+        info = {k: np.array([info[k] for info in info_list]) for k in info_list[0].keys()}
 
-        other_stacks = map(np.stack, return_lists[1:])
-        return (obs_stack, *other_stacks)  # type: ignore
+        other_stacks = map(np.stack, return_lists[1:-1])
+        return (obs_stack, *other_stacks, info)  # type: ignore
 
     def seed(
         self,
