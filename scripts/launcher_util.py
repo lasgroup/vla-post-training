@@ -136,7 +136,7 @@ def auto_exp_name(
             parts.append(f"seed{_sanitize_name_value(combo[key])}")
         else:
             label = _name_label(key)
-            parts.append(f"{label}-{_sanitize_name_value(combo[key])}")
+            #parts.append(f"{label}-{_sanitize_name_value(combo[key])}")
 
     return "_".join(parts)
 
