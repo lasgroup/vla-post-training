@@ -2,7 +2,7 @@
 """Launcher for MPO-agent experiments.
 
 Usage:
-    ./scripts/mpo_agent/launcher.py --project_name mpo_debug_march23
+    ./scripts/mpo_agent/launcher.py --project_name mpo_debug_march24
     ./scripts/mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/mpo_agent/launcher.py --project_name my_project --mode local
 """
