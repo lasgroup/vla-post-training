@@ -704,11 +704,12 @@ class BaseVectorEnv(object):
                 i in self.ready_id
             ), f"Can only interact with ready environments {self.ready_id}."
 
-    def _filter_kwargs(self, kwargs: dict, id: Union[List[int], np.ndarray], i: int) -> dict:
-        if len(id) == 1:
-            return kwargs
-        local_kwargs = jax.tree_map(lambda v: v[i], kwargs, is_leaf=lambda x: isinstance(x, list))
-        return local_kwargs
+    def _filter_kwargs(self, kwargs: dict, id: Union[List[int], np.ndarray], i: int) -> dict:                                                                                                                                                                             
+        def maybe_index(v):                                                                                                                                                                                                                                               
+            if isinstance(v, list):
+                return v[i]                                                                                                                                                                                                                                               
+            return v
+        return jax.tree_util.tree_map(maybe_index, kwargs, is_leaf=lambda x: isinstance(x, list))   
 
     def reset(
         self,
