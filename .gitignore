@@ -14,6 +14,7 @@ assets/
 logs/
 logs_old/
 CLAUDE.md/
+scripts/sdpo_capability_test/
 
 # Cluster-specific files
 core_*
