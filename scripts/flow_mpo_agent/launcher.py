@@ -5,7 +5,7 @@ Flow-MPO = Flow GRPO with group_size=1 and use_mpo_advantage_weight=True.
 avoiding grouped sampling Q-function, instead using mpo adcantage weighting with flow log-prob loss.
 
 Usage:
-    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_march25
+    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_march26
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -74,10 +74,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.kl_coef": [0.01],
     "rl.normalize_adv": [True],
     "rl.use_mc_returns": [False],
-    "rl.beta": [0.05, 0.1, 0.2],
+    "rl.beta": [0.05, 0.2],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [False, True],
-    "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
+    "rl.sft_anchor_coef": [0.0, 0.5],
     "rl.min_advantage_std": [0.0, 0.01, 0.2],
 }
 

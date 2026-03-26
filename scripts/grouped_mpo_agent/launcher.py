@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_march25
+    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_march26
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -72,7 +72,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [False, True],
     "rl.policy_update_interval": [1],
-    "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
+    "rl.sft_anchor_coef": [0.0, 0.5],
     "rl.min_advantage_std": [0.05, 0.2],
 }
 
