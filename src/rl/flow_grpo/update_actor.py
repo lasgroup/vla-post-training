@@ -196,6 +196,10 @@ def train_step(
         global_adv_std = jnp.std(advantage)
     skip_policy_update = global_adv_std < min_advantage_std
 
+    # Capture original (non-expanded) batch for SFT anchor.
+    _anchor_obs = policy_observation
+    _anchor_actions = buffer_actions
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -293,10 +297,21 @@ def train_step(
             score = score[:, jnp.newaxis, jnp.newaxis]
 
         flow_loss = -jnp.mean(score * log_probs)
-        loss = (1.0 - sft_anchor_coef) * flow_loss + kl_coef * kl_loss
+
+        # SFT anchor: computed on the original (non-expanded) batch inside the
+        # same gradient tape so that gradients are properly combined.
+        anchor_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
+        if sft_anchor_coef > 0.0:
+            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
+            anchor_loss = jnp.mean(model.compute_loss(
+                anchor_rng, _anchor_obs, _anchor_actions, train=True,
+            ))
+
+        loss = (1.0 - sft_anchor_coef) * flow_loss + sft_anchor_coef * anchor_loss + kl_coef * kl_loss
 
         info = {
             "flow_loss": flow_loss,
+            "anchor_loss": anchor_loss,
             "kl_loss": kl_loss,
             "kl_coef": jnp.asarray(kl_coef, dtype=policy_log_probs.dtype),
             "q_mean": jnp.mean(q_value),
@@ -311,7 +326,7 @@ def train_step(
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (flow_total_loss, flow_aux), flow_grads = nnx.value_and_grad(
+    (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(
         policy_model,
@@ -321,31 +336,6 @@ def train_step(
         q_value,
         reference_log_probs,
     )
-
-    # SFT anchor loss: computed in a SEPARATE gradient tape to avoid OOM.
-    # Uses the original (non-expanded) batch — anchor is plain SFT, no grouping needed.
-    anchor_loss_val = jnp.asarray(0.0)
-    if sft_anchor_coef > 0.0:
-        def anchor_loss_fn(
-            model: _model.BaseModel,
-            policy_observation: _model.Observation,
-            actions: _model.Actions,
-        ):
-            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
-            loss = sft_anchor_coef * jnp.mean(model.compute_loss(
-                anchor_rng, policy_observation, actions, train=True,
-            ))
-            return loss, {"anchor_loss": loss}
-
-        anchor_diff_state = nnx.DiffState(0, config.trainable_filter)
-        (anchor_loss_val, _anchor_aux), anchor_grads = nnx.value_and_grad(
-            anchor_loss_fn, has_aux=True, argnums=anchor_diff_state,
-        )(policy_model, policy_observation, buffer_actions)
-
-        # Combine gradients: flow_grads + anchor_grads.
-        flow_grads = jax.tree.map(lambda f, a: f + a, flow_grads, anchor_grads)
-
-    grads = flow_grads
 
     # Global advantage gating: zero out gradients when advantage_std is too low.
     # Guard with Python-level check to avoid tracing both cond branches over the
@@ -358,12 +348,9 @@ def train_step(
             grads,
         )
 
-    # Merge info from both losses.
-    loss = flow_total_loss + anchor_loss_val
-    aux_data = flow_aux | {
+    aux_data = aux_data | {
         "loss": loss,
         "policy_loss": loss,
-        "anchor_loss": anchor_loss_val,
     }
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
@@ -394,9 +381,14 @@ def train_step(
         )
         reset_period = config.rl.reset_policy_params_to_ema_period
         if reset_period is not None:
+            def _ema_reset(s):
+                s = s.replace(params=jax.tree.map(lambda x: x, s.ema_params))
+                if config.rl.reset_optimizer_on_ema_reset:
+                    s = s.replace(opt_state=jax.tree.map(jnp.zeros_like, s.opt_state))
+                return s
             new_state = jax.lax.cond(
                 new_state.step % reset_period == 0,
-                lambda s: s.replace(params=jax.tree.map(lambda x: x, s.ema_params)),
+                _ema_reset,
                 lambda s: s,
                 new_state,
             )

@@ -13,6 +13,7 @@ wandb/
 assets/
 logs/
 logs_old/
+CLAUDE.md/
 
 # Cluster-specific files
 core_*

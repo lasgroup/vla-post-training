@@ -67,6 +67,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.normalize_adv": [True],
     "rl.use_mc_returns": [False],
     "rl.reset_policy_params_to_ema_period": [None, 100],
+    "rl.reset_optimizer_on_ema_reset": [False, True],
     "rl.save_all_episodes": [True],
     "rl.use_offline_for_critic": [False, True],
     "rl.offline_critic_reward": [0.0],

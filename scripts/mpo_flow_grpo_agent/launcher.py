@@ -45,7 +45,7 @@ DEFAULT_GROUP_SIZE = 8
 DEFAULT_NUM_STEPS = 5
 DEFAULT_NORMALIZE_ADV = True
 DEFAULT_KL_COEF = 0.0
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 2000
 DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
@@ -64,13 +64,14 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "rl.kl_coef": [0.01],
-    "rl.td_weight_schedule.switch_step": [900],
+    "rl.td_weight_schedule.switch_step": [2000],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
     "rl.align_critic_sampling": [False],
     "rl.reset_policy_params_to_ema_period": [100],
+    "rl.reset_optimizer_on_ema_reset": [False, True],
     "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
     "rl.min_advantage_std": [0.0, 0.01, 0.05],
 }
@@ -173,7 +174,7 @@ def main() -> None:
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
 
-            # Halve batch size when SFT anchor is active (second grad tape needs extra memory).
+            # Halve batch size when SFT anchor is active (extra memory for anchor forward pass).
             if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
                 flags["batch_size"] = flags["batch_size"] // 2
 

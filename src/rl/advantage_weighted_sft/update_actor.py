@@ -132,9 +132,14 @@ def train_step(
         )
         reset_period = config.rl.reset_policy_params_to_ema_period
         if reset_period is not None:
+            def _ema_reset(s):
+                s = s.replace(params=jax.tree.map(lambda x: x, s.ema_params))
+                if config.rl.reset_optimizer_on_ema_reset:
+                    s = s.replace(opt_state=jax.tree.map(jnp.zeros_like, s.opt_state))
+                return s
             new_state = jax.lax.cond(
                 new_state.step % reset_period == 0,
-                lambda s: s.replace(params=jax.tree.map(lambda x: x, s.ema_params)),
+                _ema_reset,
                 lambda s: s,
                 new_state,
             )

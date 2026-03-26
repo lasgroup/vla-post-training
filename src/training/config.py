@@ -118,6 +118,7 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     save_all_episodes: bool = False
     policy_only_successful: bool = False
     reset_policy_params_to_ema_period: int | None = None
+    reset_optimizer_on_ema_reset: bool = False
 
 
 @dataclasses.dataclass(frozen=True)

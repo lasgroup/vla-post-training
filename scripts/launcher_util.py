@@ -71,6 +71,7 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.drop_low_diversity_groups": "dropdiv",
     "rl.align_critic_sampling": "aligncrit",
     "rl.reset_policy_params_to_ema_period": "emareset",
+    "rl.reset_optimizer_on_ema_reset": "optreset",
     "rl.policy_training_start_step": "polstart",
     "rl.td_weight_schedule.switch_step": "tdswitch",
     "rl.td_weight_schedule.ramp_steps": "tdramp",
