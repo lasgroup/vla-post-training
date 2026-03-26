@@ -150,8 +150,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             del new_ema_v_params, v_opt_state
 
         self.training_steps += 1
+        critic_frozen = (
+            rl_config.freeze_critic_at_step is not None
+            and self.training_steps >= rl_config.freeze_critic_at_step
+        )
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
+            not critic_frozen
+            and self.training_steps >= rl_config.critic_training_start_step
             and self.training_steps % rl_config.critic_update_interval == 0
         )
         update_policy = (

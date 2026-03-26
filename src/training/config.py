@@ -144,6 +144,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
+    freeze_critic_at_step: int | None = None
     # Option B: pre-fill the replay buffer with saved episodes from disk.
     # Disabled by default; set to True and provide buffer_load_paths to use.
     prefill_buffer_from_disk: bool = False

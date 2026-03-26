@@ -76,6 +76,7 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.td_weight_schedule.switch_step": "tdswitch",
     "rl.td_weight_schedule.ramp_steps": "tdramp",
     "rl.num_critic_updates_per_batch": "ncriticup",
+    "rl.freeze_critic_at_step": "frzcritic",
     "rl.policy_only_successful": "polsucc",
     "rl.save_all_episodes": "saveall",
     "rl.normalize_adv": "normadv",
