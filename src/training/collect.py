@@ -88,6 +88,7 @@ def evaluate_policy(
                 else:
                     task_id = config.collect.tasks[-1]
                     valid_envs[env_index] = False
+                current_task_ids[env_index] = task_id
                 env_obs, env_info = env.reset(id=int(env_index), options={"task_id": task_id})
 
                 def update_state(prev_state, new_val_leaf):
@@ -189,6 +190,7 @@ def collect_data(
                 else:
                     task_id = config.collect.tasks[-1]
                     valid_envs[env_index] = False
+                current_task_ids[env_index] = task_id
                 env_obs, env_info = env.reset(id=int(env_index), options={"task_id": task_id})
 
                 def update_state(prev_state, new_val_leaf):
