@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_march26
+    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_march27
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -42,8 +42,8 @@ DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 DEFAULT_GROUP_SIZE = 8
 DEFAULT_NUM_STEPS = 5
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 2000
-DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 1200
+DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
@@ -62,18 +62,18 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [10],
-    "rl.td_weight_schedule.switch_step": [2000],
+    "rl.td_weight_schedule.switch_step": [1200],
     "rl.save_all_episodes": [False, True],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
     "rl.align_critic_sampling": [True],
-    "rl.normalize_adv": [False, True],
+    "rl.normalize_adv": [True],
     "rl.reset_policy_params_to_ema_period": [100],
-    "rl.reset_optimizer_on_ema_reset": [False, True],
+    "rl.reset_optimizer_on_ema_reset": [True],
     "rl.freeze_critic_at_step": [None, 1200],
     "rl.policy_update_interval": [1],
-    "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
+    "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05, 0.2],
 }
 

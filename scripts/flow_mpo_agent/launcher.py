@@ -5,7 +5,7 @@ Flow-MPO = Flow GRPO with group_size=1 and use_mpo_advantage_weight=True.
 avoiding grouped sampling Q-function, instead using mpo adcantage weighting with flow log-prob loss.
 
 Usage:
-    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_march26
+    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_march27
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -50,8 +50,8 @@ DEFAULT_GROUP_SIZE = 1
 DEFAULT_NUM_STEPS = 5
 DEFAULT_NOISE_LEVEL = 0.05
 DEFAULT_KL_COEF = 0.0
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 2000
-DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
+DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
         "collect.tasks": DEFAULT_TASKS,
@@ -74,13 +74,13 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.kl_coef": [0.01],
     "rl.normalize_adv": [True],
     "rl.use_mc_returns": [False],
-    "rl.beta": [0.05, 0.1, 0.2],
+    "rl.beta": [0.05, 0.1],
     "rl.reset_policy_params_to_ema_period": [100],
-    "rl.reset_optimizer_on_ema_reset": [False, True],
+    "rl.reset_optimizer_on_ema_reset": [True],
     "rl.save_all_episodes": [False, True],
     "rl.freeze_critic_at_step": [None, 1200],
-    "rl.sft_anchor_coef": [0.0, 0.1, 0.5],
-    "rl.min_advantage_std": [0.0, 0.01, 0.2],
+    "rl.sft_anchor_coef": [0.0],
+    "rl.min_advantage_std": [0.01],
 }
 
 

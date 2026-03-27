@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_march26
+    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_march27
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -67,7 +67,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [10],
     "collect.eval_interval": [100],
-    "rl.normalize_adv": [False, True],
+    "rl.normalize_adv": [True],
     "rl.kl_coef": [0.01],
     "rl.td_weight_schedule.switch_step": [2000],
     "rl.policy_update_interval": [1],
@@ -77,10 +77,10 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.drop_low_diversity_groups": [True],
     "rl.align_critic_sampling": [True],
     "rl.reset_policy_params_to_ema_period": [100],
-    "rl.reset_optimizer_on_ema_reset": [False, True],
+    "rl.reset_optimizer_on_ema_reset": [True],
     "rl.freeze_critic_at_step": [None, 1200],
-    "rl.sft_anchor_coef": [0.0, 0.5],
-    "rl.min_advantage_std": [0.0, 0.05, 0.2],
+    "rl.sft_anchor_coef": [0.0],
+    "rl.min_advantage_std": [0.05, 0.4],
 }
 
 
