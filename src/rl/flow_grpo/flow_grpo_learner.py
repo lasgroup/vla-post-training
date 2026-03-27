@@ -259,7 +259,8 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             | {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )
+                ),
+                "critic_frozen": jnp.asarray(float(critic_frozen), dtype=jnp.float32),
             }
         )
         info = jax.tree.map(np.asarray, info)

@@ -137,8 +137,13 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
             del new_ema_v_params, v_opt_state
 
         self.training_steps += 1
+        critic_frozen = (
+            rl_config.freeze_critic_at_step is not None
+            and self.training_steps >= rl_config.freeze_critic_at_step
+        )
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
+            not critic_frozen
+            and self.training_steps >= rl_config.critic_training_start_step
             and self.training_steps % rl_config.critic_update_interval == 0
         )
         update_policy = (
@@ -237,7 +242,8 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
             | {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )
+                ),
+                "critic_frozen": jnp.asarray(float(critic_frozen), dtype=jnp.float32),
             }
         )
         info = jax.tree.map(np.asarray, info)
