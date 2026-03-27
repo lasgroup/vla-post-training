@@ -1,6 +1,7 @@
 # ruff: noqa: F722
 import dataclasses
 import functools
+import logging
 from typing import Any, Dict, Tuple
 import gc
 
@@ -140,6 +141,59 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             ),
             donate_argnums=(1,),  # Donates policy_state (arg 1)
         )
+
+    def pretrain_value_function(self) -> list[dict[str, Any]]:
+        """Run value function pretraining on the offline replay buffer.
+
+        Should be called before the main training loop. The number of gradient
+        steps is controlled by ``rl.num_value_function_pretraining_steps``.
+        Only trains the critic (Q and V networks) using MC returns from the
+        offline data; the policy is not updated.
+        """
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
+        n_steps = self._config.rl.num_value_function_pretraining_steps
+        if n_steps <= 0:
+            return []
+        if self._offline_data_buffer is None or self._offline_data_buffer.size == 0:
+            raise ValueError(
+                "Cannot pretrain value function: offline buffer is empty. "
+                "Set offline_buffer_load_paths in the config."
+            )
+
+        logging.info(
+            "Pretraining value function for %d steps on offline buffer (%d transitions)",
+            n_steps,
+            self._offline_data_buffer.size,
+        )
+        infos: list[dict[str, Any]] = []
+        for step in range(1, n_steps + 1):
+            batch = self._offline_data_buffer.sample(
+                batch_size=self._config.batch_size
+            )
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+
+            info = {
+                f"pretrain/q_{k}": v for k, v in q_info.items()
+            } | {f"pretrain/value_{k}": v for k, v in value_info.items()}
+            infos.append(jax.tree.map(np.asarray, info))
+
+            if step % 100 == 0 or step == n_steps:
+                logging.info("Value pretraining step %d/%d", step, n_steps)
+
+        logging.info("Value function pretraining complete.")
+        return infos
 
     def _recompute_prefix_embedding(
         self,
@@ -370,73 +424,91 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._config.batch_size * min(1.0, self._config.rl.online_ratio)
         )
         use_online = self._online_data_buffer.size >= online_batch_size
-        if rl_config.use_mc_returns and not use_online:
+        has_offline = self._offline_data_buffer is not None and self._offline_data_buffer.size > 0
+
+        # mc_returns are available from both online and offline buffers
+        if rl_config.use_mc_returns and not use_online and not has_offline:
             update_policy = False
 
         critic_info, actor_info = {}, {}
         mc_return = None
-        if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
-            if update_critic:
-                if self.debug:
-                    log_memory_debug(
-                        "before_critics",
-                        train_state=self._train_state,
-                        batch=online_batch,
-                    )
-                critic_rng, self._rng = jax.random.split(self._rng, 2)
-                with sharding.set_mesh(self._mesh):
-                    q_state, value_state, q_info, value_info = (
-                        self._update_critics_jitted(
-                            online_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            critic_rng,
-                        )
-                    )
-                self._state_action_critic_state = q_state
-                self._value_state = value_state
 
-                critic_info = {
-                    f"critic/q_{key}": value for key, value in q_info.items()
-                } | {f"critic/value_{key}": value for key, value in value_info.items()}
-                if self.debug:
-                    log_memory_debug("after_update_critics")
-            if rl_config.use_mc_returns:
-                mc_return = online_batch["mc_return"]
-                assert rl_config.online_ratio >= 1.0, (
-                    "use_mc_returns requires online_ratio >= 1.0 "
-                    "(MC returns are not available for offline data)"
+        # --- Determine the critic batch (replay-buffer format) ---
+        if use_online:
+            critic_source_batch = self._online_data_buffer.sample(
+                batch_size=online_batch_size
+            )
+        elif has_offline:
+            critic_source_batch = self._offline_data_buffer.sample(
+                batch_size=self._config.batch_size
+            )
+        else:
+            critic_source_batch = None
+
+        # --- Critic update ---
+        if update_critic and critic_source_batch is not None:
+            if self.debug:
+                log_memory_debug(
+                    "before_critics",
+                    train_state=self._train_state,
+                    batch=critic_source_batch,
                 )
-            online_batch = self._online_batch_to_sft_batch(online_batch)
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        critic_source_batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+
+            critic_info = {
+                f"critic/q_{key}": value for key, value in q_info.items()
+            } | {f"critic/value_{key}": value for key, value in value_info.items()}
+            if self.debug:
+                log_memory_debug("after_update_critics")
+
+        # --- MC returns ---
+        if rl_config.use_mc_returns and critic_source_batch is not None:
+            mc_return = critic_source_batch["mc_return"]
+
+        # --- Policy batch (SFT format) ---
+        if use_online:
+            online_sft = self._online_batch_to_sft_batch(critic_source_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
-                batch = online_batch
+                batch = online_sft
             elif online_ratio > 0:
                 # Mix online and offline into a fixed-size batch instead of
                 # concatenating (which would double the batch and OOM).
-                batch = next(self._data_iter)
-                first_leaf = jax.tree.leaves(batch)[0]
+                offline_sft = self._sample_offline_sft_batch()
+                first_leaf = jax.tree.leaves(offline_sft)[0]
                 batch_size = first_leaf.shape[0]
                 n_online = min(
                     int(batch_size * online_ratio),
-                    jax.tree.leaves(online_batch)[0].shape[0],
+                    jax.tree.leaves(online_sft)[0].shape[0],
                 )
                 n_offline = batch_size - n_online
                 batch = jax.tree.map(
                     lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
-                    batch,
-                    online_batch,
+                    offline_sft,
+                    online_sft,
                 )
                 # The online batch may be replicated (PartitionSpec()) while
-                # the SFT batch is sharded. Re-shard the mixed result to
+                # the offline batch is sharded. Re-shard the mixed result to
                 # match the data sharding expected by _train_step.
                 batch = jax.device_put(batch, self._data_sharding)
-                del online_batch
+                del online_sft
                 gc.collect()
             else:
-                batch = next(self._data_iter)
+                batch = self._sample_offline_sft_batch()
+        elif has_offline:
+            batch = self._online_batch_to_sft_batch(critic_source_batch)
         else:
             batch = next(self._data_iter)
         if update_policy:
@@ -462,7 +534,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             | {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )
+                ),
+                "offline_buffer_size": jnp.asarray(
+                    float(self._offline_data_buffer.size if self._offline_data_buffer is not None else 0),
+                    dtype=jnp.float32,
+                ),
             }
         )
         info = jax.tree.map(np.asarray, info)

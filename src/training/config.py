@@ -95,6 +95,8 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
+    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf",)
+    offline_buffer_capacity: int = 100_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -120,6 +122,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
+    num_value_function_pretraining_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
