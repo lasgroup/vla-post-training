@@ -65,6 +65,7 @@ class RLAlgorithmConfig:
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
     offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf",)
+    num_offline_pretraining_steps: int = 0
 
 
 # Define hyperparameter structures for your algorithms
@@ -98,7 +99,6 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
     offline_buffer_capacity: int = 100_000
-    num_offline_pretraining_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
