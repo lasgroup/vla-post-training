@@ -23,6 +23,7 @@ class Agent(object):
     _actor: training_utils.TrainState
     _rng: jax.random.PRNGKey
     training_steps: int = 0
+    warm_start_training_steps: int = 0
     policy_update_count: int = 0
     env_steps: int = 0
     episodes: int = 0
@@ -63,4 +64,8 @@ class Agent(object):
 
     @abstractmethod
     def update(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def pretrain_with_offline_data(self):
         raise NotImplementedError

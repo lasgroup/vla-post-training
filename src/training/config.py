@@ -64,6 +64,7 @@ class RLAlgorithmConfig:
     buffer_capacity: int = 1024
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
+    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf",)
 
 
 # Define hyperparameter structures for your algorithms
@@ -92,11 +93,12 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_update_interval: int = 1
+    warm_start_policy_update_interval: int | None = None
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
-    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf",)
     offline_buffer_capacity: int = 100_000
+    num_offline_pretraining_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -117,12 +119,12 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
         init_value=0.0, end_value=1.0, switch_step=1_000
     )
     critic_pre_training_steps: int = 1_000
+    warm_start_critic_update_interval: int | None = None
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
-    num_value_function_pretraining_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)

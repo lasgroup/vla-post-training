@@ -400,6 +400,7 @@ class FilteredSFTLearner(Agent):
 
     def _get_offline_data_buffer(self) -> ShardedReplayBuffer | None:
         rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
         if not rl_config.offline_buffer_load_paths:
             return None
         dummy_data = self._make_buffer_dummy_data()
@@ -718,8 +719,28 @@ class FilteredSFTLearner(Agent):
         self._collection_success_episodes = 0
         return collected_episodes
 
+    def pretrain_with_offline_data(self):
+        self.warm_start_training_steps += 1
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
+        if rl_config.warm_start_policy_update_interval:
+            update_policy = self.warm_start_training_steps % rl_config.warm_start_policy_update_interval == 0
+        else:
+            update_policy = False
+        if update_policy:
+            batch = self._sample_offline_sft_batch()
+            train_rng, self._rng = jax.random.split(self._rng)
+            with sharding.set_mesh(self._mesh):
+                policy_state, info = self._train_step(train_rng, self._train_state, batch)
+            self._train_state = policy_state
+            info = jax.tree.map(np.asarray, info)
+            return info
+        else:
+            return {}
+
     def update(self):
         self.training_steps += 1
+        assert isinstance(self._config.rl, FilteredSFTLearnerConfig)
         update_policy = (
             self.training_steps >= self._config.rl.policy_training_start_step
             and self.training_steps % self._config.rl.policy_update_interval == 0
