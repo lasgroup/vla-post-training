@@ -445,11 +445,15 @@ class ShardedReplayBuffer:
         for dir_path in paths:
             episode_files = sorted(Path(dir_path).glob("episode_*.h5df"))
             for file_path in episode_files:
+                if self.size >= self.max_capacity:
+                    logging.info("Buffer full, stopping episode loading early")
+                    return total
                 with h5py.File(file_path, "r") as f:
                     data = read_nested(f)
                 self.insert(data, save_episode=False)
                 total += 1
         logging.info("Loaded %d episodes total (buffer size: %d)", total, self.size)
+        return total
 
 
 if __name__ == "__main__":
