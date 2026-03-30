@@ -148,8 +148,11 @@ def train_step(
     # group-sampled advantages, but train the policy on buffer actions.
     # This breaks the self-reinforcing loop where the policy trains on its own
     # outputs while keeping the group-sampling benefit for advantage estimation.
-    if use_buffer_actions_for_loss and group_size > 1:
-        state_score = jnp.mean(score_stats, axis=-1)  # (B,) mean score per state
+    if use_buffer_actions_for_loss:
+        if group_size > 1:
+            state_score = jnp.mean(score_stats, axis=-1)  # (B,) mean score per state
+        else:
+            state_score = score_stats  # (B,) already per-state
         state_score = jax.lax.stop_gradient(state_score)
 
     @at.typecheck
@@ -160,7 +163,7 @@ def train_step(
         actions: _model.Actions,
         score: at.Array,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        if use_buffer_actions_for_loss and group_size > 1:
+        if use_buffer_actions_for_loss:
             # Grounded mode: train on buffer actions weighted by state-level advantage.
             chunked_loss = model.compute_loss(
                 rng, _anchor_obs, _anchor_actions, train=True,

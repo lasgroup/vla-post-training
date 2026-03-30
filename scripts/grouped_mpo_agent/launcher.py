@@ -77,6 +77,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05, 0.2],
     "rl.weight_clip": [5.0, 20.0],
+    "rl.use_buffer_actions_for_loss": [False, True],
 }
 
 

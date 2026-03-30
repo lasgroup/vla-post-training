@@ -82,6 +82,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.sft_anchor_coef": [0.0],
     "collect.collect_interval": [100, 300],
     "rl.min_advantage_std": [0.05, 0.4],
+    "rl.use_buffer_actions_for_loss": [False, True],
 }
 
 
