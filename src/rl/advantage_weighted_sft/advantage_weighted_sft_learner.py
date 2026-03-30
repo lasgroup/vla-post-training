@@ -402,7 +402,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
         del new_ema_value_params, v_opt_state
 
-
     @at.typecheck
     def update(self) -> dict:
         assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (

@@ -134,11 +134,10 @@ class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 
 @dataclasses.dataclass(frozen=True)
 class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
-    group_size: int = 8
+    group_size: int = 1
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
