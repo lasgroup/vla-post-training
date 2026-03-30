@@ -124,6 +124,7 @@ def train_step(
     diversity_threshold = config.rl.diversity_threshold
     sft_anchor_coef = config.rl.sft_anchor_coef
     min_advantage_std = config.rl.min_advantage_std
+    use_buffer_actions_for_loss = config.rl.use_buffer_actions_for_loss
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -296,7 +297,29 @@ def train_step(
         if score.ndim == 1:
             score = score[:, jnp.newaxis, jnp.newaxis]
 
-        flow_loss = -jnp.mean(score * log_probs)
+        if use_buffer_actions_for_loss and group_size > 1:
+            # Grounded mode: use group-sampled advantages for state-level scoring,
+            # but train on buffer actions to break the self-reinforcing loop.
+            if use_mpo_advantage_weight:
+                # score is (B, 1, G) — take mean across group dim for state-level weight
+                state_score = jnp.mean(jnp.squeeze(score, axis=1), axis=-1)  # (B,)
+            else:
+                # score is (B, steps, G) or (B*G, 1, 1) — compute state-level mean
+                if score.ndim == 3 and score.shape[-1] == group_size:
+                    state_score = jnp.mean(score[:, 0, :], axis=-1)  # (B,)
+                else:
+                    _B = score.shape[0] // group_size
+                    state_score = jnp.mean(score.reshape(_B, group_size, -1)[:, :, 0], axis=-1)
+            state_score = jax.lax.stop_gradient(state_score)
+            anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
+            buffer_loss = model.compute_loss(
+                anchor_rng, _anchor_obs, _anchor_actions, train=True,
+            )
+            while state_score.ndim < buffer_loss.ndim:
+                state_score = state_score[..., jnp.newaxis]
+            flow_loss = jnp.mean(state_score * buffer_loss)
+        else:
+            flow_loss = -jnp.mean(score * log_probs)
 
         # SFT anchor: computed on the original (non-expanded) batch inside the
         # same gradient tape so that gradients are properly combined.

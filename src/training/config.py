@@ -172,6 +172,7 @@ class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     align_critic_sampling: bool = False
     sft_anchor_coef: float = 0.0
     min_advantage_std: float = 0.0
+    use_buffer_actions_for_loss: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -188,6 +189,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     align_critic_sampling: bool = False
     sft_anchor_coef: float = 0.0
     min_advantage_std: float = 0.0
+    use_buffer_actions_for_loss: bool = False
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):

@@ -47,6 +47,7 @@ def train_step(
     noise_level = config.rl.noise_level
     sft_anchor_coef = config.rl.sft_anchor_coef
     min_advantage_std = config.rl.min_advantage_std
+    use_buffer_actions_for_loss = config.rl.use_buffer_actions_for_loss
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -143,6 +144,14 @@ def train_step(
     _anchor_obs = policy_observation
     _anchor_actions = buffer_actions
 
+    # When use_buffer_actions_for_loss=True, compute a state-level score from
+    # group-sampled advantages, but train the policy on buffer actions.
+    # This breaks the self-reinforcing loop where the policy trains on its own
+    # outputs while keeping the group-sampling benefit for advantage estimation.
+    if use_buffer_actions_for_loss and group_size > 1:
+        state_score = jnp.mean(score_stats, axis=-1)  # (B,) mean score per state
+        state_score = jax.lax.stop_gradient(state_score)
+
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -151,25 +160,32 @@ def train_step(
         actions: _model.Actions,
         score: at.Array,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        chunked_loss = model.compute_loss(
-            rng,
-            policy_observation,
-            actions,
-            train=True,
-        )
-
-        if group_size > 1:
-            grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
-            grouped_loss = jnp.mean(score * grouped_chunked_loss)
-        else:
-            s = score
+        if use_buffer_actions_for_loss and group_size > 1:
+            # Grounded mode: train on buffer actions weighted by state-level advantage.
+            chunked_loss = model.compute_loss(
+                rng, _anchor_obs, _anchor_actions, train=True,
+            )
+            s = state_score
             while s.ndim < chunked_loss.ndim:
                 s = s[..., jnp.newaxis]
             grouped_loss = jnp.mean(s * chunked_loss)
+        else:
+            # Default mode: train on sampled actions with per-sample scores.
+            chunked_loss = model.compute_loss(
+                rng, policy_observation, actions, train=True,
+            )
+            if group_size > 1:
+                grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
+                grouped_loss = jnp.mean(score * grouped_chunked_loss)
+            else:
+                s = score
+                while s.ndim < chunked_loss.ndim:
+                    s = s[..., jnp.newaxis]
+                grouped_loss = jnp.mean(s * chunked_loss)
 
         # SFT anchor: computed on the original (non-expanded) batch inside the
         # same gradient tape so that gradients are properly combined.
-        anchor_loss = jnp.asarray(0.0, dtype=chunked_loss.dtype)
+        anchor_loss = jnp.asarray(0.0, dtype=grouped_loss.dtype)
         if sft_anchor_coef > 0.0:
             anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
             anchor_loss = jnp.mean(model.compute_loss(
@@ -181,7 +197,6 @@ def train_step(
         info = {
             "grouped_loss": grouped_loss,
             "anchor_loss": anchor_loss,
-            "chunked_loss": jnp.mean(chunked_loss),
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
             "advantage_mean": jnp.mean(advantage),

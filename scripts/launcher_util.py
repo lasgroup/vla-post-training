@@ -91,6 +91,8 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.use_offline_for_critic": "offcritic",
     "rl.offline_critic_reward": "offrew",
     "rl.prefill_buffer_from_disk": "prefill",
+    "rl.use_buffer_actions_for_loss": "bufloss",
+    "rl.weight_clip": "wclip",
 }
 
 
