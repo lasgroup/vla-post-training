@@ -19,6 +19,7 @@ def train_loop(config: _config.OnlineTrainConfig,
                eval_task_description: list[str]):
     # Warm up agent with offline data training before data collection
     warmup_start_steps = agent.warm_start_training_steps
+
     warmup_pbar = tqdm.tqdm(
         range(warmup_start_steps, config.rl.num_offline_pretraining_steps),
         initial=warmup_start_steps,
@@ -27,6 +28,7 @@ def train_loop(config: _config.OnlineTrainConfig,
     )
 
     infos = []
+    pretraining_steps = 0
     for step in warmup_pbar:
         info = agent.pretrain_with_offline_data()
         infos.append(info)
@@ -42,7 +44,7 @@ def train_loop(config: _config.OnlineTrainConfig,
             warmup_pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-
+        pretraining_steps = step
     # start_step = int(jax.device_get(agent._train_state.step))
     # agent.training_steps = start_step
     start_step = agent.training_steps
@@ -67,8 +69,8 @@ def train_loop(config: _config.OnlineTrainConfig,
             stacked_infos = common_utils.stack_forest(normalized)
             reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
+            pbar.write(f"Step {step + pretraining_steps}: {info_str}")
+            wandb.log(reduced_info, step=step + pretraining_steps)
             infos = []
 
         if step % config.collect.collect_interval == 0:
@@ -80,7 +82,7 @@ def train_loop(config: _config.OnlineTrainConfig,
                 config=config,
                 step=step,
             )
-            wandb.log(collect_info, step=step)
+            wandb.log(collect_info, step=step + pretraining_steps)
             if n_collected_episodes > 0:
                 logging.info(
                     f"Collected {n_collected_episodes} episodes at step {step}."
@@ -94,7 +96,7 @@ def train_loop(config: _config.OnlineTrainConfig,
                 config=config,
                 step=step,
             )
-            wandb.log(eval_info, step=step)
+            wandb.log(eval_info, step=step + pretraining_steps)
             logging.info(
                 f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
             )
