@@ -112,6 +112,9 @@ def train_step(
     advantage_scale = config.rl.advantage_scale
 
     if group_size > 1:
+        # Compute raw group std BEFORE normalization for diversity check.
+        raw_group_std = jnp.std(advantage.reshape(base_batch_size, group_size), axis=-1, keepdims=True)
+
         if normalize_adv:
             advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
         score = advantage.reshape(base_batch_size, group_size) / beta
@@ -122,11 +125,9 @@ def train_step(
         score = jnp.clip(score, min=1e-6)
 
         # Drop low-diversity groups: replace with uniform weights when
-        # the within-group advantage std is below the threshold.
+        # the within-group RAW advantage std is below the threshold.
         if config.rl.drop_low_diversity_groups:
-            group_adv = advantage.reshape(base_batch_size, group_size)
-            group_std = jnp.std(group_adv, axis=-1, keepdims=True)
-            low_div = group_std < config.rl.diversity_threshold
+            low_div = raw_group_std < config.rl.diversity_threshold
             uniform = jnp.ones_like(score) / group_size
             score = jnp.where(low_div, uniform, score)
 

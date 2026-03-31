@@ -17,6 +17,13 @@ import openpi.models.model as _model
 class FlowGRPOLearner(MPOWeightedSFTLearner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Propagate flow sampling settings to the data collection policy so that
+        # online rollouts use the same num_steps / noise_level as the actor loss.
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FlowGRPOSFTLearnerConfig)
+        self._policy._sample_kwargs["num_steps"] = rl_config.num_steps
+        self._collection_noise_level = rl_config.noise_level
+
         # Delete only the policy JIT method; keep _update_critics_jitted from parent
         del self._update_policy_jitted
         gc.collect()
@@ -119,6 +126,32 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             return_prefix_rep=False,
         )
 
+    def _sample_action(self, observations, rng, train_state, use_ema=True, return_prefix_rep=False):
+        """Override to pass configured noise_level during data collection."""
+        params = self._select_policy_params(train_state, prefer_ema=use_ema)
+        model = nnx.merge(train_state.model_def, params)
+        model.eval()
+        first_obs = np.asarray(next(iter(observations.values())))
+        batch_size = first_obs.shape[0] if first_obs.ndim > 1 else 1
+        noise = jax.random.normal(
+            rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
+        )
+        num_devices = len(jax.devices())
+        sharding_spec = self._policy_sharding_spec if batch_size % num_devices == 0 else None
+        actions = self._policy.infer_with_model(
+            model=model,
+            obs=observations,
+            noise=noise,
+            noise_level=self._collection_noise_level,
+            return_prefix_rep=return_prefix_rep,
+            sharding_spec=sharding_spec,
+        )["actions"]
+        if return_prefix_rep:
+            actions, prefix = actions
+        if batch_size == 1 and actions.ndim == 2:
+            actions = actions[np.newaxis, ...]
+        return (actions, prefix) if return_prefix_rep else actions
+
     def _use_ema_for_data_collection(self) -> bool:
         return False
 
@@ -208,6 +241,9 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 if n_success > 0:
                     success_indices = jnp.where(success_mask, size=n_success)[0]
                     online_batch = jax.tree.map(lambda x: x[success_indices], online_batch)
+                else:
+                    # No successes — skip policy update, train on offline SFT only.
+                    update_policy = False
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
