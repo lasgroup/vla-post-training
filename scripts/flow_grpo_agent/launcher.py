@@ -55,7 +55,37 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.use_mpo_advantage_weight": [True, False],
+    "rl.reset_policy_params_to_ema_period": [500],
+    "rl.use_mc_returns": [False],
+    "collect.num_initial_rollouts": [5],
+    "lr_schedule.value": [2.5e-5],
+    "rl.store_success_episodes_only": [False],
+    "rl.num_offline_pretraining_steps": [0, 1_000],
+    "rl.warm_start_critic_update_interval": [1],
+    ("collect.tasks", "collect.eval_tasks"): [
+        # "libero_90_2",
+        # "libero_90_7",
+        # "libero_90_9",
+        # "libero_90_11",
+        ("libero_90_14", "libero_90_14"),
+        # "libero_90_26",
+        # "libero_90_28",
+        # "libero_90_30",
+        # "libero_90_31",
+        # "libero_90_35",
+        # ("libero_90_38", "libero_90_38"),
+        # "libero_90_41",
+        # "libero_90_53",
+        ("libero_90_59", "libero_90_59"),
+        # "libero_90_60",
+        # "libero_90_61",
+        # "libero_90_62",
+        ("libero_90_64", "libero_90_64"),
+        # "libero_90_74",
+        # "libero_90_77",
+        # "libero_90_79",
+        ("libero_90_82", "libero_90_82"),
+    ],
 }
 
 
@@ -96,11 +126,15 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
+    parser.add_argument(
+        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
+    )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
     parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
-    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
+    parser.add_argument(
+        "--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files"
+    )
 
     args = parser.parse_args()
 
