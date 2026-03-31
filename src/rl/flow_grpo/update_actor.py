@@ -29,7 +29,7 @@ def train_step(
     mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    policy_observation, critic_observation, actions = batch
+    policy_observation, critic_observation, _ = batch
 
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()

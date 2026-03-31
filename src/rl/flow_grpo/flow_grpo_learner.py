@@ -62,3 +62,10 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             sft_batch = jax.device_put(sft_batch, self._data_sharding)
         return sft_batch
 
+    def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
+        if critic_update:
+            return super()._replace_buffer_actions_with_policy_actions(critic_update=critic_update)
+        else:
+            return False
+
+

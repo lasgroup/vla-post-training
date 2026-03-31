@@ -107,14 +107,14 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         # Add prefix representation to the batch for the critic
         policy_sample_rng, rng = jax.random.split(rng, 2)
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        if self._config.rl.store_buffer_actions_in_batch:
-            value_action = batch["actions"]
-        else:
+        if self._replace_buffer_actions_with_policy_actions(critic_update=True):
             value_action = self._get_on_policy_action(
                 online_observation=_model.Observation.from_dict(batch["observation"]),
                 policy_state=policy_state,
                 rng=policy_sample_rng,
             )
+        else:
+            value_action = batch["actions"]
 
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -161,7 +161,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         mc_return: at.Array | None = None,
     ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        if not self._config.rl.store_buffer_actions_in_batch:
+        if self._replace_buffer_actions_with_policy_actions(critic_update=False):
             policy_sample_rng, rng = jax.random.split(rng, 2)
             on_policy_action = self._get_on_policy_action(
                 online_observation=batch[0],
@@ -185,3 +185,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         )
 
         return policy_state, info
+
+    def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
+        assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
+        return not self._config.rl.store_buffer_actions_in_batch
