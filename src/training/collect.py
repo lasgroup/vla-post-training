@@ -82,7 +82,11 @@ def evaluate_policy(
 
             obs = next_obs
 
-    metrics = {"eval/success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
+    metrics = {
+        "eval/success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0,
+        "eval/episodes": float(total_episodes),
+        "eval/successes": float(total_successes),
+    }
     if successful_episode_lengths:
         metrics["eval/mean_success_episode_length"] = np.mean(successful_episode_lengths)
     metrics["eval/total_collected_episodes"] = agent.total_collected_episodes
@@ -166,6 +170,11 @@ def collect_data(
     collected_episodes = agent.end_data_collection(step=step)
 
     agent.total_collected_episodes += total_episodes
-    metrics = {"success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
+    metrics = {
+        "success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0,
+        "collect/episodes": float(total_episodes),
+        "collect/successes": float(total_successes),
+        "collect/successful_episodes_saved": float(collected_episodes),
+    }
     metrics.update({f"success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
     return metrics, collected_episodes

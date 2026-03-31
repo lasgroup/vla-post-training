@@ -669,19 +669,44 @@ class FilteredSFTLearner(Agent):
         return collected_episodes
 
     def update(self):
+        def _batch_size(tree) -> int:
+            first_leaf = jax.tree_util.tree_leaves(tree)[0]
+            return int(first_leaf.shape[0])
+
         self.training_steps += 1
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
+
+        online_buffer_size = float(self._online_data_buffer.size)
+        buffer_capacity = max(int(rl_config.buffer_capacity), 1)
+        base_info = {
+            "buffer/online_size": jnp.asarray(online_buffer_size, dtype=jnp.float32),
+            "buffer/fill_ratio": jnp.asarray(
+                online_buffer_size / float(buffer_capacity), dtype=jnp.float32
+            ),
+        }
+
         update_policy = (
-            self.training_steps >= self._config.rl.policy_training_start_step
-            and self.training_steps % self._config.rl.policy_update_interval == 0
+            self.training_steps >= rl_config.policy_training_start_step
+            and self.training_steps % rl_config.policy_update_interval == 0
         )
         if not update_policy:
-            return {"online_buffer_size": self._online_data_buffer.size}
+            return base_info | {
+                "train/policy_update_applied": jnp.asarray(0.0, dtype=jnp.float32)
+            }
 
         if self._online_data_buffer.size == 0:
-            return {}
-        online_ratio = self._config.rl.online_ratio
+            return base_info | {
+                "train/policy_update_applied": jnp.asarray(0.0, dtype=jnp.float32),
+                "buffer/is_empty": jnp.asarray(1.0, dtype=jnp.float32),
+            }
+
+        online_ratio = rl_config.online_ratio
+        offline_batch_size = 0
+        online_batch_size = 0
         if online_ratio < 1.0:
             batch = next(self._data_iter)
+            offline_batch_size = _batch_size(batch)
         if online_ratio > 0.0:
             online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
             online_batch_raw = self._online_data_buffer.sample(
@@ -698,15 +723,19 @@ class FilteredSFTLearner(Agent):
                 )
             )
 
+        total_batch_size = _batch_size(batch)
+        actual_online_ratio = online_batch_size / max(total_batch_size, 1)
+
         train_rng, self._rng = jax.random.split(self._rng)
-        rl_config = self._config.rl
-        assert isinstance(rl_config, FilteredSFTLearnerConfig)
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
-        info = info | {
-            "online_buffer_size": jnp.asarray(
-                float(self._online_data_buffer.size), dtype=jnp.float32
-            )
+        info = info | base_info | {
+            "buffer/is_empty": jnp.asarray(0.0, dtype=jnp.float32),
+            "train/policy_update_applied": jnp.asarray(1.0, dtype=jnp.float32),
+            "train/batch_size": jnp.asarray(float(total_batch_size), dtype=jnp.float32),
+            "train/online_batch_size": jnp.asarray(float(online_batch_size), dtype=jnp.float32),
+            "train/offline_batch_size": jnp.asarray(float(offline_batch_size), dtype=jnp.float32),
+            "train/online_ratio_actual": jnp.asarray(actual_online_ratio, dtype=jnp.float32),
         }
         return info
