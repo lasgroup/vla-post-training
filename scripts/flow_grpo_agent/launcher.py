@@ -45,8 +45,8 @@ DEFAULT_GROUP_SIZE = 8
 DEFAULT_NUM_STEPS = 5
 DEFAULT_NORMALIZE_ADV = True
 DEFAULT_KL_COEF = 0.0
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 2000
-DEFAULT_TD_WEIGHT_RAMP_STEPS = 600
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
+DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
         "collect.tasks": DEFAULT_TASKS,
@@ -60,29 +60,29 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [1, 10],
+    "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [64],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [10],
     "collect.eval_interval": [100],
-    "rl.normalize_adv": [True],
-    "rl.kl_coef": [0.01],
-    "rl.td_weight_schedule.switch_step": [2000],
-    "rl.policy_update_interval": [1],
-    "rl.save_all_episodes": [False, True],
+    "rl.normalize_adv": [False, True],
+    #"rl.kl_coef": [0.01],
+    "rl.td_weight_schedule.switch_step": [1200],
+    "rl.policy_update_interval": [1, 10],
+    "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
-    "rl.align_critic_sampling": [True],
+    "rl.align_critic_sampling": [False],
+    "rl.freeze_critic_at_step": [None],
+    "rl.sft_anchor_coef": [0.0],
+    "collect.collect_interval": [300],
+    "rl.min_advantage_std": [0.05],
+    #"rl.use_buffer_actions_for_loss": [False, True],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],
-    "rl.freeze_critic_at_step": [1200],
-    "rl.sft_anchor_coef": [0.0],
-    "collect.collect_interval": [100, 300],
-    "rl.min_advantage_std": [0.05, 0.4],
-    "rl.use_buffer_actions_for_loss": [False, True],
 }
 
 

@@ -69,8 +69,6 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.drop_low_diversity_groups": [True],
     "rl.align_critic_sampling": [True],
     "rl.normalize_adv": [False, True],
-    "rl.reset_policy_params_to_ema_period": [100],
-    "rl.reset_optimizer_on_ema_reset": [False, True],
     "rl.policy_update_interval": [1],
     "rl.sft_anchor_coef": [0.0, 0.5],
     "rl.min_advantage_std": [0.05, 0.2],

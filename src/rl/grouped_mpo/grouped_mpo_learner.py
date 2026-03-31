@@ -88,8 +88,12 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
 
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        """Use current params (not EMA) to match the actor loss which uses current params."""
-        model = nnx.merge(policy_state.model_def, policy_state.params)
+        params = (
+            policy_state.ema_params
+            if policy_state.ema_params is not None
+            else policy_state.params
+        )
+        model = nnx.merge(policy_state.model_def, params)
         model.eval()
         return model
 

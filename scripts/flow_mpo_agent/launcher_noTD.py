@@ -76,8 +76,6 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.normalize_adv": [True],
     "rl.use_mc_returns": [False],
     "rl.beta": [0.05, 0.2],
-    "rl.reset_policy_params_to_ema_period": [100],
-    "rl.reset_optimizer_on_ema_reset": [False, True],
     "rl.sft_anchor_coef": [0.0, 0.5],
     "rl.min_advantage_std": [0.0, 0.01, 0.2],
 }

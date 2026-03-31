@@ -89,7 +89,12 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
 
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        model = nnx.merge(policy_state.model_def, policy_state.params)
+        params = (
+            policy_state.ema_params
+            if policy_state.ema_params is not None
+            else policy_state.params
+        )
+        model = nnx.merge(policy_state.model_def, params)
         model.eval()
         return model
 
@@ -153,7 +158,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         return (actions, prefix) if return_prefix_rep else actions
 
     def _use_ema_for_data_collection(self) -> bool:
-        return False
+        return self._train_state.ema_params is not None
 
     def _use_ema_for_evaluation(self) -> bool:
         return self._train_state.ema_params is not None

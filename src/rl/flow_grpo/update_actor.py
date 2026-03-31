@@ -264,14 +264,10 @@ def train_step(
 
     score = jax.lax.stop_gradient(score)
 
-    # Expand flat score to broadcast with log_probs (B, action_horizon, num_steps).
+    
     if score.ndim == 1:
         score = score[:, jnp.newaxis, jnp.newaxis]
 
-    # Pre-compute state_score for use_buffer_actions_for_loss (also outside tape).
-    # For the GRPO path (not use_mpo_advantage_weight), per-group normalization makes
-    # scores zero-mean, so averaging them would give ~0. Instead, use the group-mean
-    # of RAW advantage passed through exp/scale to get a meaningful state-level weight.
     if use_buffer_actions_for_loss:
         if group_size > 1:
             _B_buf = advantage.shape[0] // group_size
@@ -367,9 +363,7 @@ def train_step(
         reference_log_probs,
     )
 
-    # Global advantage gating: zero out gradients when advantage_std is too low.
-    # Guard with Python-level check to avoid tracing both cond branches over the
-    # entire gradient tree when gating is disabled (min_advantage_std == 0).
+    # zero out gradients when advantage_std is too low, we can set a threshold and use it instead of 0.0 later
     if min_advantage_std > 0.0:
         grads = jax.lax.cond(
             skip_policy_update,
@@ -388,8 +382,6 @@ def train_step(
         grads, policy_state.opt_state, params
     )
     new_params = optax.apply_updates(params, updates)
-
-    # Update the model in place and return the new full state.
     nnx.update(policy_model, new_params)
     new_params = nnx.state(policy_model)
 
