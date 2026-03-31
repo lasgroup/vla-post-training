@@ -43,6 +43,7 @@ def train_step(
     group_size = max(config.rl.group_size, 1)
     beta = max(config.rl.beta, 1e-6)
     weight_clip = config.rl.weight_clip
+    normalize_adv = config.rl.normalize_adv
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
     sft_anchor_coef = config.rl.sft_anchor_coef
@@ -94,14 +95,25 @@ def train_step(
     )
     advantage = jax.lax.stop_gradient(q_value - value)
 
-    advantage_scale = config.rl.advantage_scale
-
+    # Global advantage gating: compute on RAW advantages BEFORE normalization
+    # so min_advantage_std measures actual critic separability.
     if group_size > 1:
         total_batch_size = advantage.shape[0]
         assert (
             total_batch_size % group_size == 0
         ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={group_size}"
         base_batch_size = total_batch_size // group_size
+        group_means = jnp.mean(advantage.reshape(base_batch_size, group_size), axis=-1)
+        global_adv_std = jnp.std(group_means)
+    else:
+        global_adv_std = jnp.std(advantage)
+    skip_policy_update = global_adv_std < min_advantage_std
+
+    advantage_scale = config.rl.advantage_scale
+
+    if group_size > 1:
+        if normalize_adv:
+            advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
         score = advantage.reshape(base_batch_size, group_size) / beta
         if weight_clip is not None:
             score = jnp.minimum(score, weight_clip)
@@ -130,16 +142,6 @@ def train_step(
         score_stats = score
         score = jax.lax.stop_gradient(score)
 
-    # Global advantage gating: compute std of GROUP MEANS to filter out
-    # intra-group noise from the stochastic sampling. This measures whether
-    # the critic can truly distinguish between different states.
-    if group_size > 1:
-        group_means = jnp.mean(advantage.reshape(base_batch_size, group_size), axis=-1)
-        global_adv_std = jnp.std(group_means)
-    else:
-        global_adv_std = jnp.std(advantage)
-    skip_policy_update = global_adv_std < min_advantage_std
-
     # Capture original (non-expanded) batch for SFT anchor.
     _anchor_obs = policy_observation
     _anchor_actions = buffer_actions
@@ -148,9 +150,22 @@ def train_step(
     # group-sampled advantages, but train the policy on buffer actions.
     # This breaks the self-reinforcing loop where the policy trains on its own
     # outputs while keeping the group-sampling benefit for advantage estimation.
+    # Pre-compute state_score for use_buffer_actions_for_loss (also outside tape).
+    # Use group-mean of RAW advantage (before per-sample normalization) to get a
+    # meaningful state-level weight that captures whether the state is globally good.
     if use_buffer_actions_for_loss:
         if group_size > 1:
-            state_score = jnp.mean(score_stats, axis=-1)  # (B,) mean score per state
+            raw_group_mean_adv = jnp.mean(
+                jax.lax.stop_gradient(q_value - value).reshape(base_batch_size, group_size), axis=-1
+            )  # (B,) — raw advantage averaged over group
+            if normalize_adv:
+                raw_group_mean_adv = (raw_group_mean_adv - jnp.mean(raw_group_mean_adv)) / (jnp.std(raw_group_mean_adv) + 1e-6)
+            state_score = raw_group_mean_adv / beta
+            if weight_clip is not None:
+                state_score = jnp.minimum(state_score, weight_clip)
+            state_score = jnp.exp(state_score)
+            state_score = state_score / advantage_scale
+            state_score = jnp.clip(state_score, min=1e-6)
         else:
             state_score = score_stats  # (B,) already per-state
         state_score = jax.lax.stop_gradient(state_score)

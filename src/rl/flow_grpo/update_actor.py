@@ -201,13 +201,101 @@ def train_step(
     _anchor_obs = policy_observation
     _anchor_actions = buffer_actions
 
+    # --- Score computation (OUTSIDE gradient tape) ---
+    # All derived from stop_gradient'd advantage — no gradients needed.
+    advantage_scale = config.rl.advantage_scale
+    _needs_group_reshape = False
+
+    if use_mpo_advantage_weight:
+        if group_size > 1:
+            _B = advantage.shape[0] // group_size
+            if normalize_adv:
+                _adv = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
+            else:
+                _adv = advantage
+            score = _adv.reshape(_B, group_size) / beta
+            if weight_clip is not None:
+                score = jnp.minimum(score, weight_clip)
+            score = jnp.exp(score)
+            score = score / advantage_scale
+            score = jnp.clip(score, min=1e-6)
+
+            if drop_low_diversity:
+                group_adv = advantage.reshape(_B, group_size)
+                group_std = jnp.std(group_adv, axis=-1, keepdims=True)
+                low_div = group_std < diversity_threshold
+                uniform = jnp.ones_like(score) / group_size
+                score = jnp.where(low_div, uniform, score)
+
+            score = score[:, jnp.newaxis, :]  # (B, 1, G)
+            _needs_group_reshape = True
+        else:
+            # Flow-MPO path (group_size=1): global exp/scale.
+            if normalize_adv:
+                _adv = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
+            else:
+                _adv = advantage
+            score = _adv / beta
+            if weight_clip is not None:
+                score = jnp.minimum(score, weight_clip)
+            score = jnp.exp(score)
+            score = score / advantage_scale
+            score = jnp.clip(score, min=1e-6)
+    else:
+        # GRPO path
+        _adv = advantage
+        if normalize_adv and group_size > 1:
+            _B = advantage.shape[0] // group_size
+            _adv = _adv.reshape(_B, group_size)
+            group_mean = jnp.mean(_adv, axis=-1, keepdims=True)
+            group_std = jnp.std(_adv, axis=-1, keepdims=True)
+            _adv = (_adv - group_mean) / jnp.maximum(group_std, 1e-6)
+
+            if drop_low_diversity:
+                low_div = group_std < diversity_threshold
+                _adv = jnp.where(low_div, 0.0, _adv)
+
+            score = _adv[:, jnp.newaxis, :]  # (B, 1, G)
+            _needs_group_reshape = True
+        else:
+            score = _adv
+        if weight_clip is not None:
+            score = jnp.clip(score, -weight_clip, weight_clip)
+
+    score = jax.lax.stop_gradient(score)
+
+    # Expand flat score to broadcast with log_probs (B, action_horizon, num_steps).
+    if score.ndim == 1:
+        score = score[:, jnp.newaxis, jnp.newaxis]
+
+    # Pre-compute state_score for use_buffer_actions_for_loss (also outside tape).
+    # For the GRPO path (not use_mpo_advantage_weight), per-group normalization makes
+    # scores zero-mean, so averaging them would give ~0. Instead, use the group-mean
+    # of RAW advantage passed through exp/scale to get a meaningful state-level weight.
+    if use_buffer_actions_for_loss:
+        if group_size > 1:
+            _B_buf = advantage.shape[0] // group_size
+            raw_group_mean_adv = jnp.mean(advantage.reshape(_B_buf, group_size), axis=-1)  # (B,)
+            if normalize_adv:
+                raw_group_mean_adv = (raw_group_mean_adv - jnp.mean(raw_group_mean_adv)) / (jnp.std(raw_group_mean_adv) + 1e-6)
+            state_score = raw_group_mean_adv / beta
+            if weight_clip is not None:
+                state_score = jnp.minimum(state_score, weight_clip)
+            state_score = jnp.exp(state_score)
+            state_score = state_score / advantage_scale
+            state_score = jnp.clip(state_score, min=1e-6)
+        else:
+            state_score = score.reshape(-1)  # (B,)
+        state_score = jax.lax.stop_gradient(state_score)
+
+    score_mean_for_log = jnp.mean(score)
+
+    # --- loss_fn: only things that need gradients ---
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
         policy_observation: _model.Observation,
         rollout_info: dict[str, at.Array],
-        advantage: at.Array,
-        q_value: at.Array,
         reference_log_probs: at.Array | None,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         policy_log_probs = _compute_rollout_log_probs(
@@ -217,116 +305,33 @@ def train_step(
             num_steps=num_steps,
             noise_level=noise_level,
         )
-        log_probs = policy_log_probs
 
-        # KL against EMA reference, using pre-computed reference log-probs.
+        # KL against EMA reference.
         kl_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
         ref_log_prob_mean = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
         if kl_coef > 0.0 and reference_log_probs is not None:
             kl_loss = jnp.mean(policy_log_probs - reference_log_probs)
             ref_log_prob_mean = jnp.mean(reference_log_probs)
 
-        advantage_scale = config.rl.advantage_scale
-
-        if use_mpo_advantage_weight:
-            if group_size > 1:
-                total_batch_size = advantage.shape[0]
-                assert (
-                    total_batch_size % group_size == 0
-                ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-                B = total_batch_size // group_size
-                score = advantage.reshape(B, group_size) / beta
-                if weight_clip is not None:
-                    score = jnp.minimum(score, weight_clip)
-                score = jnp.exp(score)
-                score = score / advantage_scale
-                score = jnp.clip(score, min=1e-6)
-
-                # Drop low-diversity groups: use uniform weights when
-                # within-group advantage std is below the threshold.
-                if drop_low_diversity:
-                    group_adv = advantage.reshape(B, group_size)
-                    group_std = jnp.std(group_adv, axis=-1, keepdims=True)
-                    low_div = group_std < diversity_threshold
-                    uniform = jnp.ones_like(score) / group_size
-                    score = jnp.where(low_div, uniform, score)
-
-                score = score[:, jnp.newaxis, :]
-                log_probs = jnp.swapaxes(
-                    log_probs.reshape(B, group_size, -1), 1, 2
-                )
-            else:
-                # Flow-MPO path (group_size=1): global exp/scale.
-                if normalize_adv:
-                    advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
-                score = advantage / beta
-                if weight_clip is not None:
-                    score = jnp.minimum(score, weight_clip)
-                score = jnp.exp(score)
-                score = score / advantage_scale
-                score = jnp.clip(score, min=1e-6)
-            score = jax.lax.stop_gradient(score)
-        else:
-            adv = advantage
-            if normalize_adv and group_size > 1:
-                total_batch_size = adv.shape[0]
-                assert (
-                    total_batch_size % group_size == 0
-                ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-                B = total_batch_size // group_size
-                # Reshape to (B, G) for Group Relative calculations.
-                # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
-                adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-                log_probs = jnp.swapaxes(
-                    log_probs.reshape(B, group_size, -1), 1, 2
-                )
-                group_mean = jnp.mean(adv, axis=-1, keepdims=True)
-                group_std = jnp.std(adv, axis=-1, keepdims=True)
-                adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
-
-                # Drop low-diversity groups: zero out normalized advantages
-                # so these groups contribute no gradient.
-                if drop_low_diversity:
-                    low_div = group_std < diversity_threshold
-                    adv = jnp.where(low_div, 0.0, adv)
-            if weight_clip is not None:
-                adv = jnp.clip(adv, -weight_clip, weight_clip)
-            score = jax.lax.stop_gradient(adv)
-
-        # Expand score (B*G,) to (B*G, 1, 1) to broadcast with log_probs (B*G, action_horizon, num_steps)
-        if score.ndim == 1:
-            score = score[:, jnp.newaxis, jnp.newaxis]
-
         if use_buffer_actions_for_loss:
-            # Grounded mode: use sampled advantages for state-level scoring,
-            # but train on buffer actions to break the self-reinforcing loop.
-            if group_size > 1:
-                if use_mpo_advantage_weight:
-                    # score is (B, 1, G) — take mean across group dim for state-level weight
-                    state_score = jnp.mean(jnp.squeeze(score, axis=1), axis=-1)  # (B,)
-                else:
-                    # score is (B, steps, G) or (B*G, 1, 1) — compute state-level mean
-                    if score.ndim == 3 and score.shape[-1] == group_size:
-                        state_score = jnp.mean(score[:, 0, :], axis=-1)  # (B,)
-                    else:
-                        _B = score.shape[0] // group_size
-                        state_score = jnp.mean(score.reshape(_B, group_size, -1)[:, :, 0], axis=-1)
-            else:
-                # group_size=1 (Flow-MPO): score is (B,) or (B, 1, 1)
-                state_score = score.reshape(-1) if score.ndim > 1 else score
-            state_score = jax.lax.stop_gradient(state_score)
             anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
             buffer_loss = model.compute_loss(
                 anchor_rng, _anchor_obs, _anchor_actions, train=True,
             )
-            while state_score.ndim < buffer_loss.ndim:
-                state_score = state_score[..., jnp.newaxis]
-            flow_loss = jnp.mean(state_score * buffer_loss)
+            _ss = state_score
+            while _ss.ndim < buffer_loss.ndim:
+                _ss = _ss[..., jnp.newaxis]
+            flow_loss = jnp.mean(_ss * buffer_loss)
         else:
+            log_probs = policy_log_probs
+            if _needs_group_reshape:
+                _B = log_probs.shape[0] // group_size
+                log_probs = jnp.swapaxes(
+                    log_probs.reshape(_B, group_size, -1), 1, 2
+                )  # (B, AH*NS, G)
             flow_loss = -jnp.mean(score * log_probs)
 
-        # SFT anchor: computed on the original (non-expanded) batch inside the
-        # same gradient tape so that gradients are properly combined.
+        # SFT anchor.
         anchor_loss = jnp.asarray(0.0, dtype=policy_log_probs.dtype)
         if sft_anchor_coef > 0.0:
             anchor_rng = jax.random.fold_in(jax.random.PRNGKey(0), 1)
@@ -343,7 +348,7 @@ def train_step(
             "kl_coef": jnp.asarray(kl_coef, dtype=policy_log_probs.dtype),
             "q_mean": jnp.mean(q_value),
             "advantage_std": global_adv_std,
-            "score_mean": jnp.mean(score),
+            "score_mean": score_mean_for_log,
             "log_prob_mean": jnp.mean(policy_log_probs),
             "reference_log_prob_mean": ref_log_prob_mean,
             "policy_update_skipped": skip_policy_update.astype(jnp.float32),
@@ -359,8 +364,6 @@ def train_step(
         policy_model,
         expanded_policy_obs,
         rollout_info,
-        advantage,
-        q_value,
         reference_log_probs,
     )
 

@@ -57,8 +57,14 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         q_state,
         value_state,
         rng,
+        mc_return=None,
         **kwargs,
     ):
+        if mc_return is not None:
+            raise ValueError(
+                "FlowGRPOLearner does not support use_mc_returns=True. "
+                "Advantages are computed internally from Q-V."
+            )
         # Skip MPO's _get_on_policy_action — flow GRPO train_step samples
         # its own actions internally, so the MPO on-policy action is wasted.
         batch = self._sft_batch_to_actor_batch(

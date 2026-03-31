@@ -72,6 +72,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "rl.noise_level": [0.1],
     "rl.kl_coef": [0.01],
+    "rl.align_critic_sampling": [True],
     "rl.normalize_adv": [True],
     "rl.use_mc_returns": [False],
     "rl.beta": [0.05, 0.2],
