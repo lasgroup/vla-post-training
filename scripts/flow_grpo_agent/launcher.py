@@ -60,7 +60,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [0, 1_000],
+    "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
