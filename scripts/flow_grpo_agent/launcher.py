@@ -70,7 +70,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.normalize_adv": [False, True],
     #"rl.kl_coef": [0.01],
     "rl.td_weight_schedule.switch_step": [1200],
-    "rl.policy_update_interval": [1, 10],
+    "rl.policy_update_interval": [1, 5, 10],
+    "lr_schedule.peak_lr": [5e-5, 1e-5],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
@@ -183,6 +184,10 @@ def main() -> None:
             policy_start = flags["rl.policy_training_start_step"]
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
+
+            # Keep decay_lr == peak_lr so the schedule is a constant learning rate.
+            if "lr_schedule.peak_lr" in flags:
+                flags["lr_schedule.decay_lr"] = flags["lr_schedule.peak_lr"]
 
             # Halve batch size when SFT anchor is active (extra memory for anchor forward pass).
             if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:

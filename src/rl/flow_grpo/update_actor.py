@@ -103,7 +103,7 @@ def train_step(
     policy_observation, critic_observation, buffer_actions = batch
 
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
-    policy_model.train()
+    policy_model.eval()  # eval mode for sampling; switched to train() before gradient tape
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -186,13 +186,13 @@ def train_step(
     if reference_log_probs is not None:
         reference_log_probs = jax.lax.stop_gradient(reference_log_probs)
 
-    # Global advantage gating: compute std of GROUP MEANS to filter out
-    # intra-group noise from the stochastic sampling. This measures whether
-    # the critic can truly distinguish between different states.
+    # Advantage gating: for grouped methods, measure WITHIN-GROUP spread (can the
+    # critic rank candidate actions for the same state?).  For non-grouped, use
+    # global std.  Computed on RAW advantages.
     if group_size > 1:
         _B = advantage.shape[0] // group_size
-        group_means = jnp.mean(advantage.reshape(_B, group_size), axis=-1)
-        global_adv_std = jnp.std(group_means)
+        within_group_stds = jnp.std(advantage.reshape(_B, group_size), axis=-1)
+        global_adv_std = jnp.mean(within_group_stds)
     else:
         global_adv_std = jnp.std(advantage)
     skip_policy_update = global_adv_std < min_advantage_std
@@ -217,8 +217,8 @@ def train_step(
             if weight_clip is not None:
                 score = jnp.minimum(score, weight_clip)
             score = jnp.exp(score)
-            score = score / advantage_scale
-            score = jnp.clip(score, min=1e-6)
+            # Normalize within each group so weights sum to 1 per state.
+            score = score / jnp.maximum(jnp.sum(score, axis=-1, keepdims=True), 1e-8)
 
             if drop_low_diversity:
                 group_adv = advantage.reshape(_B, group_size)
@@ -352,6 +352,7 @@ def train_step(
 
         return loss, info
 
+    policy_model.train()  # switch to train mode for gradient computation
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(

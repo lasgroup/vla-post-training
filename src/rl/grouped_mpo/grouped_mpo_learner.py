@@ -88,17 +88,13 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
 
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        params = (
-            policy_state.ema_params
-            if policy_state.ema_params is not None
-            else policy_state.params
-        )
-        model = nnx.merge(policy_state.model_def, params)
+        """Use current params (not EMA) to match the actor loss which uses current params."""
+        model = nnx.merge(policy_state.model_def, policy_state.params)
         model.eval()
         return model
 
     def _sample_action(self, observations, rng, train_state, use_ema=True, return_prefix_rep=False):
-        """Override to pass configured noise_level during data collection."""
+        """Override to pass configured noise_level during data collection only."""
         params = self._select_policy_params(train_state, prefer_ema=use_ema)
         model = nnx.merge(train_state.model_def, params)
         model.eval()
@@ -109,11 +105,13 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
         )
         num_devices = len(jax.devices())
         sharding_spec = self._policy_sharding_spec if batch_size % num_devices == 0 else None
+        # _collecting is set by sample_actions/eval_actions below.
+        nl = self._collection_noise_level if getattr(self, "_collecting", False) else 0.0
         actions = self._policy.infer_with_model(
             model=model,
             obs=observations,
             noise=noise,
-            noise_level=self._collection_noise_level,
+            noise_level=nl,
             return_prefix_rep=return_prefix_rep,
             sharding_spec=sharding_spec,
         )["actions"]
@@ -122,6 +120,16 @@ class GroupedMPOWeightedSFTLearner(MPOWeightedSFTLearner):
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
         return (actions, prefix) if return_prefix_rep else actions
+
+    def sample_actions(self, observations, **kwargs):
+        self._collecting = True
+        result = super().sample_actions(observations, **kwargs)
+        self._collecting = False
+        return result
+
+    def eval_actions(self, observations, **kwargs):
+        self._collecting = False
+        return super().eval_actions(observations, **kwargs)
 
     @at.typecheck
     def _get_on_policy_action(

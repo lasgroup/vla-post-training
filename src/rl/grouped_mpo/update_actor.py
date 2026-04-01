@@ -32,7 +32,7 @@ def train_step(
     policy_observation, critic_observation, buffer_actions = batch
 
     policy = nnx.merge(policy_state.model_def, policy_state.params)
-    policy.train()
+    policy.eval()  # eval mode for sampling; switched to train() before gradient tape
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -95,16 +95,17 @@ def train_step(
     )
     advantage = jax.lax.stop_gradient(q_value - value)
 
-    # Global advantage gating: compute on RAW advantages BEFORE normalization
-    # so min_advantage_std measures actual critic separability.
+    # Advantage gating: for grouped methods, measure WITHIN-GROUP spread (can the
+    # critic rank candidate actions for the same state?).  For non-grouped, use
+    # global std.  Computed on RAW advantages BEFORE normalization.
     if group_size > 1:
         total_batch_size = advantage.shape[0]
         assert (
             total_batch_size % group_size == 0
         ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={group_size}"
         base_batch_size = total_batch_size // group_size
-        group_means = jnp.mean(advantage.reshape(base_batch_size, group_size), axis=-1)
-        global_adv_std = jnp.std(group_means)
+        within_group_stds = jnp.std(advantage.reshape(base_batch_size, group_size), axis=-1)
+        global_adv_std = jnp.mean(within_group_stds)
     else:
         global_adv_std = jnp.std(advantage)
     skip_policy_update = global_adv_std < min_advantage_std
@@ -121,8 +122,10 @@ def train_step(
         if weight_clip is not None:
             score = jnp.minimum(score, weight_clip)
         score = jnp.exp(score)
-        score = score / advantage_scale
-        score = jnp.clip(score, min=1e-6)
+        # Normalize within each group so weights sum to 1 per state.
+        # This makes the gradient depend on relative ranking within each group,
+        # not on absolute advantage scale per state.
+        score = score / jnp.maximum(jnp.sum(score, axis=-1, keepdims=True), 1e-8)
 
         # Drop low-diversity groups: replace with uniform weights when
         # the within-group RAW advantage std is below the threshold.
@@ -195,7 +198,9 @@ def train_step(
             )
             if group_size > 1:
                 grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
-                grouped_loss = jnp.mean(score * grouped_chunked_loss)
+                # score sums to 1 per group after normalization, so sum over group
+                # axis (not mean) to avoid dividing by group_size twice.
+                grouped_loss = jnp.mean(jnp.sum(score * grouped_chunked_loss, axis=1))
             else:
                 s = score
                 while s.ndim < chunked_loss.ndim:
@@ -228,6 +233,7 @@ def train_step(
         }
         return loss, info
 
+    policy.train()  # switch to train mode for gradient computation
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state

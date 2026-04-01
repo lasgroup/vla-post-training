@@ -93,6 +93,7 @@ _SHORT_LABELS: Dict[str, str] = {
     "rl.prefill_buffer_from_disk": "prefill",
     "rl.use_buffer_actions_for_loss": "bufloss",
     "rl.weight_clip": "wclip",
+    "lr_schedule.peak_lr": "lr",
 }
 
 
