@@ -283,6 +283,14 @@ def make_base_libero_config(
         ),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                # load norm_stats from pretrained checkpoint
+                assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets",
+                # or load offline computed norm_stats from compute_norm_stats.py
+                # assets_dir="assets/pi05_libero",
+                # to be passed explicitly to create_trained_policy() which loads
+                # norm_stats from pretrained checkpoint by default
+            ),
             base_config=OnlineDataConfig(prompt_from_task=True),
             extra_delta_transform=False,
         ),
@@ -314,7 +322,11 @@ def make_base_molmo_config(
         ),
         data=SimpleDataConfig(
             repo_id=None,
-            assets=AssetsConfig(asset_id="droid"),
+            assets=AssetsConfig(
+                # load norm_stats from pretrained checkpoint
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid_jointpos/assets",
+                asset_id="droid",
+            ),
             data_transforms=lambda model: _openpi_transforms.Group(
                 inputs=[_droid_policy.DroidInputs(model_type=ModelType.PI05)],
                 outputs=[
