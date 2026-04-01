@@ -13,6 +13,7 @@ wandb/
 assets/
 logs/
 logs_old/
+logs_old2/
 CLAUDE.md
 scripts/sdpo_capability_test/
 .claude/
