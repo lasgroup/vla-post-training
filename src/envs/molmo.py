@@ -290,8 +290,12 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
 
     def env_fn(rank: int):
         task_index = rank % len(task_ids)
-        env = MolmoSpacesBenchmarkGymEnv(episode_id=task_ids[task_index], render_device=rank % num_devices)
-        env = MolmoActionAdapter(env=env)        
+        render_device = int(os.environ.get("MUJOCO_EGL_DEVICE_ID", "0"))
+        env = MolmoSpacesBenchmarkGymEnv(
+            episode_id=task_ids[task_index],
+            render_device=render_device,
+        )
+        env = MolmoActionAdapter(env=env)
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
         # Add timelimit wrapper
