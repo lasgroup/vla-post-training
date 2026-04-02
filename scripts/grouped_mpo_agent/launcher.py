@@ -47,9 +47,21 @@ DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 NUM_TRAIN_STEPS = 5_000
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
-        "collect.tasks": DEFAULT_TASKS,
-        "collect.eval_tasks": DEFAULT_EVAL_TASKS,
-    }
+        "collect.tasks": ["libero_90_14x1"],
+        "collect.eval_tasks": ["libero_90_14x4"],
+    },
+    {
+        "collect.tasks": ["libero_90_59x1"],
+        "collect.eval_tasks": ["libero_90_59x4"],
+    },
+    {
+        "collect.tasks": ["libero_90_64x1"],
+        "collect.eval_tasks": ["libero_90_64x4"],
+    },
+    {
+        "collect.tasks": ["libero_90_82x1"],
+        "collect.eval_tasks": ["libero_90_82x4"],
+    },
 ]
 
 applicable_configs: Dict[str, List[Any]] = {
@@ -72,11 +84,12 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.freeze_critic_at_step": [1200],
     "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
-    "lr_schedule.peak_lr": [5e-5, 5e-6],
+    "lr_schedule.peak_lr": [5e-6, 3e-5],
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05],
     #"rl.weight_clip": [5.0, 20.0],
     #"rl.use_buffer_actions_for_loss": [False, True],
+    "rl.kl_coef": [0.0, 0.01],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],
 }
@@ -166,8 +179,16 @@ def main() -> None:
             if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
                 flags["batch_size"] = flags["batch_size"] // 2
             
+            # Tie decay_lr to peak_lr:
+            # - 5e-6 → constant LR (decay_lr=5e-6, default decay_steps)
+            # - 3e-5 → cosine decay to 3e-7 in 500 steps
             if "lr_schedule.peak_lr" in flags:
-                flags["lr_schedule.decay_lr"] = flags["lr_schedule.peak_lr"]
+                plr = flags["lr_schedule.peak_lr"]
+                if plr == 3e-5:
+                    flags["lr_schedule.decay_lr"] = 3e-7
+                    flags["lr_schedule.decay_steps"] = 500
+                else:
+                    flags["lr_schedule.decay_lr"] = plr
 
             flags.setdefault(
                 "exp_name",

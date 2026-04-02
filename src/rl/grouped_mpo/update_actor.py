@@ -16,6 +16,10 @@ from src.rl.advantage_weighted_sft.update_critic import (
     summarize_critic_values,
 )
 from src.rl.networks.rl_networks import ObsType
+from src.rl.flow_grpo.update_actor import (
+    _compute_rollout_log_probs,
+    _compute_reference_log_probs,
+)
 from src.training.config import GroupedMPOWeightedSFTLearnerConfig, OnlineTrainConfig
 
 
@@ -49,6 +53,7 @@ def train_step(
     sft_anchor_coef = config.rl.sft_anchor_coef
     min_advantage_std = config.rl.min_advantage_std
     use_buffer_actions_for_loss = config.rl.use_buffer_actions_for_loss
+    kl_coef = config.rl.kl_coef
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -74,15 +79,21 @@ def train_step(
         anchor_indices = jnp.arange(0, total_expanded, group_size)
         noise = noise.at[anchor_indices].set(0.0)
 
-    sampled_actions = policy.sample_actions(
+    _need_rollout_info = kl_coef > 0.0
+    _sample_result = policy.sample_actions(
         rng=sample_rng,
         observation=expanded_policy_obs,
         noise=noise,
         num_steps=num_steps,
         noise_level=noise_level,
-        return_info_dict=False,
+        return_info_dict=_need_rollout_info,
         return_prefix_rep=False,
     )
+    if _need_rollout_info:
+        sampled_actions, rollout_info = _sample_result
+    else:
+        sampled_actions = _sample_result
+        rollout_info = None
 
     critic_actions = flatten_action_horizon(sampled_actions)
     value = summarize_critic_values(
@@ -94,6 +105,20 @@ def train_step(
         critic_reduction=config.rl.critic_reduction,
     )
     advantage = jax.lax.stop_gradient(q_value - value)
+
+    # KL penalty: compute reference log-probs outside the gradient tape.
+    reference_log_probs = None
+    if kl_coef > 0.0 and rollout_info is not None:
+        reference_log_probs = _compute_reference_log_probs(
+            model_def=policy_state.model_def,
+            reference_params=policy_state.ema_params,
+            policy_observation=expanded_policy_obs,
+            rollout_info=rollout_info,
+            num_steps=num_steps,
+            noise_level=noise_level,
+        )
+    if reference_log_probs is not None:
+        reference_log_probs = jax.lax.stop_gradient(reference_log_probs)
 
     # Advantage gating: for grouped methods, measure WITHIN-GROUP spread (can the
     # critic rank candidate actions for the same state?).  For non-grouped, use
@@ -216,11 +241,24 @@ def train_step(
                 anchor_rng, _anchor_obs, _anchor_actions, train=True,
             ))
 
-        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss
+        # KL penalty against EMA reference policy.
+        kl_loss = jnp.asarray(0.0, dtype=grouped_loss.dtype)
+        if kl_coef > 0.0 and rollout_info is not None and reference_log_probs is not None:
+            policy_log_probs = _compute_rollout_log_probs(
+                model=model,
+                policy_observation=policy_observation,
+                rollout_info=rollout_info,
+                num_steps=num_steps,
+                noise_level=noise_level,
+            )
+            kl_loss = jnp.mean(policy_log_probs - reference_log_probs)
+
+        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss + kl_coef * kl_loss
 
         info = {
             "grouped_loss": grouped_loss,
             "anchor_loss": anchor_loss,
+            "kl_loss": kl_loss,
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
             "advantage_mean": jnp.mean(advantage),

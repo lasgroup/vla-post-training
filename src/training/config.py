@@ -173,6 +173,7 @@ class GroupedMPOWeightedSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     sft_anchor_coef: float = 0.0
     min_advantage_std: float = 0.0
     use_buffer_actions_for_loss: bool = False
+    kl_coef: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

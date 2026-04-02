@@ -71,7 +71,7 @@ applicable_configs: Dict[str, List[Any]] = {
     #"rl.kl_coef": [0.01],
     "rl.td_weight_schedule.switch_step": [1200],
     "rl.policy_update_interval": [1, 5],
-    "lr_schedule.peak_lr": [5e-5, 5e-6],
+    "lr_schedule.peak_lr": [5e-6, 5e-7],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
