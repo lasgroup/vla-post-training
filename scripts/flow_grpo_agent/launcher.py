@@ -169,8 +169,11 @@ def main() -> None:
         flags.update(combo)
 
         # Keep these in sync with policy_training_start_step
+        num_offline_pretraining_steps = flags["rl.num_offline_pretraining_steps"]
         policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.td_weight_schedule.switch_step"] = (
+            policy_start + num_offline_pretraining_steps
+        )
         flags["rl.critic_pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
