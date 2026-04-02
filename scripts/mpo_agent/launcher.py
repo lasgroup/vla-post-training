@@ -22,9 +22,9 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/awr_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_aw_sft"
-PROJECT_NAME = "awr_agent_sweep"
+SCRIPT = "scripts/mpo_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_mpo_sft"
+PROJECT_NAME = "mpo_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
