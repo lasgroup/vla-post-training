@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_march31
+    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_april2
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -70,8 +70,8 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.normalize_adv": [False, True],
     #"rl.kl_coef": [0.01],
     "rl.td_weight_schedule.switch_step": [1200],
-    "rl.policy_update_interval": [1, 5, 10],
-    "lr_schedule.peak_lr": [5e-5, 1e-5],
+    "rl.policy_update_interval": [1, 5],
+    "lr_schedule.peak_lr": [5e-5, 5e-6],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],

@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_march31
+    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_april2
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -55,7 +55,7 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [1, 10],
+    "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [128],
     "collect.eval_interval": [100],
@@ -70,8 +70,9 @@ applicable_configs: Dict[str, List[Any]] = {
     #"rl.align_critic_sampling": [True],
     "rl.normalize_adv": [False, True],
     "rl.freeze_critic_at_step": [1200],
-    "rl.policy_update_interval": [1, 10],
+    "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
+    "lr_schedule.peak_lr": [5e-5, 5e-6],
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05],
     #"rl.weight_clip": [5.0, 20.0],
@@ -164,6 +165,9 @@ def main() -> None:
             # Halve batch size when SFT anchor is active (extra memory for anchor forward pass).
             if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
                 flags["batch_size"] = flags["batch_size"] // 2
+            
+            if "lr_schedule.peak_lr" in flags:
+                flags["lr_schedule.decay_lr"] = flags["lr_schedule.peak_lr"]
 
             flags.setdefault(
                 "exp_name",
