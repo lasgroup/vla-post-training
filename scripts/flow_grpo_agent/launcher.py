@@ -36,7 +36,7 @@ DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
 # Use 4 envs for sharding
-DEFAULT_TRAIN_ENV_NUM = 4
+DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
@@ -53,14 +53,16 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [128],
     "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
-    "rl.use_mc_returns": [False],
+    "rl.use_mc_returns": [True],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
+    "rl.td_weight_schedule.switch_step": [1_000_000],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [0],
+    "rl.num_offline_pretraining_steps": [0, 1_000],
     "rl.warm_start_critic_update_interval": [1],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
