@@ -49,19 +49,19 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [
-        5, 10
+        5
     ],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [1.0],
+    "rl.online_ratio": [0.5, 1.0],
     "rl.reset_policy_params_to_ema_period": [500],
-    "rl.use_mc_returns": [True],
+    "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.td_weight_schedule.switch_step": [1_000_000],
+    "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [0, 1_000],
+    "rl.num_offline_pretraining_steps": [1_000],
     "rl.warm_start_critic_update_interval": [1],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
