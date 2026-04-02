@@ -64,7 +64,8 @@ class RLAlgorithmConfig:
     buffer_capacity: int = 1024
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
-    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf",)
+    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf"
+                                                "/libero_online_buffer_time_to_success",)
     num_offline_pretraining_steps: int = 0
 
 
