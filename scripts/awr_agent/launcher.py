@@ -49,7 +49,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [
-        5
+        10
     ],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
