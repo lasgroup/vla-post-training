@@ -59,7 +59,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.reset_policy_params_to_ema_period": [500],
     "rl.use_mc_returns": [True],
     "collect.num_initial_rollouts": [5],
-    "lr_schedule.value": [2.5e-5],
+    "lr_schedule.value": [3e-6],
     "rl.td_weight_schedule.switch_step": [1_000_000],
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [0, 1_000],
