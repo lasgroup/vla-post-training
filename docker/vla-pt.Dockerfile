@@ -67,3 +67,10 @@ init_states: /.venv/lib/python3.11/site-packages/libero/libero/./init_files
 datasets: /.venv/lib/python3.11/site-packages/libero/libero/../datasets
 assets: /.venv/lib/python3.11/site-packages/libero/libero/./assets
 EOF
+
+# Download and install LIBERO Pro init/bddl files
+ENV LIBERO_ROOT="$(/.venv/bin/python -c "import libero, pathlib; print(pathlib.Path(libero.__file__).resolve().parent / 'libero')")"
+RUN git clone --depth 1 https://huggingface.co/datasets/zhouxueyang/LIBERO-Pro /tmp/libero_pro
+RUN cp -r /tmp/libero_pro/bddl_files/* "$LIBERO_ROOT/bddl_files/"
+RUN cp -r /tmp/libero_pro/init_files/* "$LIBERO_ROOT/init_files/"
+RUN rm -rf /tmp/libero_pro

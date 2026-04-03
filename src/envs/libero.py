@@ -13,11 +13,11 @@ from src.envs.wrappers import (
 )
 
 
-def get_task_init_states(task_suite, task_id: int):
+def get_task_init_states(init_root: str = None, problem_folder: str = None, init_states_file: str = None):
     init_states_path = os.path.join(
-        get_libero_path("init_states"),
-        task_suite.tasks[task_id].problem_folder,
-        task_suite.tasks[task_id].init_states_file,
+        init_root,
+        problem_folder,
+        init_states_file,
     )
     torch.serialization.add_safe_globals(
         [
@@ -27,7 +27,7 @@ def get_task_init_states(task_suite, task_id: int):
             np.dtypes.Float64DType,
         ]
     )
-    init_states = torch.load(init_states_path)
+    init_states = torch.load(init_states_path, weights_only=False)
     return init_states
 
 
@@ -45,13 +45,18 @@ def make_env_libero(config, tasks, num_devices: int = 4):
     task_descriptions = []
 
     for task in tasks:
+        perturbation = ""
+        if task.endswith("_swap") or task.endswith("_object") or task.endswith("_position"):
+            perturbation = "_" + task.split("_")[-1]
+            task = "_".join(task.split("_")[:-1])
         task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task.split("_")[-1])
         task_suite = benchmark_dict[task_suite_name]()
         task = task_suite.get_task(task_id)
+        problem_folder = task_suite_name + perturbation
         task_bddl_file = (
             pathlib.Path(get_libero_path("bddl_files"))
-            / task.problem_folder
+            / problem_folder
             / task.bddl_file
         )
         env_args_multitask.append({
@@ -60,7 +65,13 @@ def make_env_libero(config, tasks, num_devices: int = 4):
             "camera_widths": config.collect.env_resolution,
         })
         max_steps_multitask.append(get_max_steps_libero(task_suite_name))
-        initial_states_multitask.append(get_task_init_states(task_suite, task_id))
+        initial_states_multitask.append(
+            get_task_init_states(
+                get_libero_path("init_states"),
+                problem_folder,
+                task_suite.tasks[task_id].init_states_file
+            )
+        )
         task_descriptions.append(task.language)
 
     def env_fn(rank: int):
