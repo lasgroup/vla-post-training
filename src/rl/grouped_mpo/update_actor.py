@@ -241,24 +241,11 @@ def train_step(
                 anchor_rng, _anchor_obs, _anchor_actions, train=True,
             ))
 
-        # KL penalty against EMA reference policy.
-        kl_loss = jnp.asarray(0.0, dtype=grouped_loss.dtype)
-        if kl_coef > 0.0 and rollout_info is not None and reference_log_probs is not None:
-            policy_log_probs = _compute_rollout_log_probs(
-                model=model,
-                policy_observation=policy_observation,
-                rollout_info=rollout_info,
-                num_steps=num_steps,
-                noise_level=noise_level,
-            )
-            kl_loss = jnp.mean(policy_log_probs - reference_log_probs)
-
-        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss + kl_coef * kl_loss
+        loss = (1.0 - sft_anchor_coef) * grouped_loss + sft_anchor_coef * anchor_loss
 
         info = {
             "grouped_loss": grouped_loss,
             "anchor_loss": anchor_loss,
-            "kl_loss": kl_loss,
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
             "advantage_mean": jnp.mean(advantage),
@@ -283,7 +270,32 @@ def train_step(
         score,
     )
 
-    aux_data = aux_data | {"loss": loss}
+    # KL penalty: computed in a SEPARATE gradient tape to avoid OOM.
+    # The main tape holds compute_loss activations; this tape holds log-prob activations.
+    # They run sequentially so peak memory = max(tape1, tape2), not tape1 + tape2.
+    kl_loss_val = jnp.asarray(0.0)
+    if kl_coef > 0.0 and rollout_info is not None and reference_log_probs is not None:
+        def kl_loss_fn(model, policy_observation, rollout_info, reference_log_probs):
+            policy_log_probs = _compute_rollout_log_probs(
+                model=model,
+                policy_observation=policy_observation,
+                rollout_info=rollout_info,
+                num_steps=num_steps,
+                noise_level=noise_level,
+            )
+            kl = jnp.mean(policy_log_probs - reference_log_probs)
+            return kl_coef * kl, {"kl_loss": kl}
+
+        kl_diff_state = nnx.DiffState(0, config.trainable_filter)
+        (kl_loss_val, kl_aux), kl_grads = nnx.value_and_grad(
+            kl_loss_fn, has_aux=True, argnums=kl_diff_state,
+        )(policy, expanded_policy_obs, rollout_info, reference_log_probs)
+
+        grads = jax.tree.map(lambda g, k: g + k, grads, kl_grads)
+        aux_data = aux_data | kl_aux
+
+    loss = loss + kl_loss_val
+    aux_data = aux_data | {"loss": loss, "kl_loss": kl_loss_val}
 
     # Global advantage gating: zero out gradients when advantage_std is too low.
     # Guard with Python-level check to avoid tracing both cond branches over the

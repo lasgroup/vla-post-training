@@ -84,7 +84,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.freeze_critic_at_step": [1200],
     "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
-    "lr_schedule.peak_lr": [5e-6, 3e-5],
+    "lr_schedule.peak_lr": [5e-7, 5e-6, 3e-5],
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05],
     #"rl.weight_clip": [5.0, 20.0],
@@ -175,8 +175,8 @@ def main() -> None:
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
 
-            # Halve batch size when SFT anchor is active (extra memory for anchor forward pass).
-            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
+            # Halve batch size when SFT anchor or KL is active (extra forward pass in tape).
+            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0 or flags.get("rl.kl_coef", 0.0) > 0.0:
                 flags["batch_size"] = flags["batch_size"] // 2
             
             # Tie decay_lr to peak_lr:
