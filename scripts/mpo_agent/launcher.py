@@ -54,7 +54,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
