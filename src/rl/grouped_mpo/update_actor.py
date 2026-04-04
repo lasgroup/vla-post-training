@@ -54,6 +54,7 @@ def train_step(
     min_advantage_std = config.rl.min_advantage_std
     use_buffer_actions_for_loss = config.rl.use_buffer_actions_for_loss
     kl_coef = config.rl.kl_coef
+    use_linear_group_norm = config.rl.use_linear_group_norm
 
     def expand_and_flatten(x):
         return jnp.repeat(x, repeats=group_size, axis=0)
@@ -141,23 +142,35 @@ def train_step(
         # Compute raw group std BEFORE normalization for diversity check.
         raw_group_std = jnp.std(advantage.reshape(base_batch_size, group_size), axis=-1, keepdims=True)
 
-        if normalize_adv:
-            advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
-        score = advantage.reshape(base_batch_size, group_size) / beta
-        if weight_clip is not None:
-            score = jnp.minimum(score, weight_clip)
-        score = jnp.exp(score)
-        # Normalize within each group so weights sum to 1 per state.
-        # This makes the gradient depend on relative ranking within each group,
-        # not on absolute advantage scale per state.
-        score = score / jnp.maximum(jnp.sum(score, axis=-1, keepdims=True), 1e-8)
+        if use_linear_group_norm:
+            # Linear per-group z-score normalization (GRPO-style).
+            # Bounded weights, no exponential amplification of noisy advantages.
+            adv_grouped = advantage.reshape(base_batch_size, group_size)
+            group_mean = jnp.mean(adv_grouped, axis=-1, keepdims=True)
+            group_std = jnp.std(adv_grouped, axis=-1, keepdims=True)
+            score = (adv_grouped - group_mean) / jnp.maximum(group_std, 1e-6)
 
-        # Drop low-diversity groups: replace with uniform weights when
-        # the within-group RAW advantage std is below the threshold.
-        if config.rl.drop_low_diversity_groups:
-            low_div = raw_group_std < config.rl.diversity_threshold
-            uniform = jnp.ones_like(score) / group_size
-            score = jnp.where(low_div, uniform, score)
+            if weight_clip is not None:
+                score = jnp.clip(score, -weight_clip, weight_clip)
+
+            if config.rl.drop_low_diversity_groups:
+                low_div = raw_group_std < config.rl.diversity_threshold
+                score = jnp.where(low_div, 0.0, score)
+        else:
+            # Original exp-softmax normalization.
+            if normalize_adv:
+                advantage = (advantage - jnp.mean(advantage)) / (jnp.std(advantage) + 1e-6)
+            score = advantage.reshape(base_batch_size, group_size) / beta
+            if weight_clip is not None:
+                score = jnp.minimum(score, weight_clip)
+            score = jnp.exp(score)
+            # Normalize within each group so weights sum to 1 per state.
+            score = score / jnp.maximum(jnp.sum(score, axis=-1, keepdims=True), 1e-8)
+
+            if config.rl.drop_low_diversity_groups:
+                low_div = raw_group_std < config.rl.diversity_threshold
+                uniform = jnp.ones_like(score) / group_size
+                score = jnp.where(low_div, uniform, score)
 
         score_stats = score
         score = jax.lax.stop_gradient(score[..., jnp.newaxis])

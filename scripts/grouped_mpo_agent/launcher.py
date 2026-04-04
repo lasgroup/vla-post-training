@@ -81,7 +81,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.drop_low_diversity_groups": [True],
     #"rl.align_critic_sampling": [True],
     "rl.normalize_adv": [False, True],
-    "rl.freeze_critic_at_step": [1200],
+    "rl.freeze_critic_at_step": [1200, None],
     "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
     "lr_schedule.peak_lr": [5e-7, 5e-6, 3e-5],
@@ -90,6 +90,7 @@ applicable_configs: Dict[str, List[Any]] = {
     #"rl.weight_clip": [5.0, 20.0],
     #"rl.use_buffer_actions_for_loss": [False, True],
     "rl.kl_coef": [0.0, 0.01],
+    "rl.use_linear_group_norm": [False, True],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],
 }
