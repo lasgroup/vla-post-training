@@ -2,7 +2,7 @@
 """Launcher for grouped-MPO experiments
 
 Usage:
-    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_april3
+    ./scripts/grouped_mpo_agent/launcher.py --project_name vla_debug_april5
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/grouped_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -72,7 +72,7 @@ applicable_configs: Dict[str, List[Any]] = {
     "batch_size": [128],
     "collect.eval_interval": [100],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [0.5, 1.0], 
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [1200],
     #"rl.save_all_episodes": [False, True],
@@ -80,16 +80,16 @@ applicable_configs: Dict[str, List[Any]] = {
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
     #"rl.align_critic_sampling": [True],
-    "rl.normalize_adv": [False, True],
-    "rl.freeze_critic_at_step": [1200, None],
+    "rl.normalize_adv": [False, True], # 8
+    "rl.freeze_critic_at_step": [1200, None], # 16
     "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
-    "lr_schedule.peak_lr": [5e-7, 5e-6, 3e-5],
+    "lr_schedule.peak_lr": [1e-7, 3e-5], # 32
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05],
     #"rl.weight_clip": [5.0, 20.0],
     #"rl.use_buffer_actions_for_loss": [False, True],
-    "rl.kl_coef": [0.0, 0.01],
+    #"rl.kl_coef": [0.0, 0.1], 
     "rl.use_linear_group_norm": [False, True],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],

@@ -2,7 +2,7 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_april3
+    ./scripts/flow_grpo_agent/launcher.py --project_name vla_debug_april5
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -68,17 +68,17 @@ applicable_configs: Dict[str, List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "collect.eval_interval": [100],
     "rl.normalize_adv": [True],
-    "rl.kl_coef": [0.01, 0.05],
+    "rl.kl_coef": [0.05],
     "rl.td_weight_schedule.switch_step": [1200],
     "rl.policy_update_interval": [1],
     "lr_schedule.peak_lr": [5e-7, 1e-6],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
-    "rl.use_deterministic_anchor": [False],
-    "rl.drop_low_diversity_groups": [False],
-    "rl.align_critic_sampling": [False],
+    "rl.use_deterministic_anchor": [True],
+    "rl.drop_low_diversity_groups": [True],
+    "rl.align_critic_sampling": [True],
     "rl.freeze_critic_at_step": [None],
-    "rl.sft_anchor_coef": [0.0],
+    "rl.sft_anchor_coef": [0.5],
     "collect.collect_interval": [300],
     "rl.noise_level": [0.5, 0.7],
     "rl.min_advantage_std": [0.0],

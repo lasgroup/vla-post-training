@@ -5,7 +5,7 @@ Flow-MPO = Flow GRPO with group_size=1 and use_mpo_advantage_weight=True.
 avoiding grouped sampling Q-function, instead using mpo adcantage weighting with flow log-prob loss.
 
 Usage:
-    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_march31
+    ./scripts/flow_mpo_agent/launcher.py --project_name vla_debug_april4
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --dry
     ./scripts/flow_mpo_agent/launcher.py --project_name my_project --mode local
 """
@@ -50,7 +50,7 @@ DEFAULT_GROUP_SIZE = 1
 DEFAULT_NUM_STEPS = 5
 DEFAULT_NOISE_LEVEL = 0.05
 DEFAULT_KL_COEF = 0.0
-DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
+DEFAULT_TD_WEIGHT_SWITCH_STEP = 1200
 DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 TASK_SWEEP: List[Dict[str, Any]] = [
     {
@@ -63,24 +63,28 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [1, 10],
+    "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [64],
     "collect.eval_interval": [100],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [0.5, 1.0],
     "collect.num_initial_rollouts": [10],
-    "rl.noise_level": [0.1],
+    "rl.noise_level": [0.3],
     #"rl.kl_coef": [0.01],
     "rl.align_critic_sampling": [True],
     "rl.normalize_adv": [False, True],
     "rl.use_mc_returns": [False],
-    "rl.beta": [0.05, 0.2],
+    "rl.beta": [0.05],
+    #"rl.beta": [0.05, 0.2],
     #"rl.save_all_episodes": [False, True],
     #"rl.freeze_critic_at_step": [1200],
     "collect.collect_interval": [300],
     "rl.sft_anchor_coef": [0.0],
-    "rl.min_advantage_std": [0.01],
+    "rl.min_advantage_std": [0.05],
+    "rl.kl_coef": [0.0, 0.05],
+    "lr_schedule.peak_lr": [1e-6, 1e-7],
+    "rl.policy_update_interval": [1],
     #"rl.weight_clip": [5.0, 20.0],
     #"rl.use_buffer_actions_for_loss": [False, True],
     "rl.reset_policy_params_to_ema_period": [100],
@@ -182,6 +186,14 @@ def main() -> None:
             flags["rl.td_weight_schedule.switch_step"] = args.td_weight_switch_step
             flags["rl.td_weight_schedule.ramp_steps"] = args.td_weight_ramp_steps
             flags["rl.critic_pre_training_steps"] = policy_start
+
+            if "lr_schedule.peak_lr" in flags:
+                plr = flags["lr_schedule.peak_lr"]
+                if plr == 1e-6:
+                    flags["lr_schedule.decay_lr"] = 1e-8
+                    flags["lr_schedule.decay_steps"] = 500
+                else:
+                    flags["lr_schedule.decay_lr"] = plr
 
             # Halve batch size when SFT anchor is active (extra memory for anchor forward pass).
             if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
