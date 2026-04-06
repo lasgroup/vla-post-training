@@ -64,6 +64,9 @@ TASK_SWEEP: List[Dict[str, Any]] = [
     },
 ]
 
+# Controlled comparison: start from the known-working config (Task 59,
+# softmax, lr=5e-6, normalize_adv=True, freeze=1200, kl=0).
+# Only vary: linear_group_norm, freeze_critic, and lr.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
@@ -72,24 +75,20 @@ applicable_configs: Dict[str, List[Any]] = {
     "batch_size": [128],
     "collect.eval_interval": [100],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0], 
+    "rl.online_ratio": [0.5],
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [1200],
-    #"rl.save_all_episodes": [False, True],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
-    #"rl.align_critic_sampling": [True],
-    "rl.normalize_adv": [False, True], # 8
-    "rl.freeze_critic_at_step": [1200, None], # 16
+    "rl.normalize_adv": [True],
+    "rl.freeze_critic_at_step": [1200, None],
     "rl.policy_update_interval": [1],
     "collect.collect_interval": [300],
-    "lr_schedule.peak_lr": [1e-7, 3e-5], # 32
+    "lr_schedule.peak_lr": [1e-6, 5e-6],
     "rl.sft_anchor_coef": [0.0],
     "rl.min_advantage_std": [0.05],
-    #"rl.weight_clip": [5.0, 20.0],
-    #"rl.use_buffer_actions_for_loss": [False, True],
-    #"rl.kl_coef": [0.0, 0.1], 
+    "rl.kl_coef": [0.0],
     "rl.use_linear_group_norm": [False, True],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],

@@ -33,7 +33,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 128
+DEFAULT_BATCH_SIZE = 64
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59x1"]
 DEFAULT_EVAL_TASKS = ["libero_90_59x4"]
@@ -44,7 +44,7 @@ NUM_TRAIN_STEPS = 5_000
 DEFAULT_GROUP_SIZE = 8
 DEFAULT_NUM_STEPS = 5
 DEFAULT_NORMALIZE_ADV = True
-DEFAULT_KL_COEF = 0.01
+DEFAULT_KL_COEF = 0.0
 DEFAULT_TD_WEIGHT_SWITCH_STEP = 900
 DEFAULT_TD_WEIGHT_RAMP_STEPS = 300
 TASK_SWEEP: List[Dict[str, Any]] = [
@@ -55,33 +55,34 @@ TASK_SWEEP: List[Dict[str, Any]] = [
 ]
 
 # ---------- Hyperparameter grid ----------
-# Keys can be any `_config.cli()` override.
-# If this dict is empty, one run is launched with config defaults.
+# One-at-a-time sweep from the known-best config (seed1, lr=5e-6,
+# kl=0, min_adv_std=0.05, noise=0.3, online_ratio=1.0, Task 59).
+# Each swept axis tests exactly ONE change from the working baseline.
 applicable_configs: Dict[str, List[Any]] = {
     "seed": [0, 1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [128],
+    "batch_size": [64],
     "rl.policy_training_start_step": [900],
-    "rl.online_ratio": [0.5, 1.0],
+    "rl.online_ratio": [1.0],
     "collect.num_initial_rollouts": [10],
     "collect.eval_interval": [100],
     "rl.normalize_adv": [True],
-    "rl.kl_coef": [0.05],
+    "rl.kl_coef": [0.0, 0.005],
     "rl.td_weight_schedule.switch_step": [1200],
     "rl.policy_update_interval": [1],
-    "lr_schedule.peak_lr": [5e-7, 1e-6],
+    "lr_schedule.peak_lr": [1e-6, 5e-6],
     "rl.save_all_episodes": [False],
     "rl.policy_only_successful": [False],
     "rl.use_deterministic_anchor": [True],
     "rl.drop_low_diversity_groups": [True],
-    "rl.align_critic_sampling": [True],
+    "rl.align_critic_sampling": [False],
     "rl.freeze_critic_at_step": [None],
-    "rl.sft_anchor_coef": [0.5],
+    "rl.sft_anchor_coef": [0.0],
     "collect.collect_interval": [300],
-    "rl.noise_level": [0.5, 0.7],
-    "rl.min_advantage_std": [0.0],
+    "rl.noise_level": [0.3, 0.5],
+    "rl.min_advantage_std": [0.05],
     "rl.reset_policy_params_to_ema_period": [100],
     "rl.reset_optimizer_on_ema_reset": [True],
 }
@@ -189,8 +190,10 @@ def main() -> None:
             if "lr_schedule.peak_lr" in flags:
                 flags["lr_schedule.decay_lr"] = flags["lr_schedule.peak_lr"]
 
-            # Halve batch size when SFT anchor or KL is active (extra forward passes).
-            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0 or flags.get("rl.kl_coef", 0.0) > 0.0:
+            # Halve batch size when SFT anchor is active (extra compute_loss inside tape).
+            # KL does NOT need halving: reference log-probs are outside the gradient
+            # tape, and policy log-probs are already computed for the flow loss.
+            if flags.get("rl.sft_anchor_coef", 0.0) > 0.0:
                 flags["batch_size"] = flags["batch_size"] // 2
 
             flags.setdefault(
