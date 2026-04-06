@@ -203,8 +203,8 @@ class CollectionConfig:
             "help": (
                 "Task(s) to collect. Can be a single string (e.g., 'libero_90_59') or a list. "
                 "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). After expansion, the number of tasks must divide env_num evenly; "
-                "tasks are then repeated to fill all env_num environments."
+                "or 'libero_90_22-56x4'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
+                "or 'libero_position' to specify perturbations."
             )
         },
     )
@@ -214,8 +214,8 @@ class CollectionConfig:
             "help": (
                 "Task(s) to evaluate. Can be a single string (e.g., 'libero_90_59') or a list. "
                 "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). After expansion, the number of eval tasks must divide eval_env_num "
-                "evenly; tasks are then repeated to fill all eval_env_num environments."
+                "or 'libero_90_22-56x4'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
+                "or 'libero_position' to specify perturbations."
             )
         },
     )

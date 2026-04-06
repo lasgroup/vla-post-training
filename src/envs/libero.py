@@ -46,9 +46,9 @@ def make_env_libero(config, tasks, num_devices: int = 4):
 
     for task in tasks:
         perturbation = ""
-        if task.endswith("_swap") or task.endswith("_object") or task.endswith("_position"):
-            perturbation = "_" + task.split("_")[-1]
-            task = "_".join(task.split("_")[:-1])
+        if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
+            perturbation = "_" + task.split("_")[1]
+            task = task.replace(perturbation, "")
         task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task.split("_")[-1])
         task_suite = benchmark_dict[task_suite_name]()
