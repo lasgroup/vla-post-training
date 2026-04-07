@@ -17,6 +17,47 @@ import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
 from src.rl.networks.rl_networks import ObsType
 
+# calc. log-probs of a previous trajectory under new model
+def _compute_rollout_log_probs(
+    *,
+    model: _model.BaseModel,
+    policy_observation: _model.Observation,
+    rollout_info: dict[str, at.Array],
+    num_steps: int,
+    noise_level: float,
+) -> at.Array:
+    rollout_x = jax.lax.stop_gradient(rollout_info["x"])
+    rollout_x_next = jax.lax.stop_gradient(rollout_info["x_next"])
+    rollout_time = jax.lax.stop_gradient(rollout_info["time"])
+    dt = jnp.asarray(-1.0 / max(num_steps, 1), dtype=rollout_x.dtype)
+
+    def step_log_prob(
+        x_t: at.Array,
+        x_next: at.Array,
+        time: at.Array,
+    ) -> at.Array:
+        time = jnp.broadcast_to(
+            jnp.asarray(time, dtype=rollout_x.dtype), (x_t.shape[0],)
+        )
+        log_prob, _ = model.get_dist_and_log_prob(
+            x_t=x_t,
+            sample=x_next,
+            time=time,
+            observation=policy_observation,
+            dt=dt,
+            noise_level=noise_level,
+        )
+        return log_prob
+
+    policy_log_probs = jax.vmap(step_log_prob, in_axes=(0, 0, 0))(
+        rollout_x,
+        rollout_x_next,
+        rollout_time,
+    )
+
+    # [num_steps, batch, horizon] -> [batch, horizon, num_steps]
+    return jnp.moveaxis(policy_log_probs, 0, -1)
+    
 
 @at.typecheck
 def train_step(
@@ -29,10 +70,33 @@ def train_step(
     mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    policy_observation, critic_observation, _ = batch
+    policy_observation, critic_observation, actions = batch
 
+    reset_period = config.rl.reset_policy_params_to_ema_period
+    group_size = config.rl.group_size
+    normalize_adv = config.rl.normalize_adv
+    use_mpo_advantage_weight = config.rl.use_mpo_advantage_weight
+    weight_clip = config.rl.weight_clip
+    beta = max(config.rl.beta, 1e-6)
+    num_steps = config.rl.num_steps
+    noise_level = config.rl.noise_level
+    use_ema_for_sampling = config.rl.use_ema_for_sampling
+    clip_epsilon = config.rl.clip_epsilon # this is for ratio clipping 
+
+    if use_mpo_advantage_weight:
+        group_size = 1
+
+    # build two models one for sampling, one ema
+    # current policy for gradient computatioms
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()
+    # use ema one if it is enabled with a flag and fall back to current one if not avlb
+    if use_ema_for_sampling and policy_state.ema_params is not None:
+        sampling_model = nnx.merge(policy_state.model_def, policy_state.ema_params)
+        sampling_model.eval()
+    else:
+        sampling_model = nnx.merge(policy_state.model_def, policy_state.params)
+        sampling_model.eval()
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -40,13 +104,76 @@ def train_step(
     value_critic = create_critic(value_state, config)
     value_critic.eval()
 
-    assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    reset_period = config.rl.reset_policy_params_to_ema_period
-    group_size = config.rl.group_size
-    normalize_adv = config.rl.normalize_adv
-    num_steps = config.rl.num_steps
-    noise_level = config.rl.noise_level
-    critic_reduction = config.rl.critic_reduction
+    # define batch extension out of loss function
+    def expand_and_flatten(x):
+        return jnp.repeat(x, repeats=group_size, axis=0)
+
+    expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
+    expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
+
+    train_rng = jax.random.fold_in(rng, policy_state.step)
+    step_rng, noise_rng = jax.random.split(train_rng)
+
+    # sample actions from ema
+    noise = jax.random.normal(
+        noise_rng,
+        (
+            expanded_policy_obs.state.shape[0],
+            sampling_model.action_horizon,
+            sampling_model.action_dim,
+        ),
+    )
+    sampled_actions, rollout_info = sampling_model.sample_actions(
+        rng=step_rng,
+        observation=expanded_policy_obs,
+        noise=noise,
+        num_steps=num_steps,
+        noise_level=noise_level,
+        return_info_dict=True,
+    )
+
+    # log-probs under ema/old policy (shape [B*G, action_horizon, num_steps])
+    old_log_probs = jnp.moveaxis(rollout_info["log_prob"], 0, -1)
+    old_log_probs = jax.lax.stop_gradient(old_log_probs)
+
+    # fix trajectory so the current policy is evaluated correctly
+    rollout_info = jax.tree.map(jax.lax.stop_gradient, rollout_info)
+
+    value = summarize_critic_values(
+        value_critic(expanded_critic_obs),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    q_value = summarize_critic_values(
+        state_action_critic(expanded_critic_obs, flatten_action_horizon(sampled_actions)),
+        critic_reduction=config.rl.critic_reduction,
+    )
+    advantage = q_value - value
+
+    # calvulate scores
+    if use_mpo_advantage_weight:
+        score = advantage / beta
+        score = jnp.minimum(score, weight_clip)
+        score = jax.nn.softmax(score, axis=0)
+        score = jax.lax.stop_gradient(score)
+    else:
+        adv = advantage
+        if normalize_adv and group_size > 1:
+            total_batch_size = adv.shape[0]
+            assert (
+                total_batch_size % group_size == 0
+            ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
+            B = total_batch_size // group_size
+            adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
+            old_log_probs = jnp.swapaxes(old_log_probs.reshape(B, group_size, -1), 1, 2)
+            group_mean = jnp.mean(adv, axis=-1, keepdims=True)
+            group_std = jnp.std(adv, axis=-1, keepdims=True)
+            adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
+        #if weight_clip is not None:
+        #    adv = jnp.clip(adv, -weight_clip, weight_clip)
+        score = jax.lax.stop_gradient(adv)
+
+    if score.ndim == 1:
+        score = score[:, jnp.newaxis, jnp.newaxis]
 
     @at.typecheck
     def loss_fn(
@@ -57,78 +184,41 @@ def train_step(
         state_action_critic: nnx.Module,
         value_critic: nnx.Module,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        step_rng, noise_rng = jax.random.split(rng)
-
-        def expand_and_flatten(x):
-            return jnp.repeat(x, repeats=group_size, axis=0)
-
-        # Repeat action G times to get a group evaluation, [B * G, ...]
-        expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
-        expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
-
-        # Sample noise vector x_1, [B * G, T, dim_A]
-        noise = jax.random.normal(
-            noise_rng,
-            (
-                expanded_policy_obs.state.shape[0],
-                model.action_horizon,
-                model.action_dim,
-            ),
-        )
-        # Sample actions for expanded states [B * G, dim_A]
-        actions, outs = model.sample_actions(
-            rng=step_rng,
-            observation=expanded_policy_obs,
-            noise=noise,
+         # evaluate current policy log-probs on the previously ema-trajectory.
+        current_log_probs = _compute_rollout_log_probs(
+            model=model,
+            policy_observation=expanded_policy_obs,
+            rollout_info=rollout_info,
             num_steps=num_steps,
             noise_level=noise_level,
-            return_info_dict=True,
         )
 
-        # Stack log-prob of per step generation [B * G, ..., T].
-        log_probs = jnp.moveaxis(outs["log_prob"], 0, -1)
+        if normalize_adv and group_size > 1 and not use_mpo_advantage_weight:
+            B = current_log_probs.shape[0] // group_size
+            current_log_probs = jnp.swapaxes(
+                current_log_probs.reshape(B, group_size, -1), 1, 2
+            )
 
-        # 2. Compute the advantage weights
-        value = summarize_critic_values(
-            value_critic(expanded_critic_obs),
-            critic_reduction=critic_reduction,
-        )
-        q_value = summarize_critic_values(
-            state_action_critic(expanded_critic_obs, flatten_action_horizon(actions)),
-            critic_reduction=critic_reduction,
-        )
-        adv = q_value - value
-        if normalize_adv and group_size > 1:
-            total_batch_size = adv.shape[0]
-            assert (
-                total_batch_size % group_size == 0
-            ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={group_size}"
-            B = total_batch_size // group_size
-            # 4. Reshape back to (B, G) for Group Relative calculations
-            # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
-            # Get groups per sample in the batch and set the group to be the last dimension.
-            # NOTE: jnp.transpose requires a full permutation for all dimensions;
-            # swapaxes is the intended "swap last two dims" operation.
-            adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-            log_probs = jnp.swapaxes(log_probs.reshape(B, group_size, -1), 1, 2)
-            group_mean = jnp.mean(adv, axis=-1, keepdims=True)
-            group_std = jnp.std(adv, axis=-1, keepdims=True)
-            adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
-        # if weight_clip is not None:
-        # adv = jnp.clip(adv, -weight_clip, weight_clip)
-        score = jax.lax.stop_gradient(adv)
+        # r_t(theta) = pi_theta / pi_theta_old  -> logr_t = log_pi_theta - log_pi_theta_old
+        log_ratio = current_log_probs - old_log_probs
+        ratio = jnp.exp(log_ratio) # ratio = exp(logr) = r
 
-        # Expand score (B*G,) to (B*G, 1, 1) to broadcast with log_probs (B*G, action_horizon, num_steps)
-        if score.ndim == 1:
-            score = score[:, jnp.newaxis, jnp.newaxis]
-
-        loss = -jnp.mean(score * log_probs)
+        # clip it with epsilon min(r * A, clip(r, 1-eps, 1+eps) * A)
+        clipped_ratio = jnp.clip(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
+        surr1 = ratio * score
+        surr2 = clipped_ratio * score
+        loss = -jnp.mean(jnp.minimum(surr1, surr2))
 
         info = {
             "loss": loss,
             "q_mean": jnp.mean(q_value),
             "score_mean": jnp.mean(score),
-            "log_prob_mean": jnp.mean(log_probs),
+            "log_prob_mean": jnp.mean(current_log_probs),
+            "old_log_prob_mean": jnp.mean(old_log_probs),
+            "ratio_mean": jnp.mean(ratio),
+            "ratio_clipped_frac": jnp.mean(
+                (ratio < 1.0 - clip_epsilon) | (ratio > 1.0 + clip_epsilon)
+            ),
         }
 
         return loss, info
