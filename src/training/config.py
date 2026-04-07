@@ -192,6 +192,9 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     sft_anchor_coef: float = 0.0
     min_advantage_std: float = 0.0
     use_buffer_actions_for_loss: bool = False
+    # Paper Eq.5: sample rollouts from EMA (old) policy and use clipped ratio.
+    use_ema_for_sampling: bool = False
+    clip_epsilon: float = 0.2
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
