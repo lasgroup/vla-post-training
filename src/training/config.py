@@ -139,6 +139,8 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    use_ema_for_sampling: bool = False
+    clip_epsilon: float = 0.2
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
