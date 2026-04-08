@@ -1,5 +1,6 @@
 import datetime as dt
 import itertools
+import logging
 import os
 import secrets
 import shlex
@@ -101,6 +102,41 @@ def flags_to_cli_tokens(flags: Optional[Dict[str, Any]]) -> List[str]:
     return tokens
 
 
+def apply_requeue_flags(flags: Dict[str, Any], *, enabled: bool) -> Dict[str, Any]:
+    updated = dict(flags)
+    if enabled:
+        overrides = {}
+        desired_values = {
+            "resume": True,
+            "overwrite": False,
+            "requeue": True,
+        }
+        for key, value in desired_values.items():
+            if updated.get(key) != value:
+                overrides[key] = (updated.get(key), value)
+            updated[key] = value
+        if overrides:
+            logging.warning(
+                "Requeue enabled: overriding flags for resumable execution: %s",
+                ", ".join(f"{key}={old!r}->{new!r}" for key, (old, new) in overrides.items()),
+            )
+    return updated
+
+
+def validate_unique_exp_names(flags_list: List[Dict[str, Any]]) -> None:
+    seen: dict[str, int] = {}
+    for idx, flags in enumerate(flags_list):
+        exp_name = flags.get("exp_name")
+        if not exp_name:
+            raise ValueError("Requeue-enabled runs require every job to have an exp_name.")
+        if exp_name in seen:
+            raise ValueError(
+                "Requeue-enabled sweeps require unique exp_name values, "
+                f"but jobs {seen[exp_name]} and {idx} both use '{exp_name}'."
+            )
+        seen[exp_name] = idx
+
+
 def generate_run_commands(
     command_list: List[str],
     num_tasks: int = 1,
@@ -114,6 +150,7 @@ def generate_run_commands(
     dry: bool = False,
     prompt: bool = True,
     log_dir: str = DEFAULT_LOG_DIR,
+    requeue: bool = False,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -134,6 +171,8 @@ def generate_run_commands(
             os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
+        if requeue:
+            bsub_cmd += "--requeue "
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "

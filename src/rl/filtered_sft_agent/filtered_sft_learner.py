@@ -39,6 +39,10 @@ from src.envs.wrappers import (
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.training.runtime_state import (
+    load_resume_state,
+    restore_train_state,
+)
 
 
 def filtered_sft_wrap_env(
@@ -230,6 +234,21 @@ class FilteredSFTLearner(Agent):
                 resume=self._config.resume,
             )
         )
+        self._resume_state = None
+        if self._config.resume and bool(getattr(self._config, "requeue", False)):
+            self._resume_state = load_resume_state(self._config)
+            if self._resume_state is not None:
+                if not self._resuming:
+                    raise ValueError(
+                        "Found resumable runtime state, but checkpoint manager did not enter resume mode."
+                    )
+                logging.info(
+                    "Found resumable state for %s at step %d (replay snapshot=%s, replay transitions=%d)",
+                    self._config.checkpoint_dir,
+                    self._resume_state.step,
+                    self._resume_state.replay_snapshot_path,
+                    self._resume_state.replay_size,
+                )
 
         # initialize data loader
         assert (
@@ -247,6 +266,16 @@ class FilteredSFTLearner(Agent):
         )
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer()
+        if self._resume_state is not None:
+            restored_replay = self._online_data_buffer.restore_snapshot(
+                self._resume_state.replay_snapshot_path
+            )
+            logging.info(
+                "Restored replay buffer from %s (step=%d, transitions=%d)",
+                restored_replay["path"],
+                restored_replay["step"],
+                restored_replay["size"],
+            )
         self._collection_success_episodes = 0
 
         # Initialize train state.
@@ -258,9 +287,24 @@ class FilteredSFTLearner(Agent):
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
         if self._resuming:
-            self._train_state = _checkpoints.restore_state(
-                self._checkpoint_manager, self._train_state, self._data_loader
+            self._train_state = restore_train_state(
+                _checkpoints.restore_state,
+                self._checkpoint_manager,
+                self._train_state,
+                self._data_loader,
+                resume_state=self._resume_state,
             )
+            if self._resume_state is not None:
+                logging.info(
+                    "Restored training checkpoint from %s at committed step %d",
+                    self._config.checkpoint_dir,
+                    self._resume_state.step,
+                )
+                self.training_steps = int(self._resume_state.step)
+            else:
+                self.training_steps = int(jax.device_get(self._train_state.step))
+        else:
+            self.training_steps = 0
 
         # prepare train_step
         self._train_step = jax.jit(
@@ -383,6 +427,13 @@ class FilteredSFTLearner(Agent):
             self._config.rl.buffer_capacity,
         )
 
+        load_paths = None if self._resume_state is not None else self._config.rl.buffer_load_paths
+        if self._resume_state is not None and self._config.rl.buffer_load_paths:
+            logging.info(
+                "Skipping rl.buffer_load_paths because replay snapshot resume is active for %s",
+                self._config.checkpoint_dir,
+            )
+
         return ShardedReplayBuffer(
             dummy_data=dummy_data,
             max_capacity=self._config.rl.buffer_capacity,
@@ -391,7 +442,7 @@ class FilteredSFTLearner(Agent):
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
-            load_paths=self._config.rl.buffer_load_paths,
+            load_paths=load_paths,
             save_path=self._config.rl.buffer_save_path,
         )
 

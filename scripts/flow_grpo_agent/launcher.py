@@ -16,10 +16,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
     DEFAULT_LOG_DIR,
+    apply_requeue_flags,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
     generate_srun_command,
+    validate_unique_exp_names,
 )
 
 SCRIPT = "scripts/flow_grpo_agent/exp.py"
@@ -101,6 +103,7 @@ def main() -> None:
     parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
     parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
+    parser.add_argument("--requeue", action="store_true", help="Submit requeue-safe resumable jobs")
 
     args = parser.parse_args()
 
@@ -131,6 +134,7 @@ def main() -> None:
             "rl.normalize_adv": bool(args.normalize_adv),
         }
         flags.update(combo)
+        flags = apply_requeue_flags(flags, enabled=args.requeue)
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
@@ -138,17 +142,24 @@ def main() -> None:
         flags["rl.critic_pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
+        command_list.append(flags)
 
-        cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
-        command_list.append(cmd)
+    if args.requeue:
+        validate_unique_exp_names(command_list)
+
+    rendered_commands = [
+        generate_srun_command(SCRIPT, args.config_name, flags=flags)
+        for flags in command_list
+    ]
 
     generate_run_commands(
-        command_list,
+        rendered_commands,
         mode=args.mode,
         duration=args.duration,
         partition=args.partition,
         dry=args.dry,
         log_dir=args.log_dir,
+        requeue=args.requeue,
     )
 
 

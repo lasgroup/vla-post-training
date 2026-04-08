@@ -6,7 +6,10 @@ import gymnasium as gym
 import numpy as np
 import pickle
 import logging
+import json
+import os
 from pathlib import Path
+import tempfile
 
 import copy
 
@@ -353,9 +356,7 @@ class ShardedReplayBuffer:
         # jax.tree_util.tree_map automatically traverses the dict/list structure
         # and applies `create_buffer` to every array found at the bottom.
         self.storage = jax.tree_util.tree_map(create_buffer, dummy_data)
-        self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
-            self.storage
-        )
+        self._refresh_storage_views()
 
         # Seeding
         self._rng = np.random.default_rng(seed)
@@ -363,6 +364,11 @@ class ShardedReplayBuffer:
         # Prefill
         if load_paths:
             self.load_episodes(load_paths)
+
+    def _refresh_storage_views(self) -> None:
+        self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
+            self.storage
+        )
 
     def insert(self, data: NestedData, save_episode: bool = True):
         """
@@ -450,6 +456,80 @@ class ShardedReplayBuffer:
                 self.insert(data, save_episode=False)
                 total += 1
         logging.info("Loaded %d episodes total (buffer size: %d)", total, self.size)
+        return total
+
+    def save_snapshot(self, path: str | Path, *, step: int) -> dict[str, int | str]:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+
+        try:
+            with h5py.File(tmp_path, "w") as f:
+                write_nested(f.create_group("storage"), self.storage)
+                metadata = f.create_group("metadata")
+                metadata.attrs["size"] = int(self.size)
+                metadata.attrs["ptr"] = int(self.ptr)
+                metadata.attrs["max_capacity"] = int(self.max_capacity)
+                metadata.attrs["step"] = int(step)
+                metadata.attrs["rng_state_json"] = json.dumps(
+                    self._rng.bit_generator.state
+                )
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+        logging.info(
+            "Saved replay buffer snapshot to %s (step=%d, transitions=%d)",
+            path,
+            int(step),
+            self.size,
+        )
+        return {"step": int(step), "size": int(self.size), "path": str(path)}
+
+    def restore_snapshot(self, path: str | Path) -> dict[str, int | str]:
+        path = Path(path)
+        with h5py.File(path, "r") as f:
+            restored_storage = read_nested(f["storage"])
+            metadata = dict(f["metadata"].attrs.items())
+
+        restored_leaves, restored_treedef = jax.tree_util.tree_flatten(restored_storage)
+        if restored_treedef != self._storage_treedef:
+            raise ValueError("Replay snapshot structure does not match this buffer.")
+
+        for current_leaf, restored_leaf in zip(self._storage_leaves, restored_leaves):
+            if current_leaf.shape[1:] != restored_leaf.shape[1:]:
+                raise ValueError("Replay snapshot leaf shapes do not match this buffer.")
+            if current_leaf.dtype != restored_leaf.dtype:
+                raise ValueError("Replay snapshot leaf dtypes do not match this buffer.")
+
+        self.storage = restored_storage
+        self.max_capacity = int(metadata["max_capacity"])
+        self.size = int(metadata["size"])
+        self.ptr = int(metadata["ptr"])
+        self._refresh_storage_views()
+        self._rng = np.random.default_rng()
+        rng_state_json = metadata["rng_state_json"]
+        if isinstance(rng_state_json, bytes):
+            rng_state_json = rng_state_json.decode()
+        else:
+            rng_state_json = str(rng_state_json)
+        self._rng.bit_generator.state = json.loads(rng_state_json)
+
+        step = int(metadata["step"])
+        logging.info(
+            "Restored replay buffer snapshot from %s (step=%d, transitions=%d)",
+            path,
+            step,
+            self.size,
+        )
+        return {"step": step, "size": int(self.size), "path": str(path)}
 
 
 if __name__ == "__main__":

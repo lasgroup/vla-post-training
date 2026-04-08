@@ -284,6 +284,7 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
+    requeue: bool = False
 
 
 def make_base_online_config(
