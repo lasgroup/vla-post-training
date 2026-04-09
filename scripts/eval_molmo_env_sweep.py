@@ -20,7 +20,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import tyro
@@ -30,13 +30,12 @@ from molmo_spaces.policy.learned_policy.utils import PromptSampler
 
 from demo_molmospaces_openpi import (
     _load_local_openpi_policy,
-    _make_env_config,
     _model_action_to_env_action,
     _resolve_checkpoint_path,
     _resolve_eval_config,
     _resolve_execute_horizon,
 )
-from src.envs.molmo import MolmoSpacesBenchmarkGymEnv
+from src.envs.molmo import MolmoSpacesBenchmarkGymEnv, MolmoSpacesGymConfig
 from src.envs.molmo_openpi import obs_to_openpi_input as _shared_obs_to_openpi_input
 
 
@@ -58,7 +57,9 @@ class Args:
     env_ids: list[str] = dataclasses.field(default_factory=list)
     episodes_per_env: int = 10
     max_steps: int = 450
+    episode_sampling: Literal["sequential", "random"] = "sequential"
     seed: int = 0
+    task_horizon_steps: int | None = None
 
     # Observation mapping.
     exo_camera_key: str = "exo_camera_1"
@@ -251,6 +252,20 @@ def _prefix(args: Args) -> str:
     if args.num_shards > 1:
         return f"[shard {args.shard_index + 1}/{args.num_shards}]"
     return "[sweep]"
+
+
+def _make_env_config(args: Args, benchmark_path: Path) -> MolmoSpacesGymConfig:
+    config_kwargs: dict[str, Any] = {
+        "benchmark_dir": str(benchmark_path),
+        "eval_config_cls": args.eval_config_cls,
+        "episode_sampling": args.episode_sampling,
+        "seed": args.seed,
+    }
+
+    if "task_horizon_steps" in MolmoSpacesGymConfig.__dataclass_fields__:
+        config_kwargs["task_horizon_steps"] = args.task_horizon_steps
+
+    return MolmoSpacesGymConfig(**config_kwargs)
 
 
 def run(args: Args) -> None:

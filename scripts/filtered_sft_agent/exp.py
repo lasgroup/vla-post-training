@@ -112,7 +112,7 @@ def main(config: _config.OnlineTrainConfig):
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
 
-        if step > start_step and step % config.collect.eval_interval == 0:
+        if step % config.collect.eval_interval == 0:
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,

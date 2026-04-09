@@ -365,21 +365,6 @@ def _resolve_execute_horizon(args: Args, train_cfg: Any, eval_config: Any) -> in
     return requested
 
 
-def _make_env_config(args: Args, benchmark_path: Path) -> MolmoSpacesGymConfig:
-    config_kwargs: dict[str, Any] = {
-        "benchmark_dir": str(benchmark_path),
-        "eval_config_cls": args.eval_config_cls,
-        "episode_sampling": args.episode_sampling,
-        "seed": args.seed,
-    }
-
-    # Keep the demo compatible with older MolmoSpacesGymConfig versions.
-    if "task_horizon_steps" in MolmoSpacesGymConfig.__dataclass_fields__:
-        config_kwargs["task_horizon_steps"] = args.task_horizon_steps
-
-    return MolmoSpacesGymConfig(**config_kwargs)
-
-
 def run(args: Args) -> None:
     if args.episode_sampling not in {"sequential", "random"}:
         raise ValueError("--episode-sampling must be one of {'sequential', 'random'}")
@@ -411,10 +396,18 @@ def run(args: Args) -> None:
         prompt_object_word_num=eval_config.policy_config.prompt_object_word_num,
     )
 
-    env_cfg = _make_env_config(args, benchmark_path)
-    env = MolmoSpacesBenchmarkGymEnv(config=env_cfg)
+    env_cfg = MolmoSpacesGymConfig(
+        benchmark_dir=str(benchmark_path),
+        eval_config_cls=args.eval_config_cls,
+        episode_sampling=args.episode_sampling,
+        seed=args.seed,
+        task_horizon_steps=args.task_horizon_steps,
+    )
+    env = MolmoSpacesBenchmarkGymEnv(env_cfg)
     num_episodes = args.num_episodes if args.num_episodes is not None else len(benchmark_episodes)
     policy_name = getattr(train_cfg, "name", os.path.basename(checkpoint_path))
+    registered_policy = _RegisteredPolicyAdapter(policy, policy_name, prompt_sampler)
+    env.register_policy(registered_policy)
     video_dir = Path(args.video_dir).expanduser()
     video_fps = 1000.0 / float(eval_config.policy_dt_ms)
     logging.info(
@@ -431,14 +424,8 @@ def run(args: Args) -> None:
     total_steps = 0
     for episode_idx in range(num_episodes):
         obs, info = env.reset(seed=args.seed + episode_idx)
-        policy.reset()
-        prompt_sampler.next()
         action_buffer: collections.deque[np.ndarray] = collections.deque()
-        episode_prompt = (
-            prompt_sampler.get_prompt(env._task).lower()
-            if getattr(env, "_task", None) is not None
-            else (args.default_prompt or "do the task").lower()
-        )
+        episode_prompt = registered_policy.get_prompt(args.default_prompt)
         video_frames: list[np.ndarray] = []
 
         success = False
@@ -450,7 +437,7 @@ def run(args: Args) -> None:
                 exo_camera_key=args.exo_camera_key,
                 wrist_camera_key=args.wrist_camera_key,
                 gripper_obs_norm=0.824033,
-                prompt=episode_prompt,
+                prompt=registered_policy.get_prompt(args.default_prompt),
             )
 
             if not action_buffer:
