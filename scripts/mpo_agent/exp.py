@@ -69,7 +69,10 @@ from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
-from src.training.runtime_state import save_epoch_state
+from src.training.runtime_state import (
+    install_slurm_requeue_handler,
+    save_epoch_state,
+)
 from src.training.utils import init_logging, init_wandb
 
 
@@ -241,6 +244,7 @@ def main(config: _config.OnlineTrainConfig):
         task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    install_slurm_requeue_handler(config)
 
     start_step = int(agent.training_steps)
     pbar = tqdm.tqdm(

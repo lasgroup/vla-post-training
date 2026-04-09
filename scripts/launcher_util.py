@@ -11,6 +11,7 @@ DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "03:30:00"
 DEFAULT_PARTITION = "normal"
+DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
 DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
@@ -172,7 +173,7 @@ def generate_run_commands(
         cluster_cmds = []
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
         if requeue:
-            bsub_cmd += "--requeue "
+            bsub_cmd += f"--requeue --signal=TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} "
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "

@@ -46,7 +46,10 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
 from src.envs import make_env
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
-from src.training.runtime_state import save_epoch_state
+from src.training.runtime_state import (
+    install_slurm_requeue_handler,
+    save_epoch_state,
+)
 from src.training.utils import init_logging, init_wandb
 
 
@@ -70,6 +73,7 @@ def main(config: _config.OnlineTrainConfig):
 
     agent = FilteredSFTLearner(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    install_slurm_requeue_handler(config)
 
     start_step = int(agent.training_steps)
     pbar = tqdm.tqdm(
