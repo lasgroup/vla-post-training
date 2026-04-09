@@ -90,9 +90,9 @@ for filename, payload in [
     ('combined.ranked.csv', ranked_rows),
 ]:
     path = out_dir / filename
-    fieldnames = list(payload[0].keys()) if payload else ['env_id', 'env_name', 'sr']
+    fieldnames = sorted({key for row in payload for key in row.keys()}) if payload else ['env_id', 'env_name', 'sr']
     with path.open('w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(payload)
 
