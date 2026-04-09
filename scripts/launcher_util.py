@@ -24,22 +24,28 @@ def generate_srun_command(
     script: str,
     config_name: str,
     flags: Optional[Dict[str, Any]] = None,
+    account: str = DEFAULT_ACCOUNT,
+    environment: str = DEFAULT_ENVIRONMENT,
+    ntasks: int = 1,
 ) -> str:
-    """Generate the training command executed by local runs or sbatch.
+    """Generate an srun command for a training script.
 
     Args:
         script: Path to the Python training script (relative to project root).
         config_name: Positional config name (e.g. "pi05_libero_online_flow_grpo_sft").
         flags: Dictionary of CLI flags and their values.
-        account: Unused legacy argument kept for launcher compatibility.
-        environment: Unused legacy argument kept for launcher compatibility.
-        ntasks: Unused legacy argument kept for launcher compatibility.
+        account: SLURM account.
+        environment: SLURM environment name.
+        ntasks: Number of tasks for the job step.
 
     Returns:
-        Full training command string.
+        Full srun command string.
     """
     tokens = [
-        "exec",
+        "srun",
+        f"--account={account}",
+        f"--environment={environment}",
+        f"--ntasks={ntasks}",
         "uv",
         "run",
         script,
@@ -47,6 +53,65 @@ def generate_srun_command(
     ]
     tokens.extend(flags_to_cli_tokens(flags))
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
+
+
+def _write_sbatch_script(path: str, *, command: str, requeue: bool) -> None:
+    cwd = os.getcwd()
+    if requeue:
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+cd {shlex.quote(cwd)}
+
+requeue_requested=0
+requeue_submitted=0
+child_pid=""
+
+handle_term() {{
+  if [[ "$requeue_requested" -eq 1 ]]; then
+    return
+  fi
+  requeue_requested=1
+  echo "[$(date --iso-8601=seconds)] Received SIGTERM in batch shell for job ${{SLURM_JOB_ID}}; requesting requeue." >&2
+  if scontrol requeue "${{SLURM_JOB_ID}}"; then
+    requeue_submitted=1
+    echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
+  else
+    echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}}." >&2
+  fi
+  if [[ -n "$child_pid" ]]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+  fi
+}}
+
+trap handle_term TERM
+
+{command} &
+child_pid=$!
+child_status=0
+wait "$child_pid" || child_status=$?
+
+if [[ "$requeue_requested" -eq 1 ]]; then
+  if [[ "$requeue_submitted" -eq 1 ]]; then
+    exit 0
+  fi
+  exit "$child_status"
+fi
+
+exit "$child_status"
+"""
+    else:
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+cd {shlex.quote(cwd)}
+
+exec {command}
+"""
+
+    with open(path, "w", encoding="ascii") as f:
+        f.write(script)
+    os.chmod(path, 0o755)
 
 
 def auto_exp_name(project_name: str, combo: Dict[str, Any], run_idx: int) -> str:
@@ -175,7 +240,7 @@ def generate_run_commands(
         cluster_cmds = []
         bsub_cmd = (
             f"sbatch --account={account} --time={duration} --partition={partition} "
-            f"--output={log_dir}/slurm-%j.out --environment={environment} "
+            f"--output={log_dir}/slurm-%j.out "
         )
         if requeue:
             bsub_cmd += (
@@ -191,8 +256,15 @@ def generate_run_commands(
         if mem > 0:
             bsub_cmd += f"--mem-per-cpu={mem} "
 
-        for cmd in command_list:
-            cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+        script_dir = os.path.join(log_dir, "sbatch")
+        if not dry:
+            os.makedirs(script_dir, exist_ok=True)
+
+        for idx, cmd in enumerate(command_list):
+            script_path = os.path.join(script_dir, f"job_{idx:04d}.sbatch.sh")
+            if not dry:
+                _write_sbatch_script(script_path, command=cmd, requeue=requeue)
+            cluster_cmds.append(bsub_cmd + shlex.quote(script_path))
 
         if dry:
             for cmd in cluster_cmds:

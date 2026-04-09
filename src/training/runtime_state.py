@@ -4,8 +4,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import signal
-import subprocess
 import tempfile
 from typing import Any, Callable
 
@@ -17,46 +15,6 @@ class ResumeState:
     replay_snapshot_path: Path
     manifest_path: Path
     timestamp: str | None = None
-
-
-@dataclasses.dataclass
-class SlurmRequeueController:
-    enabled: bool
-    _requeue_submitted: bool = False
-
-    def install(self) -> "SlurmRequeueController":
-        if not self.enabled:
-            return self
-
-        def _handle_sigterm(signum, _frame):
-            logging.warning(
-                "Received signal %s; requeueing now and resuming from the last saved epoch state.",
-                signum,
-            )
-            self.requeue()
-
-        signal.signal(signal.SIGTERM, _handle_sigterm)
-        logging.info("Installed SIGTERM handler for immediate SLURM requeue.")
-        return self
-
-    def requeue(self) -> None:
-        if not self.enabled or self._requeue_submitted:
-            return
-
-        job_id = os.environ.get("SLURM_JOB_ID")
-        if not job_id:
-            logging.error("Cannot requeue because SLURM_JOB_ID is not set.")
-            raise SystemExit(1)
-
-        logging.warning("Requeueing SLURM job %s after graceful shutdown request.", job_id)
-        try:
-            subprocess.run(["scontrol", "requeue", job_id], check=True)
-        except Exception:
-            logging.exception("Failed to requeue SLURM job %s.", job_id)
-            raise SystemExit(1)
-
-        self._requeue_submitted = True
-        raise SystemExit(0)
 
 
 def _checkpoint_dir(config: Any) -> Path:
@@ -209,9 +167,3 @@ def save_epoch_state(
         resume_state.manifest_path,
     )
     return resume_state
-
-
-def install_slurm_requeue_handler(config: Any) -> SlurmRequeueController:
-    return SlurmRequeueController(
-        enabled=bool(getattr(config, "requeue", False))
-    ).install()
