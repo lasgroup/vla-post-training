@@ -5,6 +5,7 @@ Typical use:
   - sweep molmo_0..molmo_29 for 10 episodes each
   - log per-env / per-episode progress
   - write machine-readable JSON/CSV outputs
+  - resume from partial progress across multiple runs
   - optionally shard the env list across multiple workers / GPUs
 """
 
@@ -97,7 +98,6 @@ def _expand_env_selection(args: Args) -> list[int]:
     env_ids.extend(_parse_env_token(token) for token in args.env_ids)
     if not env_ids:
         raise ValueError("No envs selected. Provide --env-range or --env-ids.")
-    # Preserve order but remove duplicates.
     return list(dict.fromkeys(env_ids))
 
 
@@ -146,6 +146,105 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _load_episode_history(progress_path: Path) -> dict[int, dict[int, dict[str, Any]]]:
+    history: dict[int, dict[int, dict[str, Any]]] = {}
+    if not progress_path.exists():
+        return history
+
+    with progress_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("event") != "episode_complete":
+                continue
+
+            env_id = int(payload["env_id"])
+            episode_in_env = int(payload["episode_in_env"])
+            history.setdefault(env_id, {})[episode_in_env] = payload
+
+    return history
+
+
+def _load_existing_results(results_json_path: Path) -> dict[int, dict[str, Any]]:
+    if not results_json_path.exists():
+        return {}
+
+    try:
+        data = json.loads(results_json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+    return {int(row["env_id"]): row for row in data}
+
+
+def _build_result_row(
+    *,
+    args: Args,
+    checkpoint_path: str,
+    episode_spec: EpisodeSpec,
+    env_id: int,
+    task_description: str,
+    successes: int,
+    rewards: list[float],
+    steps_taken: list[int],
+    policy_prompts: list[str],
+    env_elapsed: float,
+) -> dict[str, Any]:
+    return {
+        "env_id": env_id,
+        "env_name": f"molmo_{env_id}",
+        "house_index": episode_spec.house_index,
+        "task_description": task_description,
+        "task_cls": episode_spec.task.get("task_cls", ""),
+        "successes": successes,
+        "episodes": args.episodes_per_env,
+        "sr": successes / max(args.episodes_per_env, 1),
+        "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
+        "mean_steps": float(np.mean(steps_taken)) if steps_taken else 0.0,
+        "total_elapsed_sec": env_elapsed,
+        "checkpoint": checkpoint_path,
+        "policy_prompt_example": policy_prompts[0] if policy_prompts else "",
+        "seed_base": args.seed,
+        "render_device": args.render_device,
+        "shard_index": args.shard_index,
+        "num_shards": args.num_shards,
+    }
+
+
+def _write_result_files(
+    results: list[dict[str, Any]],
+    results_json_path: Path,
+    results_csv_path: Path,
+    ranked_json_path: Path,
+    ranked_csv_path: Path,
+) -> None:
+    results_sorted_by_env = sorted(results, key=lambda row: row["env_id"])
+    results_sorted_by_rank = sorted(
+        results,
+        key=lambda row: (-row["sr"], -row["successes"], row["mean_steps"], row["env_id"]),
+    )
+    ranked_rows = [
+        {"rank": rank, **row}
+        for rank, row in enumerate(results_sorted_by_rank, start=1)
+    ]
+
+    results_json_path.write_text(
+        json.dumps(results_sorted_by_env, indent=2, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    ranked_json_path.write_text(
+        json.dumps(ranked_rows, indent=2, default=_json_default) + "\n",
+        encoding="utf-8",
+    )
+    _write_csv(results_csv_path, results_sorted_by_env)
+    _write_csv(ranked_csv_path, ranked_rows)
 
 
 def _prefix(args: Args) -> str:
@@ -204,46 +303,127 @@ def run(args: Args) -> None:
     prefix = _prefix(args)
     total_envs = len(shard_env_ids)
     total_episodes = total_envs * args.episodes_per_env
+    episode_history = _load_episode_history(progress_path)
+    existing_results = _load_existing_results(results_json_path)
     completed_episodes = 0
+    for env_id in shard_env_ids:
+        if env_id in existing_results:
+            completed_episodes += args.episodes_per_env
+        else:
+            completed_episodes += min(len(episode_history.get(env_id, {})), args.episodes_per_env)
     start_time = time.time()
     results: list[dict[str, Any]] = []
 
     logging.info(
-        "%s starting sweep | checkpoint=%s | total_selected_envs=%d | shard_envs=%d | episodes_per_env=%d",
+        "%s starting sweep | checkpoint=%s | total_selected_envs=%d | shard_envs=%d | episodes_per_env=%d | resumed_episodes=%d",
         prefix,
         checkpoint_path,
         len(selected_env_ids),
         total_envs,
         args.episodes_per_env,
+        completed_episodes,
     )
 
     for env_pos, env_id in enumerate(shard_env_ids, start=1):
         episode_spec = episodes[env_id]
         task_description = _extract_task_description(episode_spec)
         env_name = f"molmo_{env_id}"
+        prior_episode_map = episode_history.get(env_id, {})
+        prior_episode_payloads = [
+            prior_episode_map[key]
+            for key in sorted(prior_episode_map)
+            if key <= args.episodes_per_env
+        ]
+        prior_completed = len(prior_episode_payloads)
+
+        if env_id in existing_results:
+            results.append(existing_results[env_id])
+            logging.info(
+                "%s skipping completed %s from prior results | sr=%.3f | successes=%s/%s",
+                prefix,
+                env_name,
+                existing_results[env_id]["sr"],
+                existing_results[env_id]["successes"],
+                existing_results[env_id]["episodes"],
+            )
+            continue
+
+        successes = sum(int(payload.get("success", False)) for payload in prior_episode_payloads)
+        rewards = [float(payload.get("episode_reward", 0.0)) for payload in prior_episode_payloads]
+        steps_taken = [int(payload.get("episode_steps", 0)) for payload in prior_episode_payloads]
+        policy_prompts = [
+            str(payload.get("policy_prompt", ""))
+            for payload in prior_episode_payloads
+            if payload.get("policy_prompt")
+        ]
+        env_elapsed_from_history = sum(
+            float(payload.get("episode_elapsed_sec", 0.0))
+            for payload in prior_episode_payloads
+        )
+
+        if prior_completed >= args.episodes_per_env:
+            reconstructed = _build_result_row(
+                args=args,
+                checkpoint_path=checkpoint_path,
+                episode_spec=episode_spec,
+                env_id=env_id,
+                task_description=task_description,
+                successes=successes,
+                rewards=rewards,
+                steps_taken=steps_taken,
+                policy_prompts=policy_prompts,
+                env_elapsed=env_elapsed_from_history,
+            )
+            results.append(reconstructed)
+            _write_result_files(
+                results,
+                results_json_path,
+                results_csv_path,
+                ranked_json_path,
+                ranked_csv_path,
+            )
+            logging.info(
+                "%s reconstructed completed %s from progress log | sr=%.3f | successes=%d/%d",
+                prefix,
+                env_name,
+                reconstructed["sr"],
+                successes,
+                args.episodes_per_env,
+            )
+            continue
+
         env = MolmoSpacesBenchmarkGymEnv(
             episode_id=env_id,
             render_device=args.render_device,
             config=env_cfg,
         )
-
-        successes = 0
-        rewards: list[float] = []
-        steps_taken: list[int] = []
-        policy_prompts: list[str] = []
         env_start = time.time()
 
-        logging.info(
-            "%s env %d/%d | %s | house=%s | task=%s",
-            prefix,
-            env_pos,
-            total_envs,
-            env_name,
-            episode_spec.house_index,
-            task_description,
-        )
+        if prior_completed > 0:
+            logging.info(
+                "%s resuming env %d/%d | %s | house=%s | task=%s | already_done=%d/%d | current_sr=%.3f",
+                prefix,
+                env_pos,
+                total_envs,
+                env_name,
+                episode_spec.house_index,
+                task_description,
+                prior_completed,
+                args.episodes_per_env,
+                successes / prior_completed,
+            )
+        else:
+            logging.info(
+                "%s env %d/%d | %s | house=%s | task=%s",
+                prefix,
+                env_pos,
+                total_envs,
+                env_name,
+                episode_spec.house_index,
+                task_description,
+            )
 
-        for ep_idx in range(args.episodes_per_env):
+        for ep_idx in range(prior_completed, args.episodes_per_env):
             seed = args.seed + env_id * 1000 + ep_idx
             obs, _info = env.reset(seed=seed)
             policy.reset()
@@ -298,7 +478,8 @@ def run(args: Args) -> None:
             rewards.append(episode_reward)
             steps_taken.append(episode_steps)
             completed_episodes += 1
-            running_sr = successes / (ep_idx + 1)
+            running_eps = ep_idx + 1
+            running_sr = successes / running_eps
             total_progress = completed_episodes / total_episodes
 
             payload = {
@@ -308,7 +489,7 @@ def run(args: Args) -> None:
                 "total_envs": total_envs,
                 "env_id": env_id,
                 "env_name": env_name,
-                "episode_in_env": ep_idx + 1,
+                "episode_in_env": running_eps,
                 "episodes_per_env": args.episodes_per_env,
                 "success": episode_success,
                 "running_successes": successes,
@@ -326,7 +507,7 @@ def run(args: Args) -> None:
             }
             _append_jsonl(progress_path, payload)
 
-            if (ep_idx + 1) % args.progress_every == 0 or (ep_idx + 1) == args.episodes_per_env:
+            if running_eps % args.progress_every == 0 or running_eps == args.episodes_per_env:
                 elapsed = time.time() - start_time
                 logging.info(
                     (
@@ -337,12 +518,12 @@ def run(args: Args) -> None:
                     env_pos,
                     total_envs,
                     env_name,
-                    ep_idx + 1,
+                    running_eps,
                     args.episodes_per_env,
                     episode_success,
                     running_sr,
                     successes,
-                    ep_idx + 1,
+                    running_eps,
                     completed_episodes,
                     total_episodes,
                     100.0 * total_progress,
@@ -351,27 +532,27 @@ def run(args: Args) -> None:
 
         env.close()
 
-        env_elapsed = time.time() - env_start
-        result = {
-            "env_id": env_id,
-            "env_name": env_name,
-            "house_index": episode_spec.house_index,
-            "task_description": task_description,
-            "task_cls": episode_spec.task.get("task_cls", ""),
-            "successes": successes,
-            "episodes": args.episodes_per_env,
-            "sr": successes / max(args.episodes_per_env, 1),
-            "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
-            "mean_steps": float(np.mean(steps_taken)) if steps_taken else 0.0,
-            "total_elapsed_sec": env_elapsed,
-            "checkpoint": checkpoint_path,
-            "policy_prompt_example": policy_prompts[0] if policy_prompts else "",
-            "seed_base": args.seed,
-            "render_device": args.render_device,
-            "shard_index": args.shard_index,
-            "num_shards": args.num_shards,
-        }
+        env_elapsed = env_elapsed_from_history + (time.time() - env_start)
+        result = _build_result_row(
+            args=args,
+            checkpoint_path=checkpoint_path,
+            episode_spec=episode_spec,
+            env_id=env_id,
+            task_description=task_description,
+            successes=successes,
+            rewards=rewards,
+            steps_taken=steps_taken,
+            policy_prompts=policy_prompts,
+            env_elapsed=env_elapsed,
+        )
         results.append(result)
+        _write_result_files(
+            results,
+            results_json_path,
+            results_csv_path,
+            ranked_json_path,
+            ranked_csv_path,
+        )
         _append_jsonl(
             progress_path,
             {
@@ -393,26 +574,13 @@ def run(args: Args) -> None:
             env_elapsed,
         )
 
-    results_sorted_by_env = sorted(results, key=lambda row: row["env_id"])
-    results_sorted_by_rank = sorted(
+    _write_result_files(
         results,
-        key=lambda row: (-row["sr"], -row["successes"], row["mean_steps"], row["env_id"]),
+        results_json_path,
+        results_csv_path,
+        ranked_json_path,
+        ranked_csv_path,
     )
-    ranked_rows = [
-        {"rank": rank, **row}
-        for rank, row in enumerate(results_sorted_by_rank, start=1)
-    ]
-
-    results_json_path.write_text(
-        json.dumps(results_sorted_by_env, indent=2, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
-    ranked_json_path.write_text(
-        json.dumps(ranked_rows, indent=2, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
-    _write_csv(results_csv_path, results_sorted_by_env)
-    _write_csv(ranked_csv_path, ranked_rows)
 
     logging.info("%s wrote %s", prefix, results_json_path)
     logging.info("%s wrote %s", prefix, ranked_json_path)
