@@ -324,8 +324,6 @@ class ShardedReplayBuffer:
         preprocess_fn: Callable[[NestedData], NestedData] | None = None,
         postprocess_fn: Callable[[NestedData], Any] | None = None,
         freeze_dict: bool = True,
-        load_paths: Optional[list[str]] = None,
-        save_path: Optional[str] = None,
     ):
         """
         Args:
@@ -342,7 +340,6 @@ class ShardedReplayBuffer:
         self._preprocess_fn = preprocess_fn
         self._postprocess_fn = postprocess_fn
         self._freeze_dict = freeze_dict
-        self._save_path = save_path
 
         # 1. Pre-allocate the entire buffer in Host RAM (NumPy)
         # This prevents memory fragmentation during long training runs.
@@ -361,23 +358,16 @@ class ShardedReplayBuffer:
         # Seeding
         self._rng = np.random.default_rng(seed)
 
-        # Prefill
-        if load_paths:
-            self.load_episodes(load_paths)
-
     def _refresh_storage_views(self) -> None:
         self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
             self.storage
         )
 
-    def insert(self, data: NestedData, save_episode: bool = True):
+    def insert(self, data: NestedData):
         """
         Inserts nested data into the buffer.
         Assumes data structure matches the initialized dummy_data.
         """
-
-        if save_episode and self._save_path is not None:
-            self.save_episode(data, self._save_path)
 
         if self._preprocess_fn is not None:
             data = self._preprocess_fn(data)
@@ -435,28 +425,6 @@ class ShardedReplayBuffer:
 
     def __len__(self):
         return self.size
-
-    def save_episode(self, data: NestedData, save_dir: str):
-        path = Path(save_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        existing_indices = [int(p.stem.split("_")[1]) for p in path.glob("episode_*.h5df")]
-        idx = max(existing_indices) + 1 if existing_indices else 0
-        file_path = path / f"episode_{idx:06d}.h5df"
-        with h5py.File(file_path, "w") as f:
-            write_nested(f, data)
-        logging.info("Saved episode to %s", file_path)
-
-    def load_episodes(self, paths: list[str]) -> int:
-        total = 0
-        for dir_path in paths:
-            episode_files = sorted(Path(dir_path).glob("episode_*.h5df"))
-            for file_path in episode_files:
-                with h5py.File(file_path, "r") as f:
-                    data = read_nested(f)
-                self.insert(data, save_episode=False)
-                total += 1
-        logging.info("Loaded %d episodes total (buffer size: %d)", total, self.size)
-        return total
 
     def save_snapshot(self, path: str | Path, *, step: int) -> dict[str, int | str]:
         path = Path(path)

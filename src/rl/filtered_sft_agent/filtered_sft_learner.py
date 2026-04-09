@@ -427,13 +427,6 @@ class FilteredSFTLearner(Agent):
             self._config.rl.buffer_capacity,
         )
 
-        load_paths = None if self._resume_state is not None else self._config.rl.buffer_load_paths
-        if self._resume_state is not None and self._config.rl.buffer_load_paths:
-            logging.info(
-                "Skipping rl.buffer_load_paths because replay snapshot resume is active for %s",
-                self._config.checkpoint_dir,
-            )
-
         return ShardedReplayBuffer(
             dummy_data=dummy_data,
             max_capacity=self._config.rl.buffer_capacity,
@@ -442,8 +435,6 @@ class FilteredSFTLearner(Agent):
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
-            load_paths=load_paths,
-            save_path=self._config.rl.buffer_save_path,
         )
 
     def _process_obs_for_pi0(
