@@ -21,11 +21,7 @@ def _shift_window(
 
 
 def evaluate_policy(
-    agent: Agent,
-    env: BaseVectorEnv,
-    task_description: str,
-    config,
-    step: int,
+    agent: Agent, env: BaseVectorEnv, task_description: str, config, step: int
 ):
     num_rollouts = config.collect.num_eval_rollouts
     total_episodes = 0
@@ -95,11 +91,7 @@ def evaluate_policy(
 
 
 def collect_data(
-    agent: Agent,
-    env: BaseVectorEnv,
-    task_description: list[str],
-    config,
-    step: int,
+    agent: Agent, env: BaseVectorEnv, task_description: list[str], config, step: int
 ):
     agent.start_data_collection(step=step)
 
