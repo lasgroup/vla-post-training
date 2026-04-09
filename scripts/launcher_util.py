@@ -14,7 +14,9 @@ DEFAULT_PARTITION = "normal"
 DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
-DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+DEFAULT_CHECKPOINT_BASE_DIR = (
+    f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+)
 DEFAULT_LOG_DIR = "logs"
 
 
@@ -22,27 +24,22 @@ def generate_srun_command(
     script: str,
     config_name: str,
     flags: Optional[Dict[str, Any]] = None,
-    account: str = DEFAULT_ACCOUNT,
-    environment: str = DEFAULT_ENVIRONMENT,
-    ntasks: int = 1,
 ) -> str:
-    """Generate an srun command for a training script.
+    """Generate the training command executed by local runs or sbatch.
 
     Args:
         script: Path to the Python training script (relative to project root).
         config_name: Positional config name (e.g. "pi05_libero_online_flow_grpo_sft").
         flags: Dictionary of CLI flags and their values.
-        account: SLURM account.
-        environment: SLURM environment name.
+        account: Unused legacy argument kept for launcher compatibility.
+        environment: Unused legacy argument kept for launcher compatibility.
+        ntasks: Unused legacy argument kept for launcher compatibility.
 
     Returns:
-        Full srun command string.
+        Full training command string.
     """
     tokens = [
-        "srun",
-        f"--account={account}",
-        f"--environment={environment}",
-        f"--ntasks={ntasks}",
+        "exec",
         "uv",
         "run",
         script,
@@ -119,7 +116,9 @@ def apply_requeue_flags(flags: Dict[str, Any], *, enabled: bool) -> Dict[str, An
         if overrides:
             logging.warning(
                 "Requeue enabled: overriding flags for resumable execution: %s",
-                ", ".join(f"{key}={old!r}->{new!r}" for key, (old, new) in overrides.items()),
+                ", ".join(
+                    f"{key}={old!r}->{new!r}" for key, (old, new) in overrides.items()
+                ),
             )
     return updated
 
@@ -129,7 +128,9 @@ def validate_unique_exp_names(flags_list: List[Dict[str, Any]]) -> None:
     for idx, flags in enumerate(flags_list):
         exp_name = flags.get("exp_name")
         if not exp_name:
-            raise ValueError("Requeue-enabled runs require every job to have an exp_name.")
+            raise ValueError(
+                "Requeue-enabled runs require every job to have an exp_name."
+            )
         if exp_name in seen:
             raise ValueError(
                 "Requeue-enabled sweeps require unique exp_name values, "
@@ -152,11 +153,12 @@ def generate_run_commands(
     prompt: bool = True,
     log_dir: str = DEFAULT_LOG_DIR,
     requeue: bool = False,
+    environment: str = DEFAULT_ENVIRONMENT,
 ) -> None:
     """Submit or run a list of commands.
 
     Args:
-        command_list: List of srun command strings.
+        command_list: List of training command strings.
         num_tasks: Number of tasks per job (only used if > 0).
         num_cpus: CPUs per task (only used if > 0).
         num_gpus: GPUs per task (only used if > 0).
@@ -171,9 +173,14 @@ def generate_run_commands(
         if not dry:
             os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
+        bsub_cmd = (
+            f"sbatch --account={account} --time={duration} --partition={partition} "
+            f"--output={log_dir}/slurm-%j.out --environment={environment} "
+        )
         if requeue:
-            bsub_cmd += f"--requeue --signal=TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} "
+            bsub_cmd += (
+                f"--requeue --signal=B:TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} "
+            )
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "
@@ -232,13 +239,15 @@ def dict_permutations(d: dict) -> List[dict]:
     """
     seen: set = set()
     for k in d:
-        for key in ((k,) if isinstance(k, str) else k):
+        for key in (k,) if isinstance(k, str) else k:
             if key in seen:
                 raise ValueError(f"Conflicting key in grid: '{key}'")
             seen.add(key)
 
-    groups = [(([k], [[v] for v in vals]) if isinstance(k, str) else (list(k), vals))
-              for k, vals in d.items()]
+    groups = [
+        (([k], [[v] for v in vals]) if isinstance(k, str) else (list(k), vals))
+        for k, vals in d.items()
+    ]
     result = []
     for combo in itertools.product(*[g[1] for g in groups]):
         flat = {}
