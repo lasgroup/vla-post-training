@@ -187,7 +187,7 @@ def save_epoch_state(
         raise AttributeError("Agent is missing _online_data_buffer for epoch-state saves.")
 
     shard_path = replay_shard_path(config, step)
-    shard_info = replay_buffer.save_shard(shard_path, step=step)
+    shard_info = replay_buffer.save_shard(shard_path)
     resume_state = write_resume_state(
         config,
         step=step,

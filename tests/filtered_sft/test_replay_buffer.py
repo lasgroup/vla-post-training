@@ -204,7 +204,7 @@ def test_sharded_replay_buffer_snapshot_roundtrip_preserves_state(tmp_path):
 
     shard_dir = tmp_path / "replay_shards"
     shard_path = shard_dir / "step_00000042.h5"
-    snapshot_info = buf.save_shard(shard_path, step=42)
+    buf.save_shard(shard_path)
     with h5py.File(shard_path, "r") as f:
         assert f["transitions"]["observations"]["state"].shape[0] == buf.size
         assert f["transitions"]["actions"].shape[0] == buf.size
@@ -225,8 +225,6 @@ def test_sharded_replay_buffer_snapshot_roundtrip_preserves_state(tmp_path):
         rng_state_json=buf.rng_state_json(),
     )
 
-    assert snapshot_info["step"] == 42
-    assert restored_info["step"] == 42
     assert restored.size == buf.size
     assert restored.ptr == buf.ptr
     assert restored.max_capacity == buf.max_capacity
@@ -308,14 +306,12 @@ def test_save_epoch_state_uses_agent_training_steps_for_manifest(tmp_path):
             self.calls = []
             self._rng_state_json = '{"state": "ok"}'
 
-        def save_shard(self, path, *, step):
+        def save_shard(self, path):
             snapshot_path = Path(path)
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_bytes(b"snapshot")
-            self.calls.append((snapshot_path, step))
+            self.calls.append(snapshot_path)
             return {
-                "kind": "delta",
-                "step": step,
                 "size": 7,
                 "total_inserted": 11,
                 "path": str(snapshot_path),
@@ -347,7 +343,7 @@ def test_save_epoch_state_uses_agent_training_steps_for_manifest(tmp_path):
     assert resume_state is not None
     assert agent.saved_steps == [42]
     assert agent._checkpoint_manager.wait_calls == 1
-    assert agent._online_data_buffer.calls[0][1] == 42
+    assert agent._online_data_buffer.calls[0].name == "step_00000042.h5"
     assert loaded_resume_state is not None
     assert loaded_resume_state.step == 42
     assert loaded_resume_state.replay_size == 7

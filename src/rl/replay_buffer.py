@@ -454,7 +454,7 @@ class ShardedReplayBuffer:
         self._rng = np.random.default_rng()
         self._rng.bit_generator.state = json.loads(rng_state_json)
 
-    def save_shard(self, path: str | Path, *, step: int) -> dict[str, int | str | None]:
+    def save_shard(self, path: str | Path) -> dict[str, int | str | None]:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         delta_count = self.total_inserted - self._persisted_total_inserted
@@ -462,13 +462,10 @@ class ShardedReplayBuffer:
             raise ValueError("Replay buffer total_inserted went backwards.")
         if delta_count == 0:
             logging.info(
-                "No new replay transitions to save at step %d; reusing latest shard %s",
-                int(step),
+                "No new replay transitions to save; reusing latest shard %s",
                 self._latest_saved_shard_path,
             )
             return {
-                "kind": "noop",
-                "step": int(step),
                 "size": int(self.size),
                 "total_inserted": int(self.total_inserted),
                 "path": (
@@ -478,14 +475,8 @@ class ShardedReplayBuffer:
                 ),
             }
 
-        if delta_count > self.size:
-            kind = "full"
-            shard_data = self._slice_storage(self._ordered_indices(self.size))
-            num_transitions = int(self.size)
-        else:
-            kind = "delta"
-            shard_data = self._slice_storage(self._recent_indices(delta_count))
-            num_transitions = int(delta_count)
+        shard_data = self._slice_storage(self._recent_indices(delta_count))
+        num_transitions = int(delta_count)
         with tempfile.NamedTemporaryFile(
             dir=path.parent,
             prefix=f".{path.name}.",
@@ -498,9 +489,7 @@ class ShardedReplayBuffer:
             with h5py.File(tmp_path, "w") as f:
                 write_nested(f.create_group("transitions"), shard_data)
                 metadata = f.create_group("metadata")
-                metadata.attrs["kind"] = kind
                 metadata.attrs["num_transitions"] = num_transitions
-                metadata.attrs["step"] = int(step)
             os.replace(tmp_path, path)
         finally:
             if tmp_path.exists():
@@ -509,16 +498,12 @@ class ShardedReplayBuffer:
         self._persisted_total_inserted = int(self.total_inserted)
         self._latest_saved_shard_path = path
         logging.info(
-            "Saved replay buffer shard to %s (step=%d, kind=%s, transitions=%d, replay size=%d)",
+            "Saved replay buffer shard to %s (new transitions=%d, replay size=%d)",
             path,
-            int(step),
-            kind,
             num_transitions,
             self.size,
         )
         return {
-            "kind": kind,
-            "step": int(step),
             "size": int(self.size),
             "total_inserted": int(self.total_inserted),
             "path": str(path),
@@ -552,22 +537,6 @@ class ShardedReplayBuffer:
         for shard_path in shard_paths:
             with h5py.File(shard_path, "r") as f:
                 restored_data = read_nested(f["transitions"])
-                metadata = dict(f["metadata"].attrs.items())
-            kind = metadata["kind"]
-            if isinstance(kind, bytes):
-                kind = kind.decode()
-            else:
-                kind = str(kind)
-            if kind == "full":
-                self.storage = self._allocate_storage(restored_data, self.max_capacity)
-                self.ptr = 0
-                self.size = 0
-                self.total_inserted = 0
-                self._persisted_total_inserted = 0
-                self._latest_saved_shard_path = None
-                self._refresh_storage_views()
-            elif kind != "delta":
-                raise ValueError(f"Unsupported replay shard kind: {kind}")
             self.insert(restored_data)
             self._latest_saved_shard_path = shard_path
 
