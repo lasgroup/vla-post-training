@@ -243,10 +243,10 @@ class FilteredSFTLearner(Agent):
                         "Found resumable runtime state, but checkpoint manager did not enter resume mode."
                     )
                 logging.info(
-                    "Found resumable state for %s at step %d (replay snapshot=%s, replay transitions=%d)",
+                    "Found resumable state for %s at step %d (replay shards=%s, replay transitions=%d)",
                     self._config.checkpoint_dir,
                     self._resume_state.step,
-                    self._resume_state.replay_snapshot_path,
+                    self._resume_state.replay_shard_dir,
                     self._resume_state.replay_size,
                 )
 
@@ -267,22 +267,19 @@ class FilteredSFTLearner(Agent):
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer()
         if self._resume_state is not None:
-            restored_replay = self._online_data_buffer.restore_snapshot(
-                self._resume_state.replay_snapshot_path
+            restored_replay = self._online_data_buffer.restore_shards(
+                self._resume_state.replay_shard_dir,
+                step=self._resume_state.step,
+                total_inserted=self._resume_state.replay_total_inserted,
+                latest_shard_path=self._resume_state.latest_replay_shard_path,
+                rng_state_json=self._resume_state.replay_rng_state_json,
             )
-            restored_replay_step = int(restored_replay["step"])
-            if restored_replay_step != int(self._resume_state.step):
-                logging.warning(
-                    "Replay snapshot step %d does not match manifest step %d for %s",
-                    restored_replay_step,
-                    self._resume_state.step,
-                    self._config.checkpoint_dir,
-                )
             logging.info(
-                "Restored replay buffer from %s (step=%d, transitions=%d)",
+                "Restored replay buffer from %s (step=%d, transitions=%d, total_inserted=%d)",
                 restored_replay["path"],
-                restored_replay["step"],
+                self._resume_state.step,
                 restored_replay["size"],
+                restored_replay["total_inserted"],
             )
         self._collection_success_episodes = 0
 

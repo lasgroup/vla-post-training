@@ -343,25 +343,43 @@ class ShardedReplayBuffer:
 
         # 1. Pre-allocate the entire buffer in Host RAM (NumPy)
         # This prevents memory fragmentation during long training runs.
-        # 1. Pre-allocate storage preserving the nested structure
-        # We define a helper to create a zero-buffer for a single leaf array
-        def create_buffer(leaf_array):
-            # leaf_array shape: (batch, features...) -> storage shape: (capacity, features...)
-            buffer_shape = (max_capacity,) + leaf_array.shape[1:]
-            return np.zeros(buffer_shape, dtype=leaf_array.dtype)
-
-        # jax.tree_util.tree_map automatically traverses the dict/list structure
-        # and applies `create_buffer` to every array found at the bottom.
-        self.storage = jax.tree_util.tree_map(create_buffer, dummy_data)
+        self.storage = self._allocate_storage(dummy_data, max_capacity)
         self._refresh_storage_views()
 
         # Seeding
         self._rng = np.random.default_rng(seed)
+        self.total_inserted = 0
+        self._persisted_total_inserted = 0
+        self._latest_saved_shard_path: Path | None = None
+
+    @staticmethod
+    def _allocate_storage(dummy_data: NestedData, capacity: int) -> NestedData:
+        def create_buffer(leaf_array):
+            # leaf_array shape: (batch, features...) -> storage shape: (capacity, features...)
+            buffer_shape = (capacity,) + leaf_array.shape[1:]
+            return np.zeros(buffer_shape, dtype=leaf_array.dtype)
+
+        return jax.tree_util.tree_map(create_buffer, dummy_data)
 
     def _refresh_storage_views(self) -> None:
         self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
             self.storage
         )
+
+    def _ordered_indices(self, count: int) -> np.ndarray:
+        if count < 0 or count > self.size:
+            raise ValueError(f"Requested {count} active transitions from buffer size {self.size}.")
+        start = (self.ptr - self.size) % self.max_capacity
+        return (np.arange(count, dtype=np.int32) + start) % self.max_capacity
+
+    def _recent_indices(self, count: int) -> np.ndarray:
+        if count < 0 or count > self.size:
+            raise ValueError(f"Requested {count} recent transitions from buffer size {self.size}.")
+        start = (self.ptr - count) % self.max_capacity
+        return (np.arange(count, dtype=np.int32) + start) % self.max_capacity
+
+    def _slice_storage(self, indices: np.ndarray) -> NestedData:
+        return jax.tree_util.tree_map(lambda leaf: leaf[indices].copy(), self.storage)
 
     def insert(self, data: NestedData):
         """
@@ -394,6 +412,7 @@ class ShardedReplayBuffer:
         # Update pointers
         self.ptr = int((self.ptr + num_new) % self.max_capacity)
         self.size = int(min(self.size + num_new, self.max_capacity))
+        self.total_inserted += num_new
 
     def sample(self, batch_size=None) -> NestedData:
         """
@@ -426,9 +445,47 @@ class ShardedReplayBuffer:
     def __len__(self):
         return self.size
 
-    def save_snapshot(self, path: str | Path, *, step: int) -> dict[str, int | str]:
+    def rng_state_json(self) -> str:
+        return json.dumps(self._rng.bit_generator.state)
+
+    def set_rng_state_json(self, rng_state_json: str | None) -> None:
+        if rng_state_json is None:
+            return
+        self._rng = np.random.default_rng()
+        self._rng.bit_generator.state = json.loads(rng_state_json)
+
+    def save_shard(self, path: str | Path, *, step: int) -> dict[str, int | str | None]:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        delta_count = self.total_inserted - self._persisted_total_inserted
+        if delta_count < 0:
+            raise ValueError("Replay buffer total_inserted went backwards.")
+        if delta_count == 0:
+            logging.info(
+                "No new replay transitions to save at step %d; reusing latest shard %s",
+                int(step),
+                self._latest_saved_shard_path,
+            )
+            return {
+                "kind": "noop",
+                "step": int(step),
+                "size": int(self.size),
+                "total_inserted": int(self.total_inserted),
+                "path": (
+                    None
+                    if self._latest_saved_shard_path is None
+                    else str(self._latest_saved_shard_path)
+                ),
+            }
+
+        if delta_count > self.size:
+            kind = "full"
+            shard_data = self._slice_storage(self._ordered_indices(self.size))
+            num_transitions = int(self.size)
+        else:
+            kind = "delta"
+            shard_data = self._slice_storage(self._recent_indices(delta_count))
+            num_transitions = int(delta_count)
         with tempfile.NamedTemporaryFile(
             dir=path.parent,
             prefix=f".{path.name}.",
@@ -439,65 +496,106 @@ class ShardedReplayBuffer:
 
         try:
             with h5py.File(tmp_path, "w") as f:
-                write_nested(f.create_group("storage"), self.storage)
+                write_nested(f.create_group("transitions"), shard_data)
                 metadata = f.create_group("metadata")
-                metadata.attrs["size"] = int(self.size)
-                metadata.attrs["ptr"] = int(self.ptr)
-                metadata.attrs["max_capacity"] = int(self.max_capacity)
+                metadata.attrs["kind"] = kind
+                metadata.attrs["num_transitions"] = num_transitions
                 metadata.attrs["step"] = int(step)
-                metadata.attrs["rng_state_json"] = json.dumps(
-                    self._rng.bit_generator.state
-                )
             os.replace(tmp_path, path)
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
 
+        self._persisted_total_inserted = int(self.total_inserted)
+        self._latest_saved_shard_path = path
         logging.info(
-            "Saved replay buffer snapshot to %s (step=%d, transitions=%d)",
+            "Saved replay buffer shard to %s (step=%d, kind=%s, transitions=%d, replay size=%d)",
             path,
             int(step),
+            kind,
+            num_transitions,
             self.size,
         )
-        return {"step": int(step), "size": int(self.size), "path": str(path)}
+        return {
+            "kind": kind,
+            "step": int(step),
+            "size": int(self.size),
+            "total_inserted": int(self.total_inserted),
+            "path": str(path),
+        }
 
-    def restore_snapshot(self, path: str | Path) -> dict[str, int | str]:
-        path = Path(path)
-        with h5py.File(path, "r") as f:
-            restored_storage = read_nested(f["storage"])
-            metadata = dict(f["metadata"].attrs.items())
+    def restore_shards(
+        self,
+        shard_dir: str | Path,
+        *,
+        step: int | None = None,
+        total_inserted: int | None = None,
+        latest_shard_path: str | Path | None = None,
+        rng_state_json: str | None = None,
+    ) -> dict[str, int | str | None]:
+        shard_dir = Path(shard_dir)
+        if not shard_dir.exists():
+            raise FileNotFoundError(f"Replay shard directory does not exist: {shard_dir}")
 
-        restored_leaves, restored_treedef = jax.tree_util.tree_flatten(restored_storage)
-        if restored_treedef != self._storage_treedef:
-            raise ValueError("Replay snapshot structure does not match this buffer.")
-
-        for current_leaf, restored_leaf in zip(self._storage_leaves, restored_leaves):
-            if current_leaf.shape[1:] != restored_leaf.shape[1:]:
-                raise ValueError("Replay snapshot leaf shapes do not match this buffer.")
-            if current_leaf.dtype != restored_leaf.dtype:
-                raise ValueError("Replay snapshot leaf dtypes do not match this buffer.")
-
-        self.storage = restored_storage
-        self.max_capacity = int(metadata["max_capacity"])
-        self.size = int(metadata["size"])
-        self.ptr = int(metadata["ptr"])
+        dummy_data = jax.tree_util.tree_map(lambda leaf: leaf[:1].copy(), self.storage)
+        self.storage = self._allocate_storage(dummy_data, self.max_capacity)
+        self.ptr = 0
+        self.size = 0
+        self.total_inserted = 0
+        self._persisted_total_inserted = 0
+        self._latest_saved_shard_path = None
         self._refresh_storage_views()
-        self._rng = np.random.default_rng()
-        rng_state_json = metadata["rng_state_json"]
-        if isinstance(rng_state_json, bytes):
-            rng_state_json = rng_state_json.decode()
-        else:
-            rng_state_json = str(rng_state_json)
-        self._rng.bit_generator.state = json.loads(rng_state_json)
+        shard_paths = sorted(shard_dir.glob("step_*.h5"))
+        if step is not None:
+            shard_paths = [p for p in shard_paths if int(p.stem.split("_")[-1]) <= int(step)]
 
-        step = int(metadata["step"])
+        for shard_path in shard_paths:
+            with h5py.File(shard_path, "r") as f:
+                restored_data = read_nested(f["transitions"])
+                metadata = dict(f["metadata"].attrs.items())
+            kind = metadata["kind"]
+            if isinstance(kind, bytes):
+                kind = kind.decode()
+            else:
+                kind = str(kind)
+            if kind == "full":
+                self.storage = self._allocate_storage(restored_data, self.max_capacity)
+                self.ptr = 0
+                self.size = 0
+                self.total_inserted = 0
+                self._persisted_total_inserted = 0
+                self._latest_saved_shard_path = None
+                self._refresh_storage_views()
+            elif kind != "delta":
+                raise ValueError(f"Unsupported replay shard kind: {kind}")
+            self.insert(restored_data)
+            self._latest_saved_shard_path = shard_path
+
+        if total_inserted is not None:
+            self.total_inserted = int(total_inserted)
+        self._persisted_total_inserted = int(self.total_inserted)
+        self._latest_saved_shard_path = (
+            None if latest_shard_path is None else Path(latest_shard_path)
+        )
+        self.set_rng_state_json(rng_state_json)
+
         logging.info(
-            "Restored replay buffer snapshot from %s (step=%d, transitions=%d)",
-            path,
+            "Restored replay buffer from shards in %s (step=%s, transitions=%d, latest shard=%s)",
+            shard_dir,
             step,
             self.size,
+            self._latest_saved_shard_path,
         )
-        return {"step": step, "size": int(self.size), "path": str(path)}
+        return {
+            "step": (None if step is None else int(step)),
+            "size": int(self.size),
+            "total_inserted": int(self.total_inserted),
+            "path": (
+                None
+                if self._latest_saved_shard_path is None
+                else str(self._latest_saved_shard_path)
+            ),
+        }
 
 
 if __name__ == "__main__":

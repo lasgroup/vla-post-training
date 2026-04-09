@@ -202,8 +202,12 @@ def test_sharded_replay_buffer_snapshot_roundtrip_preserves_state(tmp_path):
     )
     buf.insert(data)
 
-    snapshot_path = tmp_path / "replay_buffer_latest.h5"
-    snapshot_info = buf.save_snapshot(snapshot_path, step=42)
+    shard_dir = tmp_path / "replay_shards"
+    shard_path = shard_dir / "step_00000042.h5"
+    snapshot_info = buf.save_shard(shard_path, step=42)
+    with h5py.File(shard_path, "r") as f:
+        assert f["transitions"]["observations"]["state"].shape[0] == buf.size
+        assert f["transitions"]["actions"].shape[0] == buf.size
 
     restored = ShardedReplayBuffer(
         dummy_data=dummy,
@@ -213,7 +217,13 @@ def test_sharded_replay_buffer_snapshot_roundtrip_preserves_state(tmp_path):
         seed=999,
         freeze_dict=False,
     )
-    restored_info = restored.restore_snapshot(snapshot_path)
+    restored_info = restored.restore_shards(
+        shard_dir,
+        step=42,
+        total_inserted=buf.total_inserted,
+        latest_shard_path=shard_path,
+        rng_state_json=buf.rng_state_json(),
+    )
 
     assert snapshot_info["step"] == 42
     assert restored_info["step"] == 42
@@ -228,19 +238,30 @@ def test_sharded_replay_buffer_snapshot_roundtrip_preserves_state(tmp_path):
 
 
 def test_restore_train_state_uses_resume_manifest_step(tmp_path):
-    replay_path = tmp_path / "runtime_state" / "replay_buffer_latest.h5"
-    replay_path.parent.mkdir(parents=True, exist_ok=True)
+    replay_dir = tmp_path / "runtime_state" / "replay_shards"
+    replay_dir.mkdir(parents=True, exist_ok=True)
+    replay_path = replay_dir / "step_00000017.h5"
     replay_path.write_bytes(b"snapshot")
     (tmp_path / "999").mkdir()
 
     config = types.SimpleNamespace(checkpoint_dir=tmp_path)
-    write_resume_state(config, step=17, replay_size=23, replay_snapshot=replay_path)
+    write_resume_state(
+        config,
+        step=17,
+        replay_size=23,
+        replay_total_inserted=29,
+        replay_shards=replay_dir,
+        latest_replay_shard=replay_path,
+        replay_rng_state_json="{}",
+    )
     resume_state = load_resume_state(config)
 
     assert resume_state is not None
     assert resume_state.step == 17
     assert resume_state.replay_size == 23
-    assert resume_state.replay_snapshot_path == replay_path
+    assert resume_state.replay_total_inserted == 29
+    assert resume_state.replay_shard_dir == replay_dir
+    assert resume_state.latest_replay_shard_path == replay_path
 
     calls = {}
 
@@ -285,13 +306,23 @@ def test_save_epoch_state_uses_agent_training_steps_for_manifest(tmp_path):
     class _ReplayBuffer:
         def __init__(self):
             self.calls = []
+            self._rng_state_json = '{"state": "ok"}'
 
-        def save_snapshot(self, path, *, step):
+        def save_shard(self, path, *, step):
             snapshot_path = Path(path)
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_bytes(b"snapshot")
             self.calls.append((snapshot_path, step))
-            return {"step": step, "size": 7, "path": str(snapshot_path)}
+            return {
+                "kind": "delta",
+                "step": step,
+                "size": 7,
+                "total_inserted": 11,
+                "path": str(snapshot_path),
+            }
+
+        def rng_state_json(self):
+            return self._rng_state_json
 
     class _Agent:
         def __init__(self):
@@ -320,6 +351,7 @@ def test_save_epoch_state_uses_agent_training_steps_for_manifest(tmp_path):
     assert loaded_resume_state is not None
     assert loaded_resume_state.step == 42
     assert loaded_resume_state.replay_size == 7
+    assert loaded_resume_state.replay_total_inserted == 11
 
 
 def test_validate_unique_exp_names_raises_for_collisions():

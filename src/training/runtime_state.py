@@ -12,8 +12,11 @@ from typing import Any, Callable
 class ResumeState:
     step: int
     replay_size: int
-    replay_snapshot_path: Path
+    replay_total_inserted: int
+    replay_shard_dir: Path
     manifest_path: Path
+    latest_replay_shard_path: Path | None = None
+    replay_rng_state_json: str | None = None
     timestamp: str | None = None
 
 
@@ -25,8 +28,12 @@ def _runtime_state_dir(config: Any) -> Path:
     return _checkpoint_dir(config) / "runtime_state"
 
 
-def replay_snapshot_path(config: Any) -> Path:
-    return _runtime_state_dir(config) / "replay_buffer_latest.h5"
+def replay_shard_dir(config: Any) -> Path:
+    return _runtime_state_dir(config) / "replay_shards"
+
+
+def replay_shard_path(config: Any, step: int) -> Path:
+    return replay_shard_dir(config) / f"step_{int(step):08d}.h5"
 
 
 def resume_state_path(config: Any) -> Path:
@@ -52,21 +59,36 @@ def write_resume_state(
     *,
     step: int,
     replay_size: int,
-    replay_snapshot: Path,
+    replay_total_inserted: int,
+    replay_shards: Path,
+    latest_replay_shard: Path | None,
+    replay_rng_state_json: str,
 ) -> ResumeState:
     manifest_path = resume_state_path(config)
     payload = {
         "step": int(step),
         "replay_size": int(replay_size),
-        "replay_snapshot_path": str(replay_snapshot),
+        "replay_total_inserted": int(replay_total_inserted),
+        "replay_shard_dir": str(replay_shards),
+        "latest_replay_shard_path": (
+            None if latest_replay_shard is None else str(latest_replay_shard)
+        ),
+        "replay_rng_state_json": replay_rng_state_json,
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
     _atomic_write_text(manifest_path, json.dumps(payload, indent=2, sort_keys=True))
     return ResumeState(
         step=int(payload["step"]),
         replay_size=int(payload["replay_size"]),
-        replay_snapshot_path=Path(payload["replay_snapshot_path"]),
+        replay_total_inserted=int(payload["replay_total_inserted"]),
+        replay_shard_dir=Path(payload["replay_shard_dir"]),
         manifest_path=manifest_path,
+        latest_replay_shard_path=(
+            None
+            if payload["latest_replay_shard_path"] is None
+            else Path(payload["latest_replay_shard_path"])
+        ),
+        replay_rng_state_json=payload["replay_rng_state_json"],
         timestamp=payload["timestamp"],
     )
 
@@ -83,19 +105,31 @@ def load_resume_state(config: Any) -> ResumeState | None:
         return None
 
     payload = json.loads(manifest_path.read_text())
-    replay_path = Path(payload["replay_snapshot_path"])
-    if not replay_path.is_absolute():
-        replay_path = manifest_path.parent / replay_path
-    if not replay_path.exists():
+    shard_dir = Path(payload["replay_shard_dir"])
+    if not shard_dir.is_absolute():
+        shard_dir = manifest_path.parent / shard_dir
+    latest_shard = payload.get("latest_replay_shard_path")
+    if latest_shard is not None:
+        latest_shard = Path(latest_shard)
+        if not latest_shard.is_absolute():
+            latest_shard = manifest_path.parent / latest_shard
+        if not latest_shard.exists():
+            raise FileNotFoundError(
+                f"Resume state at {manifest_path} points to a missing replay shard: {latest_shard}"
+            )
+    elif int(payload["replay_total_inserted"]) > 0:
         raise FileNotFoundError(
-            f"Resume state at {manifest_path} points to a missing replay snapshot: {replay_path}"
+            f"Resume state at {manifest_path} is missing its latest replay shard path."
         )
 
     return ResumeState(
         step=int(payload["step"]),
         replay_size=int(payload["replay_size"]),
-        replay_snapshot_path=replay_path,
+        replay_total_inserted=int(payload["replay_total_inserted"]),
+        replay_shard_dir=shard_dir,
         manifest_path=manifest_path,
+        latest_replay_shard_path=latest_shard,
+        replay_rng_state_json=payload.get("replay_rng_state_json"),
         timestamp=payload.get("timestamp"),
     )
 
@@ -152,18 +186,26 @@ def save_epoch_state(
     if replay_buffer is None:
         raise AttributeError("Agent is missing _online_data_buffer for epoch-state saves.")
 
-    snapshot_path = replay_snapshot_path(config)
-    snapshot_info = replay_buffer.save_snapshot(snapshot_path, step=step)
+    shard_path = replay_shard_path(config, step)
+    shard_info = replay_buffer.save_shard(shard_path, step=step)
     resume_state = write_resume_state(
         config,
         step=step,
-        replay_size=int(snapshot_info["size"]),
-        replay_snapshot=snapshot_path,
+        replay_size=int(shard_info["size"]),
+        replay_total_inserted=int(shard_info["total_inserted"]),
+        replay_shards=replay_shard_dir(config),
+        latest_replay_shard=(
+            None
+            if shard_info["path"] is None
+            else Path(str(shard_info["path"]))
+        ),
+        replay_rng_state_json=replay_buffer.rng_state_json(),
     )
     logging.info(
-        "Saved resumable epoch state at step %d (replay transitions=%d, manifest=%s)",
+        "Saved resumable epoch state at step %d (replay transitions=%d, latest shard=%s, manifest=%s)",
         resume_state.step,
         resume_state.replay_size,
+        resume_state.latest_replay_shard_path,
         resume_state.manifest_path,
     )
     return resume_state
