@@ -71,42 +71,34 @@ worker_jsons = sorted(out_dir.glob(f'{output_prefix}_shard*.json'))
 if not worker_jsons:
     raise SystemExit(f'No worker JSON files found in {out_dir}')
 
-rows = []
+rows_by_env_map = {}
 for path in worker_jsons:
-    rows.extend(json.loads(path.read_text()))
+    for row in json.loads(path.read_text()):
+        env_id = row['env_id']
+        if env_id in rows_by_env_map:
+            raise SystemExit(f'Duplicate env_id {env_id} across shard outputs in {out_dir}')
+        rows_by_env_map[env_id] = row
 
-rows_by_env = sorted(rows, key=lambda row: row['env_id'])
-rows_ranked = sorted(
-    rows,
-    key=lambda row: (-row['sr'], -row['successes'], row['mean_steps'], row['env_id']),
-)
-ranked_rows = [{'rank': i, **row} for i, row in enumerate(rows_ranked, start=1)]
+rows_by_env = [rows_by_env_map[env_id] for env_id in sorted(rows_by_env_map)]
 
 (out_dir / 'combined.by_env.json').write_text(json.dumps(rows_by_env, indent=2) + '\n')
-(out_dir / 'combined.ranked.json').write_text(json.dumps(ranked_rows, indent=2) + '\n')
 
-for filename, payload in [
-    ('combined.by_env.csv', rows_by_env),
-    ('combined.ranked.csv', ranked_rows),
-]:
-    path = out_dir / filename
-    fieldnames = sorted({key for row in payload for key in row.keys()}) if payload else ['env_id', 'env_name', 'sr']
-    with path.open('w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(payload)
+path = out_dir / 'combined.by_env.csv'
+fieldnames = sorted({key for row in rows_by_env for key in row.keys()}) if rows_by_env else ['env_id', 'env_name', 'successes', 'episodes', 'sr']
+with path.open('w', newline='', encoding='utf-8') as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+    writer.writeheader()
+    writer.writerows(rows_by_env)
 
 print('[runner] wrote:')
 print(f'[runner]   {out_dir / "combined.by_env.json"}')
 print(f'[runner]   {out_dir / "combined.by_env.csv"}')
-print(f'[runner]   {out_dir / "combined.ranked.json"}')
-print(f'[runner]   {out_dir / "combined.ranked.csv"}')
-print('[runner] top 10 by SR:')
-for row in ranked_rows[:10]:
+print('[runner] per-environment success summary:')
+for row in rows_by_env:
     print(
         '[runner] '
-        f"#{row['rank']:02d} {row['env_name']} sr={row['sr']:.3f} "
-        f"({row['successes']}/{row['episodes']}) | house={row['house_index']} | "
+        f"{row['env_name']} successes={row['successes']}/{row['episodes']} "
+        f"sr={row['sr']:.3f} | house={row['house_index']} | "
         f"{row['task_description']}"
     )
 PY
