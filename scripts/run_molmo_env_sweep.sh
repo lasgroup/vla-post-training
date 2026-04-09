@@ -6,12 +6,17 @@ checkpoint_dir="${CHECKPOINT_DIR:-gs://openpi-assets/checkpoints/pi05_droid_join
 env_range="${ENV_RANGE:-0-29}"
 episodes_per_env="${EPISODES_PER_ENV:-10}"
 max_steps="${MAX_STEPS:-450}"
-num_shards="${NUM_SHARDS:-4}"
+num_shards="${NUM_SHARDS:-1}"
 seed="${SEED:-0}"
 output_root="${OUTPUT_ROOT:-outputs/molmo_env_sweep}"
-run_name="${RUN_NAME:-molmo_first30_sr_$(date -u +%Y%m%d_%H%M%S)}"
+run_name="${RUN_NAME:-molmo_first30_seq_$(date -u +%Y%m%d_%H%M%S)}"
 output_dir="${OUTPUT_DIR:-${output_root%/}/${run_name}}"
 output_prefix="${OUTPUT_PREFIX:-results}"
+reset_output="${RESET_OUTPUT:-0}"
+
+if [[ "$reset_output" == "1" ]]; then
+  rm -rf "$output_dir"
+fi
 
 mkdir -p "$output_dir"
 mkdir -p logs
@@ -21,43 +26,24 @@ echo "[runner] env_range=$env_range"
 echo "[runner] episodes_per_env=$episodes_per_env"
 echo "[runner] num_shards=$num_shards"
 echo "[runner] output_dir=$output_dir"
+echo "[runner] reset_output=$reset_output"
 
-pids=()
-cleanup() {
-  for pid in "${pids[@]:-}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-    fi
-  done
-}
-trap cleanup INT TERM
+export PYTHONUNBUFFERED=1
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export MUJOCO_EGL_DEVICE_ID=0
+export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.85}"
 
-for ((shard=0; shard<num_shards; shard++)); do
-  gpu_index=$((shard % 4))
-  (
-    export PYTHONUNBUFFERED=1
-    export CUDA_VISIBLE_DEVICES="$gpu_index"
-    export MUJOCO_EGL_DEVICE_ID=0
-    export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.85}"
-
-    uv run python scripts/eval_molmo_env_sweep.py \
-      --checkpoint-dir "$checkpoint_dir" \
-      --env-range "$env_range" \
-      --episodes-per-env "$episodes_per_env" \
-      --max-steps "$max_steps" \
-      --seed "$seed" \
-      --num-shards "$num_shards" \
-      --shard-index "$shard" \
-      --render-device 0 \
-      --output-dir "$output_dir" \
-      --output-prefix "$output_prefix"
-  ) 2>&1 | sed "s/^/[worker $shard gpu $gpu_index] /" &
-  pids+=("$!")
-done
-
-for pid in "${pids[@]}"; do
-  wait "$pid"
-done
+uv run python scripts/eval_molmo_env_sweep.py \
+  --checkpoint-dir "$checkpoint_dir" \
+  --env-range "$env_range" \
+  --episodes-per-env "$episodes_per_env" \
+  --max-steps "$max_steps" \
+  --seed "$seed" \
+  --num-shards "$num_shards" \
+  --shard-index 0 \
+  --render-device 0 \
+  --output-dir "$output_dir" \
+  --output-prefix "$output_prefix"
 
 python3 - <<'PY' "$output_dir" "$output_prefix"
 import csv
