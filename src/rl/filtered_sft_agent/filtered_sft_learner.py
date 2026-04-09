@@ -270,6 +270,14 @@ class FilteredSFTLearner(Agent):
             restored_replay = self._online_data_buffer.restore_snapshot(
                 self._resume_state.replay_snapshot_path
             )
+            restored_replay_step = int(restored_replay["step"])
+            if restored_replay_step != int(self._resume_state.step):
+                logging.warning(
+                    "Replay snapshot step %d does not match manifest step %d for %s",
+                    restored_replay_step,
+                    self._resume_state.step,
+                    self._config.checkpoint_dir,
+                )
             logging.info(
                 "Restored replay buffer from %s (step=%d, transitions=%d)",
                 restored_replay["path"],
@@ -294,7 +302,15 @@ class FilteredSFTLearner(Agent):
                 self._data_loader,
                 resume_state=self._resume_state,
             )
+            restored_train_step = int(jax.device_get(self._train_state.step))
             if self._resume_state is not None:
+                if restored_train_step != int(self._resume_state.step):
+                    logging.warning(
+                        "Restored checkpoint step %d does not match manifest step %d for %s",
+                        restored_train_step,
+                        self._resume_state.step,
+                        self._config.checkpoint_dir,
+                    )
                 logging.info(
                     "Restored training checkpoint from %s at committed step %d",
                     self._config.checkpoint_dir,
@@ -302,7 +318,7 @@ class FilteredSFTLearner(Agent):
                 )
                 self.training_steps = int(self._resume_state.step)
             else:
-                self.training_steps = int(jax.device_get(self._train_state.step))
+                self.training_steps = restored_train_step
         else:
             self.training_steps = 0
 
