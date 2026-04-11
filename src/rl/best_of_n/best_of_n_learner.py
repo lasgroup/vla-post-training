@@ -385,11 +385,11 @@ class BestofNLearner(FilteredSFTLearner):
             batch,
             policy_state,
         )
+
+        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
         
         # Update the state action critic state
         num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
-
-        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
 
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
@@ -410,10 +410,73 @@ class BestofNLearner(FilteredSFTLearner):
 
         return q_state, value_state, q_info, value_info
 
+    def pretrain_with_offline_data(self):
+        self.warm_start_training_steps += 1
+        assert isinstance(self._config.rl, BestofNLearnerConfig), (
+            "Only BestofN config should be passed to the best-of-N agent"
+        )
+        update_critic = False
+        critic_info = {}
+
+        if self._offline_data_buffer is None or self._offline_data_buffer.size == 0:
+            raise ValueError(
+                "Cannot pretrain agent: offline buffer is empty. "
+                "Set offline_buffer_load_paths in the config."
+            )
+
+        batch = self._offline_data_buffer.sample(
+            batch_size=self._config.batch_size
+        )
+        if update_critic:
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+            critic_info = {f"pretrain/q/{k}": v for k, v in q_info.items()
+                            } | {f"pretrain/value/{k}": v for k, v in value_info.items()}
+        info = jax.tree.map(np.asarray, critic_info)
+        return info
+
+    def _prepare_critic_state_after_pretraining(self):
+        # Reset optimizer state of the value and q function
+        q_opt_state = self._state_action_critic_state.tx.init(
+            nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+        )
+        new_ema_state_action_critic_params = jax.tree.map(
+            jnp.copy, self._state_action_critic_state.params
+        )
+        self._state_action_critic_state = dataclasses.replace(
+            self._state_action_critic_state,
+            opt_state=q_opt_state,
+            ema_params=new_ema_state_action_critic_params,
+        )
+        del new_ema_state_action_critic_params, q_opt_state
+
+        v_opt_state = self._value_state.tx.init(
+            nnx.filter_state(self._value_state.params, nnx.Param)
+        )
+        new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
+        self._value_state = dataclasses.replace(
+            self._value_state,
+            opt_state=v_opt_state,
+            ema_params=new_ema_value_params,
+        )
+        del new_ema_value_params, v_opt_state
+
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, BestofNLearnerConfig), "Only BestofN config should " \
-                                                                                "be passed to the best-of-N agent"
+        assert isinstance(self._config.rl, BestofNLearnerConfig), (
+            "Only BestofN config should be passed to the best-of-N agent"
+        )
         rl_config = self._config.rl
 
         if rl_config.critic_pre_training_steps == self.training_steps:
@@ -459,34 +522,75 @@ class BestofNLearner(FilteredSFTLearner):
         use_online = (
                 online_batch_size > 0 and self._online_data_buffer.size >= online_batch_size
         )
+        use_online = self._online_data_buffer.size >= online_batch_size
+        has_offline = self._offline_data_buffer is not None and self._offline_data_buffer.size > 0
 
         critic_info = {}
-        if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
-            if update_critic:
-                if self.debug:
-                    log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=online_batch
-                    )
-                critic_rng, self._rng = jax.random.split(self._rng, 2)
-                with sharding.set_mesh(self._mesh):
-                    q_state, value_state, q_info, value_info = (
-                        self._update_critics_jitted(
-                            online_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            critic_rng,
-                        )
-                    )
-                self._state_action_critic_state = q_state
-                self._value_state = value_state
 
-                critic_info = {
-                                  f"critic/q_{key}": value for key, value in q_info.items()
-                              } | {f"critic/value_{key}": value for key, value in value_info.items()}
-                if self.debug:
-                    log_memory_debug("after_update_critics")
+        # --- Determine the critic batch (replay-buffer format) ---
+        offline_batch = None
+        if has_offline:
+            offline_batch = self._offline_data_buffer.sample(
+                batch_size=batch_size,
+            )
+        if use_online:
+            critic_source_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+            
+            if offline_batch is not None and rl_config.online_ratio < 1.0:
+                n_online = min(
+                    int(batch_size * rl_config.online_ratio),
+                    jax.tree.leaves(critic_source_batch)[0].shape[0],
+                )
+                n_offline = batch_size - n_online
+                critic_source_batch = jax.tree.map(
+                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
+                    offline_batch,
+                    critic_source_batch,
+                )
+                # The online batch may be replicated (PartitionSpec()) while
+                # the offline batch is sharded. Re-shard the mixed result to
+                # match the data sharding expected by _train_step.
+                critic_source_batch = jax.device_put(critic_source_batch, self._data_sharding)
+                del offline_batch
+                gc.collect()
+        else:
+            critic_source_batch = None
+            if offline_batch is not None:
+                critic_source_batch = offline_batch
+                del offline_batch
+                gc.collect()
+            
+        if critic_source_batch is None:
+            return {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
+
+        if update_critic:
+            if self.debug:
+                log_memory_debug(
+                    "before_critics", train_state=self._train_state, batch=critic_source_batch
+                )
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        critic_source_batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+
+            critic_info = {
+                                f"critic/q_{key}": value for key, value in q_info.items()
+                            } | {f"critic/value_{key}": value for key, value in value_info.items()}
+            if self.debug:
+                log_memory_debug("after_update_critics")
         info = (
                 critic_info
                 | {

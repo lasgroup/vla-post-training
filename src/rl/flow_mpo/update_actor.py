@@ -1,5 +1,5 @@
 # ruff: noqa: F722
-from src.training.config import OnlineTrainConfig, FlowGRPOSFTLearnerConfig
+from src.training.config import OnlineTrainConfig, FlowMPOSFTLearnerConfig
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
     flatten_action_horizon,
@@ -69,13 +69,13 @@ def train_step(
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
+    assert isinstance(config.rl, FlowMPOSFTLearnerConfig)
     policy_observation, critic_observation, actions = batch
 
     reset_period = config.rl.reset_policy_params_to_ema_period
-    group_size = config.rl.group_size
-    normalize_adv = config.rl.normalize_adv
-    use_mpo_advantage_weight = config.rl.use_mpo_advantage_weight
+    group_size = config.rl.group_size # should be one, mpo does global batch weighting not group relative
+    assert group_size == 1
+    
     weight_clip = config.rl.weight_clip
     beta = max(config.rl.beta, 1e-6)
     num_steps = config.rl.num_steps
@@ -83,8 +83,7 @@ def train_step(
     use_ema_for_sampling = config.rl.use_ema_for_sampling
     clip_epsilon = config.rl.clip_epsilon # this is for ratio clipping 
 
-    if use_mpo_advantage_weight:
-        group_size = 1
+    #group_size = 1
 
     # build two models one for sampling, one ema
     # current policy for gradient computatioms
@@ -150,27 +149,10 @@ def train_step(
     advantage = q_value - value
 
     # calvulate scores
-    if use_mpo_advantage_weight:
-        score = advantage / beta
-        score = jnp.minimum(score, weight_clip)
-        score = jax.nn.softmax(score, axis=0)
-        score = jax.lax.stop_gradient(score)
-    else:
-        adv = advantage
-        if normalize_adv and group_size > 1:
-            total_batch_size = adv.shape[0]
-            assert (
-                total_batch_size % group_size == 0
-            ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-            B = total_batch_size // group_size
-            adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-            old_log_probs = jnp.swapaxes(old_log_probs.reshape(B, group_size, -1), 1, 2)
-            group_mean = jnp.mean(adv, axis=-1, keepdims=True)
-            group_std = jnp.std(adv, axis=-1, keepdims=True)
-            adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
-        #if weight_clip is not None:
-        #    adv = jnp.clip(adv, -weight_clip, weight_clip)
-        score = jax.lax.stop_gradient(adv)
+    score = advantage / beta
+    score = jnp.minimum(score, weight_clip)
+    score = jax.nn.softmax(score, axis=0)
+    score = jax.lax.stop_gradient(score)
 
     if score.ndim == 1:
         score = score[:, jnp.newaxis, jnp.newaxis]
@@ -192,12 +174,6 @@ def train_step(
             num_steps=num_steps,
             noise_level=noise_level,
         )
-
-        if normalize_adv and group_size > 1 and not use_mpo_advantage_weight:
-            B = current_log_probs.shape[0] // group_size
-            current_log_probs = jnp.swapaxes(
-                current_log_probs.reshape(B, group_size, -1), 1, 2
-            )
 
         # r_t(theta) = pi_theta / pi_theta_old  -> logr_t = log_pi_theta - log_pi_theta_old
         log_ratio = current_log_probs - old_log_probs

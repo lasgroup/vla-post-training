@@ -82,7 +82,6 @@ def train_step(
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
-        # TODO: Replce nasty while loop with assert on the dimension of the arrays
         # assert chunked_loss.shape == (B, 1)
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]

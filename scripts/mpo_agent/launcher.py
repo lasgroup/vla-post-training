@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launcher for MPO-agent experiments.
+"""Launcher for AWR-agent experiments.
 
 Usage:
-    ./scripts/mpo_agent/launcher.py --project_name my_project
-    ./scripts/mpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/mpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/awr_agent/launcher.py --project_name my_project
+    ./scripts/awr_agent/launcher.py --project_name my_project --dry
+    ./scripts/awr_agent/launcher.py --project_name my_project --mode local
 """
 
 import argparse
@@ -41,7 +41,6 @@ DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-USE_SAME_EVAL_AND_TRAIN_TASK = True
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -49,38 +48,47 @@ USE_SAME_EVAL_AND_TRAIN_TASK = True
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10],
+    "rl.num_critic_updates_per_batch": [
+        10
+    ],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
+    "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
+    "lr_schedule.value": [2.5e-5, 5e-6],
+    "rl.td_weight_schedule.switch_step": [-1],
+    "rl.store_success_episodes_only": [False],
+    "rl.num_offline_pretraining_steps": [1_000],
+    "rl.warm_start_critic_update_interval": [1],
     ("collect.tasks", "collect.eval_tasks"): [
-        ("libero_90_2", "libero_90_2"),
-        ("libero_90_7", "libero_90_7"),
-        ("libero_90_9", "libero_90_9"),
-        ("libero_90_11", "libero_90_11"),
+        # "libero_90_2",
+        # "libero_90_7",
+        # "libero_90_9",
+        # "libero_90_11",
         ("libero_90_14", "libero_90_14"),
-        ("libero_90_26", "libero_90_26"),
-        ("libero_90_28", "libero_90_28"),
-        ("libero_90_30", "libero_90_30"),
-        ("libero_90_31", "libero_90_31"),
-        ("libero_90_35", "libero_90_35"),
-        ("libero_90_38", "libero_90_38"),
-        ("libero_90_41", "libero_90_41"),
-        ("libero_90_53", "libero_90_53"),
+        # "libero_90_26",
+        # "libero_90_28",
+        # "libero_90_30",
+        # "libero_90_31",
+        # "libero_90_35",
+        # ("libero_90_38", "libero_90_38"),
+        # "libero_90_41",
+        # "libero_90_53",
         ("libero_90_59", "libero_90_59"),
-        ("libero_90_60", "libero_90_60"),
-        ("libero_90_61", "libero_90_61"),
-        ("libero_90_62", "libero_90_62"),
+        # "libero_90_60",
+        # "libero_90_61",
+        # "libero_90_62",
         ("libero_90_64", "libero_90_64"),
-        ("libero_90_74", "libero_90_74"),
-        ("libero_90_77", "libero_90_77"),
-        ("libero_90_79", "libero_90_79"),
+        # "libero_90_74",
+        # "libero_90_77",
+        # "libero_90_79",
         ("libero_90_82", "libero_90_82"),
     ],
 }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -105,6 +113,9 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
+
+    # AWR defaults matching submit_train.sh
     parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
     parser.add_argument(
         "--policy_start_training", type=int, default=DEFAULT_POLICY_START_TRAINING
@@ -119,11 +130,8 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument(
-        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
-    )
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
-    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
     args = parser.parse_args()
 
@@ -155,8 +163,12 @@ def main() -> None:
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
+        if flags["rl.td_weight_schedule.switch_step"] == -1:
+            flags["rl.td_weight_schedule.switch_step"] = policy_start
+        # If we only train on the mc returns, we do not need a target critic for policy updates.
+        elif flags["rl.td_weight_schedule.switch_step"] >= NUM_TRAIN_STEPS:
+            flags["rl.use_ema_critic"] = False
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 

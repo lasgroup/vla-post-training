@@ -247,6 +247,7 @@ class FilteredSFTLearner(Agent):
         )
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer()
+        self._offline_data_buffer = self._get_offline_data_buffer()
         self._collection_success_episodes = 0
 
         # Initialize train state.
@@ -358,26 +359,7 @@ class FilteredSFTLearner(Agent):
         )
         self._token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-        # prepare dummy data for initializing the replay buffer
-        # TODO: this might need to be updated to store prefixes
-        obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
-        obs_spec_dict = obs_spec.to_dict()
-        dummy_obs_dict = jax.tree.map(
-            lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict
-        )
-        dummy_obs_dict = {k: v for k, v in dummy_obs_dict.items() if v is not None}
-        if "image" in dummy_obs_dict:
-            dummy_obs_dict["image"] = jax.tree.map(
-                lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
-            )
-        dummy_data = {
-            "observation": dummy_obs_dict,
-            "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
-            "next_observation": dummy_obs_dict,
-            "reward": np.zeros((1,), dtype=np.float32),
-            "mc_return": np.zeros((1,), dtype=np.float32),
-            "discount": np.zeros((1,), dtype=np.float32),
-        }
+        dummy_data = self._make_buffer_dummy_data()
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
             self._config.rl.buffer_capacity,
@@ -394,6 +376,51 @@ class FilteredSFTLearner(Agent):
             load_paths=self._config.rl.buffer_load_paths,
             save_path=self._config.rl.buffer_save_path,
         )
+
+    def _make_buffer_dummy_data(self) -> dict[str, Any]:
+        # TODO: this might need to be updated to store prefixes
+        obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
+        obs_spec_dict = obs_spec.to_dict()
+        dummy_obs_dict = jax.tree.map(
+            lambda spec: np.zeros(spec.shape, dtype=spec.dtype), obs_spec_dict
+        )
+        dummy_obs_dict = {k: v for k, v in dummy_obs_dict.items() if v is not None}
+        if "image" in dummy_obs_dict:
+            dummy_obs_dict["image"] = jax.tree.map(
+                lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
+            )
+        return {
+            "observation": dummy_obs_dict,
+            "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
+            "next_observation": dummy_obs_dict,
+            "reward": np.zeros((1,), dtype=np.float32),
+            "mc_return": np.zeros((1,), dtype=np.float32),
+            "discount": np.zeros((1,), dtype=np.float32),
+        }
+
+    def _get_offline_data_buffer(self) -> ShardedReplayBuffer | None:
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
+        if not rl_config.offline_buffer_load_paths:
+            return None
+        dummy_data = self._make_buffer_dummy_data()
+        logging.info(
+            "Loading offline replay buffer (capacity=%d) from %s",
+            rl_config.offline_buffer_capacity,
+            rl_config.offline_buffer_load_paths,
+        )
+        buffer = ShardedReplayBuffer(
+            dummy_data=dummy_data,
+            max_capacity=rl_config.offline_buffer_capacity,
+            data_sharding=self._data_sharding,
+            seed=self._config.seed,
+            preprocess_fn=None,
+            postprocess_fn=None,
+            freeze_dict=False,
+            load_paths=list(rl_config.offline_buffer_load_paths),
+        )
+        logging.info("Offline buffer loaded: %d transitions", buffer.size)
+        return buffer
 
     def _process_obs_for_pi0(
         self,
@@ -503,6 +530,17 @@ class FilteredSFTLearner(Agent):
             _model.Observation.from_dict(online_batch["observation"]),
             online_batch["actions"],
         )
+
+    def _sample_offline_sft_batch(
+        self,
+    ) -> tuple[_model.Observation, _model.Actions]:
+        """Sample offline data in SFT format, preferring the offline buffer over the SFT data loader."""
+        if self._offline_data_buffer is not None and self._offline_data_buffer.size > 0:
+            offline_batch = self._offline_data_buffer.sample(
+                batch_size=self._config.batch_size
+            )
+            return self._online_batch_to_sft_batch(offline_batch)
+        return next(self._data_iter)
 
     def save_checkpoint(self, step: int | None = None):
         if step is None:
@@ -691,8 +729,28 @@ class FilteredSFTLearner(Agent):
         self._collection_success_episodes = 0
         return collected_episodes
 
+    def pretrain_with_offline_data(self):
+        self.warm_start_training_steps += 1
+        rl_config = self._config.rl
+        assert isinstance(rl_config, FilteredSFTLearnerConfig)
+        if rl_config.warm_start_policy_update_interval:
+            update_policy = self.warm_start_training_steps % rl_config.warm_start_policy_update_interval == 0
+        else:
+            update_policy = False
+        if update_policy:
+            batch = self._sample_offline_sft_batch()
+            train_rng, self._rng = jax.random.split(self._rng)
+            with sharding.set_mesh(self._mesh):
+                policy_state, info = self._train_step(train_rng, self._train_state, batch)
+            self._train_state = policy_state
+            info = jax.tree.map(np.asarray, info)
+            return info
+        else:
+            return {}
+
     def update(self):
         self.training_steps += 1
+        assert isinstance(self._config.rl, FilteredSFTLearnerConfig)
         update_policy = (
             self.training_steps >= self._config.rl.policy_training_start_step
             and self.training_steps % self._config.rl.policy_update_interval == 0
@@ -704,7 +762,7 @@ class FilteredSFTLearner(Agent):
             return {}
         online_ratio = self._config.rl.online_ratio
         if online_ratio < 1.0:
-            batch = next(self._data_iter)
+            batch = self._sample_offline_sft_batch()
         if online_ratio > 0.0:
             online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
             online_batch_raw = self._online_data_buffer.sample(

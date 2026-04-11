@@ -64,12 +64,15 @@ class RLAlgorithmConfig:
     buffer_capacity: int = 1024
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
+    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf"
+                                                "/libero_online_buffer_time_to_success",)
+    num_offline_pretraining_steps: int = 0
 
 
 # Define hyperparameter structures for your algorithms
 @dataclasses.dataclass(frozen=True)
 class BestofNLearnerConfig(RLAlgorithmConfig):
-    n_samples: int = 8
+    n_samples: int = 32
     online_ratio: float = 1.0
     critic_update_interval: int = 1
     critic_training_start_step: int = 0
@@ -83,22 +86,28 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
-    critic_inference_start_step: int = 100
-    td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
+    critic_inference_start_step: int = 900
+    td_weight_schedule: StepSchedule = StepSchedule(
+        init_value=0.0, end_value=1.0, switch_step=1_000
+    )
     train_on_policy_value_function: bool = False
     critic_pre_training_steps: int = 1_000
-    num_value_bins: int = 1       # 1 = Gaussian (MSE-equivalent), >1 = Categorical over bins
-    value_lower_bound: float | None = None  # None -> auto-compute from reward type and discount
+    warm_start_critic_update_interval: int | None = None
+    offline_buffer_capacity: int = 250_000
+    num_value_bins: int = 1                     # 1 = Gaussian (MSE-equivalent), >1 = Categorical over bins
+    value_lower_bound: float | None = None      # None -> auto-compute from reward type and discount
     value_upper_bound: float | None = None
-    value_target_type: str = "one_hot"   # "one_hot" | "two_hot"
+    value_target_type: str = "one_hot"          # "one_hot" | "two_hot"
 
 
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_update_interval: int = 1
+    warm_start_policy_update_interval: int | None = None
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
+    offline_buffer_capacity: int = 100_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -119,6 +128,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
         init_value=0.0, end_value=1.0, switch_step=1_000
     )
     critic_pre_training_steps: int = 1_000
+    warm_start_critic_update_interval: int | None = None
     critic_num_qs: int = 2
     critic_num_vs: int = 2
     num_critic_updates_per_batch: int = 1
@@ -141,7 +151,20 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
+
+@dataclasses.dataclass(frozen=True)
+class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    group_size: int = 1
+    num_steps: int = 10
+    noise_level: float = 0.3
+    normalize_adv: bool = True
+
+@dataclasses.dataclass(frozen=True)
+class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    num_steps: int = 10
+    noise_level: float = 0.3
+    kl_coef: float = 0.01
+    use_ema_for_sampling: bool = True
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
