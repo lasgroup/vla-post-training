@@ -2,9 +2,9 @@
 """Launcher for Flow-GRPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/flow_grpo_agent/launcher.py --project_name flow_grpo_sweep
+    ./scripts/flow_grpo_agent/launcher.py --project_name flow_grpo_sweep --dry
+    ./scripts/flow_grpo_agent/launcher.py --project_name flow_grpo_sweep --mode local
 """
 
 import argparse
@@ -49,7 +49,7 @@ NAME_KEYS = [
     ("collect.tasks", "t"),
     ("rl.policy_training_start_step", "ps"),
     ("rl.online_ratio", "or"),
-    ("lr_schedule.value", "lr"),
+    ("lr_schedule.peak_lr", "lr"),
     ("rl.group_size", "g"),
     ("rl.clip_epsilon", "ce"),
     ("rl.num_steps", "ns"),
@@ -66,29 +66,33 @@ NAME_KEYS = [
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0],
     "log_interval": [25],
-    # --- shared training knobs (frozen for stage 1) ---
-    "lr_schedule.value": [1e-5],
     "rl.num_critic_updates_per_batch": [10],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
     "rl.use_mc_returns": [False],
-    "collect.num_initial_rollouts": [5],
+    "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [1_000],
     "rl.warm_start_critic_update_interval": [1],
+
+
     # --- flow-GRPO-specific knobs ---
+    "lr_schedule.peak_lr": [1e-5, 1e-6],
+    "batch_size": [128],
     "rl.group_size": [4, 8],
     "rl.clip_epsilon": [0.1, 0.2],
-    "rl.num_steps": [5, 10],
+    #"rl.num_steps": [5, 10],
     "rl.noise_level": [0.2, 0.3],
-    "rl.use_ema_for_sampling": [True, False],
+    "rl.use_ema_for_sampling": [True],
     "rl.normalize_adv": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
+        ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
+        ("libero_90_64", "libero_90_64"),
+        ("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -104,7 +108,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(

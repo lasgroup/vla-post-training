@@ -51,7 +51,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
     "collect.num_initial_rollouts": [5],
-    "lr_schedule.value": [2.5e-5],
+    "lr_schedule.peak_lr": [2.5e-5],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
         # "libero_90_7",

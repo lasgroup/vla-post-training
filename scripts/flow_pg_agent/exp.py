@@ -1,6 +1,15 @@
 # ruff: noqa: E402
 # suppress Numba FNV hashing warnings
+import os
+import sys
 import warnings
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+OPENPI_SRC_ROOT = os.path.join(REPO_ROOT, "openpi", "src")
+if OPENPI_SRC_ROOT not in sys.path:
+    sys.path.insert(0, OPENPI_SRC_ROOT)
 
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.encoders import MLPEncoder
@@ -26,7 +35,6 @@ disable_progress_bars()
 
 # allows using subprocenvs
 import multiprocessing as mp
-import os
 
 mp.set_start_method("spawn", force=True)
 

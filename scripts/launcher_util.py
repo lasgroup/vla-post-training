@@ -5,7 +5,7 @@ import json
 import os
 import secrets
 import shlex
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Default SLURM settings matching existing bash scripts
 DEFAULT_ACCOUNT = "a143"
@@ -70,7 +70,7 @@ def _fmt_exp_value(value: Any) -> str:
             return "0"
         s = f"{value:.0e}" if abs(value) < 1e-3 or abs(value) >= 1e3 else str(value)
         return s.replace("+", "").replace(".", "p")
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, Tuple)):
         if len(value) == 1:
             return _fmt_exp_value(value[0])
         return "-".join(_fmt_exp_value(v) for v in value)
@@ -81,7 +81,7 @@ def _fmt_exp_value(value: Any) -> str:
 
 
 def algo_exp_name(
-    prefix: str, flags: Dict[str, Any], keys: List[tuple[str, str]]
+    prefix: str, flags: Dict[str, Any], keys: List[Tuple[str, str]]
 ) -> str:
     """Generate a descriptive experiment name from swept hyperparameters.
 

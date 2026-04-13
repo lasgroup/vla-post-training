@@ -20,10 +20,10 @@ import openpi.training.weight_loaders as weight_loaders
 class ConstantSchedule(_optimizer.LRScheduleConfig):
     """Constant learning rate schedule."""
 
-    value: float = 5e-5
+    peak_lr: float = 5e-5
 
     def create(self) -> optax.Schedule:
-        return optax.constant_schedule(self.value)
+        return optax.constant_schedule(self.peak_lr)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -151,6 +151,41 @@ class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     kl_coef: float = 0.01
+
+
+@dataclasses.dataclass(frozen=True)
+class MPOLearnerConfig(MPOWeightedSFTLearnerConfig):
+    """MPO with E-step dual optimization (Abdolmaleki et al., 2018).
+
+    Implements the full MPO algorithm:
+    - E-step: solve convex dual for temperature eta* (Eq. 8-9)
+    - M-step: weighted maximum likelihood with adaptive KL constraint (Eq. 10-12)
+    """
+    group_size: int = 8
+    num_steps: int = 10
+    noise_level: float = 0.3
+
+    # E-step dual optimization (paper Eq. 9, Table 2: epsilon = 0.1)
+    epsilon_e: float = 0.1
+    use_dual_eta: bool = True
+    dual_eta_steps: int = 15
+    dual_eta_lr: float = 0.5
+
+    # M-step KL constraint (paper Eq. 12)
+    epsilon_m: float = 0.01
+    kl_coef: float = 0.01
+    use_adaptive_kl: bool = True
+    alpha_kl_lr: float = 0.01
+
+    # Score computation
+    normalize_adv: bool = False  # should be False when using dual
+
+    # Policy resets
+    reset_optimizer_on_ema_reset: bool = False
+
+    # Critic control
+    freeze_critic_at_step: int | None = None
+
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
@@ -299,7 +334,8 @@ class OnlineDataConfig(DataConfig):
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
-    rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    #rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    rl: (FilteredSFTLearnerConfig | AdvantageWeightedSFTLearnerConfig | MPOWeightedSFTLearnerConfig | FlowGRPOSFTLearnerConfig | FlowMPOSFTLearnerConfig | FlowPGSFTLearnerConfig | BestofNLearnerConfig | DSRLLearnerConfig) = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
 
 
@@ -390,7 +426,19 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
-        # 7. Best of N
+        # 7. MPO (Abdolmaleki et al. 2018, adapted for flow policies)
+        make_base_online_config(
+            name="pi05_libero_online_mpo",
+            rl_config=MPOLearnerConfig(
+                # Critic warms up alone, then policy starts.
+                critic_training_start_step=0,
+                critic_pre_training_steps=200,
+                policy_training_start_step=200,
+                # MPO samples its own actions, so offline data is unused.
+                online_ratio=1.0,
+            ),
+        ),
+        # 8. Best of N
         make_base_online_config(
             name="pi05_libero_online_best_of_n",
             rl_config=BestofNLearnerConfig(),

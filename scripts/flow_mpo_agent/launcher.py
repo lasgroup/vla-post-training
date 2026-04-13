@@ -2,9 +2,9 @@
 """Launcher for Flow-MPO experiments.
 
 Usage:
-    ./scripts/flow_mpo_agent/launcher.py --project_name my_project
-    ./scripts/flow_mpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/flow_mpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep
+    ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep --dry
+    ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep --mode local
 """
 
 import argparse
@@ -47,7 +47,7 @@ NAME_KEYS = [
     ("collect.tasks", "t"),
     ("rl.policy_training_start_step", "ps"),
     ("rl.online_ratio", "or"),
-    ("lr_schedule.value", "lr"),
+    ("lr_schedule.peak_lr", "lr"),
     ("rl.beta", "b"),
     ("rl.weight_clip", "wc"),
     ("rl.clip_epsilon", "ce"),
@@ -64,16 +64,15 @@ NAME_KEYS = [
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0],
     "log_interval": [25],
-    # --- shared training knobs (frozen for stage 1) ---
-    "lr_schedule.value": [1e-5],
+    "lr_schedule.peak_lr": [1e-5],
     "rl.num_critic_updates_per_batch": [10],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [128],
     "rl.use_mc_returns": [False],
-    "collect.num_initial_rollouts": [5],
+    "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [1_000],
@@ -100,7 +99,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="10:00:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument(
