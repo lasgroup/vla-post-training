@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launcher for Flow-GRPO experiments.
+"""Launcher for Flow-PG experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/flow_pg_agent/launcher.py --project_name my_project
+    ./scripts/flow_pg_agent/launcher.py --project_name my_project --dry
+    ./scripts/flow_pg_agent/launcher.py --project_name my_project --mode local
 """
 
 import argparse
@@ -22,9 +22,9 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/flow_grpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
-PROJECT_NAME = "flow_grpo_sweep"
+SCRIPT = "scripts/flow_pg_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_flow_pg_sft"
+PROJECT_NAME = "flow_pg_sweep"
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
@@ -41,8 +41,6 @@ DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-DEFAULT_GROUP_SIZE = 8
-DEFAULT_NORMALIZE_ADV = 1
 
 # Short aliases for experiment names
 NAME_KEYS = [
@@ -50,12 +48,12 @@ NAME_KEYS = [
     ("rl.policy_training_start_step", "ps"),
     ("rl.online_ratio", "or"),
     ("lr_schedule.value", "lr"),
-    ("rl.group_size", "g"),
-    ("rl.clip_epsilon", "ce"),
+    ("rl.kl_coef", "kl"),
+    ("rl.beta", "b"),
+    ("rl.weight_clip", "wc"),
     ("rl.num_steps", "ns"),
     ("rl.noise_level", "nl"),
     ("rl.use_ema_for_sampling", "ema"),
-    ("rl.normalize_adv", "na"),
     ("seed", "s"),
 ]
 
@@ -80,13 +78,11 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [1_000],
     "rl.warm_start_critic_update_interval": [1],
-    # --- flow-GRPO-specific knobs ---
-    "rl.group_size": [4, 8],
-    "rl.clip_epsilon": [0.1, 0.2],
+    # --- flow-PG-specific knobs ---
+    "rl.kl_coef": [0.0, 0.01, 0.05],
     "rl.num_steps": [5, 10],
     "rl.noise_level": [0.2, 0.3],
     "rl.use_ema_for_sampling": [True, False],
-    "rl.normalize_adv": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
         ("libero_90_59", "libero_90_59"),
     ],
@@ -116,6 +112,7 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
     parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
     parser.add_argument(
         "--policy_start_training", type=int, default=DEFAULT_POLICY_START_TRAINING
@@ -130,15 +127,8 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument(
-        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
-    )
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
-    parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
-    parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
-    parser.add_argument(
-        "--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files"
-    )
 
     args = parser.parse_args()
 
@@ -165,17 +155,8 @@ def main() -> None:
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
-            "rl.group_size": args.group_size,
-            "rl.normalize_adv": bool(args.normalize_adv),
         }
         flags.update(combo)
-
-        # Ensure batch_size is divisible by group_size
-        group_size = flags.get("rl.group_size", args.group_size)
-        batch_size = flags.get("batch_size", DEFAULT_BATCH_SIZE)
-        assert batch_size % group_size == 0, (
-            f"batch_size ({batch_size}) must be divisible by group_size ({group_size})"
-        )
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
@@ -183,7 +164,7 @@ def main() -> None:
         if flags.get("rl.td_weight_schedule.switch_step") == -1:
             flags["rl.td_weight_schedule.switch_step"] = policy_start
 
-        flags["exp_name"] = algo_exp_name("fgrpo", flags, NAME_KEYS)
+        flags["exp_name"] = algo_exp_name("fpg", flags, NAME_KEYS)
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
         command_list.append(cmd)

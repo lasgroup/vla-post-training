@@ -64,9 +64,9 @@ class RLAlgorithmConfig:
     buffer_capacity: int = 1024
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
+    num_offline_pretraining_steps: int = 0
 
 
-# Define hyperparameter structures for your algorithms
 @dataclasses.dataclass(frozen=True)
 class BestofNLearnerConfig(RLAlgorithmConfig):
     n_samples: int = 8
@@ -95,6 +95,7 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
+    warm_start_policy_update_interval: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -120,11 +121,13 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
+    warm_start_critic_update_interval: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     store_buffer_actions_in_batch: bool = False
+    use_ema_for_sampling: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -133,6 +136,7 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    clip_epsilon: float = 0.2
 
 @dataclasses.dataclass(frozen=True)
 class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
@@ -140,13 +144,13 @@ class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
+    clip_epsilon: float = 0.2
 
 @dataclasses.dataclass(frozen=True)
 class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     kl_coef: float = 0.01
-    use_ema_for_sampling: bool = True
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
@@ -359,15 +363,34 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
+        # 4. Flow-GRPO SFT
         make_base_online_config(
             name="pi05_libero_online_flow_grpo_sft",
             rl_config=FlowGRPOSFTLearnerConfig(
-                store_buffer_actions_in_batch=True,
+                store_buffer_actions_in_batch=False,
                 policy_update_interval=20,
                 policy_training_start_step=100,
             ),
         ),
-        # 4. Best of N
+        # 5. Flow-MPO SFT
+        make_base_online_config(
+            name="pi05_libero_online_flow_mpo_sft",
+            rl_config=FlowMPOSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        # 6. Flow-PG SFT
+        make_base_online_config(
+            name="pi05_libero_online_flow_pg_sft",
+            rl_config=FlowPGSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        # 7. Best of N
         make_base_online_config(
             name="pi05_libero_online_best_of_n",
             rl_config=BestofNLearnerConfig(),

@@ -48,6 +48,12 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
             donate_argnums=(1,),
         )
 
+    def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
+        if critic_update:
+            return super()._replace_buffer_actions_with_policy_actions(critic_update=critic_update)
+        else:
+            return False
+
     @at.typecheck
     def update(self) -> dict:
         assert isinstance(self._config.rl, FlowMPOSFTLearnerConfig)
@@ -108,7 +114,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                     jax.tree.leaves(online_batch)[0].shape[0],
                 )
                 n_offline = batch_size - n_online
-                policy_batch = jax.tree.map(
+                batch = jax.tree.map(
                     lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
                     batch,
                     online_batch,
@@ -117,6 +123,9 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                 gc.collect()
             else:
                 batch = next(self._data_iter)
+        else:
+            # Online buffer not ready; fall back to offline data
+            batch = next(self._data_iter)
         if update_policy:
             policy_batch = jax.device_put(batch, self._data_sharding)
             policy_rng, self._rng = jax.random.split(self._rng, 2)

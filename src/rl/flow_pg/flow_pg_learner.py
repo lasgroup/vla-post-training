@@ -45,6 +45,12 @@ class FlowPGLearner(MPOWeightedSFTLearner):
             donate_argnums=(1,),
         )
 
+    def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
+        if critic_update:
+            return super()._replace_buffer_actions_with_policy_actions(critic_update=critic_update)
+        else:
+            return False
+
     @at.typecheck
     def update(self) -> dict:
         assert isinstance(self._config.rl, FlowPGSFTLearnerConfig)
@@ -114,6 +120,9 @@ class FlowPGLearner(MPOWeightedSFTLearner):
                 gc.collect()
             else:
                 batch = next(self._data_iter)
+        else:
+            # Online buffer not ready; fall back to offline data
+            batch = next(self._data_iter)
         if update_policy:
             policy_batch = jax.device_put(batch, self._data_sharding)
             policy_rng, self._rng = jax.random.split(self._rng, 2)

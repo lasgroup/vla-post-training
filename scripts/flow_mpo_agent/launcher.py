@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launcher for Flow-GRPO experiments.
+"""Launcher for Flow-MPO experiments.
 
 Usage:
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --dry
-    ./scripts/flow_grpo_agent/launcher.py --project_name my_project --mode local
+    ./scripts/flow_mpo_agent/launcher.py --project_name my_project
+    ./scripts/flow_mpo_agent/launcher.py --project_name my_project --dry
+    ./scripts/flow_mpo_agent/launcher.py --project_name my_project --mode local
 """
 
 import argparse
@@ -16,78 +16,75 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
     DEFAULT_LOG_DIR,
-    auto_exp_name,
+    algo_exp_name,
     dict_permutations,
     generate_run_commands,
     generate_srun_command,
 )
 
-SCRIPT = "scripts/flow_grpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_flow_grpo_sft"
-PROJECT_NAME = "flow_grpo_sweep"
-DEFAULT_LOG_INTERVAL = 10
+SCRIPT = "scripts/flow_mpo_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_flow_mpo_sft"
+PROJECT_NAME = "flow_mpo_sweep"
+DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
-DEFAULT_POLICY_START_TRAINING = 5
+DEFAULT_POLICY_START_TRAINING = 900
 DEFAULT_POLICY_UPDATE_INTERVAL = 1
 DEFAULT_NUM_ROLLOUTS = 1
-DEFAULT_COLLECT_INTERVAL = 30
+DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-# Use 4 envs for sharding
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 30
-DEFAULT_NUM_EVAL_ROLLOUTS = 4
+DEFAULT_EVAL_INTERVAL = 300
+DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000
-DEFAULT_GROUP_SIZE = 1
-DEFAULT_NORMALIZE_ADV = 0
+
+# Short aliases for experiment names
+NAME_KEYS = [
+    ("collect.tasks", "t"),
+    ("rl.policy_training_start_step", "ps"),
+    ("rl.online_ratio", "or"),
+    ("lr_schedule.value", "lr"),
+    ("rl.beta", "b"),
+    ("rl.weight_clip", "wc"),
+    ("rl.clip_epsilon", "ce"),
+    ("rl.num_steps", "ns"),
+    ("rl.noise_level", "nl"),
+    ("rl.use_ema_for_sampling", "ema"),
+    ("seed", "s"),
+]
 
 # ---------- Hyperparameter grid ----------
-# Keys can be any `_config.cli()` override.
-# If this dict is empty, one run is launched with config defaults.
+# Stage 1: algorithm-specific knobs, one task, one seed.
+# After finding the best setting, add shared knobs (lr, online_ratio, etc.)
+# and multiple seeds/tasks in subsequent stages.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [
-        0,
-        1,
-    ],
-    "log_interval": [3],
+    "seed": [0],
+    "log_interval": [25],
+    # --- shared training knobs (frozen for stage 1) ---
+    "lr_schedule.value": [1e-5],
     "rl.num_critic_updates_per_batch": [10],
+    "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [1.0],
+    "rl.reset_policy_params_to_ema_period": [500],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [32, 64, 128, 256],
-    "rl.policy_training_start_step": [5],
-    "rl.reset_policy_params_to_ema_period": [10],
+    "batch_size": [256],
     "rl.use_mc_returns": [False],
-    "collect.num_initial_rollouts": [1],
-    "lr_schedule.value": [2.5e-5],
+    "collect.num_initial_rollouts": [5],
+    "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [0],
+    "rl.num_offline_pretraining_steps": [1_000],
     "rl.warm_start_critic_update_interval": [1],
+    # --- flow-MPO-specific knobs ---
+    "rl.beta": [0.02, 0.05, 0.1],
+    "rl.clip_epsilon": [0.1, 0.2, 0.3],
+    "rl.num_steps": [5, 10],
+    "rl.noise_level": [0.2, 0.3],
     ("collect.tasks", "collect.eval_tasks"): [
-        # "libero_90_2",
-        # "libero_90_7",
-        # "libero_90_9",
-        # "libero_90_11",
-        # ("libero_90_14", "libero_90_14"),
-        # "libero_90_26",
-        # "libero_90_28",
-        # "libero_90_30",
-        # "libero_90_31",
-        # "libero_90_35",
-        # ("libero_90_38", "libero_90_38"),
-        # "libero_90_41",
-        # "libero_90_53",
         ("libero_90_59", "libero_90_59"),
-        # "libero_90_60",
-        # "libero_90_61",
-        # "libero_90_62",
-        # ("libero_90_64", "libero_90_64"),
-        # "libero_90_74",
-        # "libero_90_77",
-        # "libero_90_79",
-        # ("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -115,6 +112,7 @@ def main() -> None:
         default=DEFAULT_CHECKPOINT_BASE_DIR,
         help="Checkpoint base directory",
     )
+    parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
     parser.add_argument("--buffer_capacity", type=int, default=DEFAULT_BUFFER_CAPACITY)
     parser.add_argument(
         "--policy_start_training", type=int, default=DEFAULT_POLICY_START_TRAINING
@@ -129,15 +127,8 @@ def main() -> None:
     parser.add_argument("--train_env_num", type=int, default=DEFAULT_TRAIN_ENV_NUM)
     parser.add_argument("--eval_env_num", type=int, default=DEFAULT_EVAL_ENV_NUM)
     parser.add_argument("--eval_interval", type=int, default=DEFAULT_EVAL_INTERVAL)
-    parser.add_argument(
-        "--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS
-    )
+    parser.add_argument("--num_eval_rollouts", type=int, default=DEFAULT_NUM_EVAL_ROLLOUTS)
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
-    parser.add_argument("--group_size", type=int, default=DEFAULT_GROUP_SIZE)
-    parser.add_argument("--normalize_adv", type=int, default=DEFAULT_NORMALIZE_ADV)
-    parser.add_argument(
-        "--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files"
-    )
 
     args = parser.parse_args()
 
@@ -164,17 +155,16 @@ def main() -> None:
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
-            "rl.group_size": args.group_size,
-            "rl.normalize_adv": bool(args.normalize_adv),
         }
         flags.update(combo)
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
         flags["rl.critic_pre_training_steps"] = policy_start
+        if flags.get("rl.td_weight_schedule.switch_step") == -1:
+            flags["rl.td_weight_schedule.switch_step"] = policy_start
 
-        flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
+        flags["exp_name"] = algo_exp_name("fmpo", flags, NAME_KEYS)
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
         command_list.append(cmd)

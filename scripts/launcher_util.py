@@ -1,5 +1,7 @@
 import datetime as dt
+import hashlib
 import itertools
+import json
 import os
 import secrets
 import shlex
@@ -57,6 +59,48 @@ def auto_exp_name(project_name: str, combo: Dict[str, Any], run_idx: int) -> str
     if "seed" in combo:
         return f"{project_name}_{timestamp}_{suffix}_seed{combo['seed']}"
     return f"{project_name}_{timestamp}_{suffix}_run{run_idx}"
+
+
+def _fmt_exp_value(value: Any) -> str:
+    """Format a hyperparameter value for use in experiment names."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float):
+        if value == 0:
+            return "0"
+        s = f"{value:.0e}" if abs(value) < 1e-3 or abs(value) >= 1e3 else str(value)
+        return s.replace("+", "").replace(".", "p")
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1:
+            return _fmt_exp_value(value[0])
+        return "-".join(_fmt_exp_value(v) for v in value)
+    s = str(value)
+    if s.startswith("libero_90_"):
+        s = s.split("_")[-1]
+    return s.replace("/", "-").replace(".", "p")
+
+
+def algo_exp_name(
+    prefix: str, flags: Dict[str, Any], keys: List[tuple[str, str]]
+) -> str:
+    """Generate a descriptive experiment name from swept hyperparameters.
+
+    Args:
+        prefix: Short algorithm prefix (e.g. "fgrpo", "fmpo", "fpg").
+        flags: Full flags dict for this run.
+        keys: List of (flag_key, short_alias) pairs to include in the name.
+
+    Returns:
+        Name like ``fmpo_t59_lr1e-5_b0p05_ns10_s0_ab12cd``.
+    """
+    parts = [prefix]
+    for key, alias in keys:
+        if key in flags:
+            parts.append(f"{alias}{_fmt_exp_value(flags[key])}")
+    digest = hashlib.sha1(
+        json.dumps(flags, sort_keys=True, default=str).encode()
+    ).hexdigest()[:6]
+    return "_".join(parts + [digest])
 
 
 def _normalize_flag_name(flag: str) -> str:

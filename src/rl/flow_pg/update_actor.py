@@ -172,7 +172,7 @@ def train_step(
         kl_loss = jnp.asarray(0.0, dtype=current_log_probs.dtype)
         ref_log_prob_mean = jnp.asarray(0.0, dtype=current_log_probs.dtype)
         if kl_coef > 0.0 and reference_log_probs is not None:
-            kl_loss = jnp.mean(current_log_probs - reference_log_probs)
+            kl_loss = jnp.mean(reference_log_probs - current_log_probs)
             ref_log_prob_mean = jnp.mean(reference_log_probs)
 
         loss = pg_loss + kl_coef * kl_loss
