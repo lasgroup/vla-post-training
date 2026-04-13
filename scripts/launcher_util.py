@@ -7,6 +7,9 @@ import secrets
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
+# Repo root: launcher_util.py lives in scripts/, so parent is the repo root.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 # Default SLURM settings matching existing bash scripts
 DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
@@ -177,7 +180,7 @@ def generate_run_commands(
         if not dry:
             os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
+        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --chdir={_REPO_ROOT} --output={log_dir}/slurm-%j.out "
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "

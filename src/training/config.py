@@ -76,7 +76,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     use_ema_critic: bool = True
     critic_ema_decay: float = 0.995
     critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=3e-4)
+    critic_lr_schedule = ConstantSchedule(peak_lr=3e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
@@ -108,7 +108,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     weight_clip: float = 20.0
     advantage_scale: float = 10.0
     critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=1e-4)
+    critic_lr_schedule = ConstantSchedule(peak_lr=1e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
@@ -357,7 +357,7 @@ def make_base_online_config(
             extra_delta_transform=False,
         ),
         batch_size=256,
-        lr_schedule=ConstantSchedule(value=5e-5),
+        lr_schedule=ConstantSchedule(peak_lr=5e-5),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
         weight_loader=weight_loaders.CheckpointWeightLoader(

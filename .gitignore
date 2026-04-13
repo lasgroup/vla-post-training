@@ -15,6 +15,7 @@ logs/
 
 # Cluster-specific files
 core_*
+uv.lock
 
 # Outputs
 outputs/
