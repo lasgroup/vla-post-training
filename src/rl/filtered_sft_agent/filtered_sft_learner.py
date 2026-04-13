@@ -28,7 +28,7 @@ from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
+from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig, BestofNLearnerConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
@@ -400,7 +400,7 @@ class FilteredSFTLearner(Agent):
 
     def _get_offline_data_buffer(self) -> ShardedReplayBuffer | None:
         rl_config = self._config.rl
-        assert isinstance(rl_config, FilteredSFTLearnerConfig)
+        assert isinstance(rl_config, (FilteredSFTLearnerConfig, BestofNLearnerConfig))
         if not rl_config.offline_buffer_load_paths:
             return None
         dummy_data = self._make_buffer_dummy_data()

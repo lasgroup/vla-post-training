@@ -26,6 +26,7 @@ SCRIPT = "scripts/best_of_n_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_best_of_n"
 PROJECT_NAME = "value_learning"
 DEFAULT_LOG_INTERVAL = 25
+DEFAULT_SAVE_INTERVAL = 5000
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_NUM_ROLLOUTS = 1
@@ -51,16 +52,23 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    "seed": [0, 1, 2],
+    "seed": [0, 1, 2, 3, 4],  # [0, 1, 2, 3, 4],
+    # Data collection/eval
+    "collect.num_rollouts": [10],
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
     "lr_schedule.value": [5e-5],
-    "rl.num_critic_updates_per_batch": [10],
-    "rl.num_offline_pretraining_steps": [0],    
+    "rl.num_critic_updates_per_batch": [1],
+    "rl.num_offline_pretraining_steps": [0],
+    # "rl.offline_buffer_load_paths": [("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf/libero_online_buffer_time_to_success",)],
+    "rl.td_weight_schedule.switch_step": [-1],      # If -1, will be set to match critic_inference_start_step
     "rl.num_value_bins": [1],                   # Loss-specific
+    # Ablation: frozen pi0 prefix embeddings vs. trainable ResNet encoder
+    "rl.critic_encoder_type": ["pi0_prefix"],  # ["pi0_prefix", "resnet"],
     # Best-of-N specific
     "rl.critic_inference_start_step": [900],
     "rl.n_samples": [32],
+    # Single-task
     ("collect.tasks", "collect.eval_tasks"): [
         # ("libero_90_35", "libero_90_35"),
         # ("libero_90_38", "libero_90_38"),
@@ -68,11 +76,18 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_43", "libero_90_43"),
         # ("libero_90_44", "libero_90_44"),
         # ("libero_90_47", "libero_90_47"),
-        ("libero_90_53", "libero_90_53"),
-        ("libero_90_59", "libero_90_59"),
+        # ("libero_90_53", "libero_90_53"),
+        # ("libero_90_59", "libero_90_59"),
         ("libero_90_60", "libero_90_60"),
-        ("libero_90_63", "libero_90_63"),
+        # ("libero_90_63", "libero_90_63"),
     ],
+    # Multi-task
+    # ("collect.tasks", "collect.eval_tasks"): [
+    # (
+    #     ["libero_90_35", "libero_90_38", "libero_90_41", "libero_90_43", "libero_90_44", "libero_90_47", "libero_90_53", "libero_90_59", "libero_90_60", "libero_90_63"],
+    #     ["libero_90_35", "libero_90_38", "libero_90_41", "libero_90_43", "libero_90_44", "libero_90_47", "libero_90_53", "libero_90_59", "libero_90_60", "libero_90_63"],
+    # ),
+    # ],
 }
 
 
@@ -146,6 +161,7 @@ def main() -> None:
             "num_train_steps": args.num_train_steps,
             "rl.num_value_bins": args.num_value_bins,
             "rl.value_target_type": args.value_target_type,
+            "save_interval": DEFAULT_SAVE_INTERVAL,
         }
         flags.update(combo)
 
@@ -153,7 +169,9 @@ def main() -> None:
         policy_start = flags["rl.critic_inference_start_step"]
         if flags["rl.td_weight_schedule.switch_step"] == -1:
             flags["rl.td_weight_schedule.switch_step"] = policy_start
-        flags["rl.critic_pre_training_steps"] = policy_start
+            flags["rl.critic_pre_training_steps"] = policy_start        # Optimizer reset
+        else:
+            flags["rl.critic_pre_training_steps"] = 0                   # No reset if there is no switching
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 

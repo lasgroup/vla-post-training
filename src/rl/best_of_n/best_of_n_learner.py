@@ -167,21 +167,27 @@ class BestofNLearner(FilteredSFTLearner):
             "state": online_observation["state"],
         }
 
-        curr_prefix_embedding = self._recompute_prefix_embedding(
-            observation=online_observation,
-            policy_state=policy_state,
-        )
-
-        observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
-
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
 
-        next_prefix_embedding = self._recompute_prefix_embedding(
-            observation=next_observation, policy_state=policy_state
-        )
+        if self._config.rl.critic_encoder_type == "pi0_prefix":
+            curr_prefix_embedding = self._recompute_prefix_embedding(
+                observation=online_observation,
+                policy_state=policy_state,
+            )
+            observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
 
-        next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
+            next_prefix_embedding = self._recompute_prefix_embedding(
+                observation=next_observation, policy_state=policy_state
+            )
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
+        else:  # resnet
+            # Buffer stores images under observation["image"]["base_0_rgb"] / ["left_wrist_0_rgb"]
+            # after the pi0 LiberoInputs transform (uint8, HWC).
+            observation_dict["image"] = online_observation["image"]["base_0_rgb"]
+            observation_dict["wrist_image"] = online_observation["image"]["left_wrist_0_rgb"]
+            next_observation_dict["image"] = next_observation["image"]["base_0_rgb"]
+            next_observation_dict["wrist_image"] = next_observation["image"]["left_wrist_0_rgb"]
 
         return (
             observation_dict,
@@ -204,12 +210,18 @@ class BestofNLearner(FilteredSFTLearner):
             "state": policy_obs_dict["state"],
         }
 
-        prefix_embedding = self._recompute_prefix_embedding(
-            observation=policy_obs_dict,
-            policy_state=policy_state,
-        )
-
-        critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
+        if self._config.rl.critic_encoder_type == "pi0_prefix":
+            prefix_embedding = self._recompute_prefix_embedding(
+                observation=policy_obs_dict,
+                policy_state=policy_state,
+            )
+            critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
+        else:  # resnet
+            # policy_obs_dict["image"] is a dict of float32 images in [-1, 1]; convert to uint8.
+            def _to_uint8(img):
+                return jnp.clip((jnp.asarray(img) + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
+            critic_observation["image"] = _to_uint8(policy_obs_dict["image"]["base_0_rgb"])
+            critic_observation["wrist_image"] = _to_uint8(policy_obs_dict["image"]["left_wrist_0_rgb"])
 
         return policy_observation, critic_observation, actions
 
@@ -272,24 +284,7 @@ class BestofNLearner(FilteredSFTLearner):
             group_actions = self._sample_action(tiled_obs, rng, self._train_state)
             # group_actions: [group_env_num * n_samples, horizon, dim]
 
-            # 2. Compute prefix embedding (on non-tiled obs, then tile)
-            inputs = self._policy._input_transform(processed_obs)
-            for _mask_key in ("image_mask", "image_masks"):
-                if _mask_key in inputs:
-                    inputs[_mask_key] = {k: np.full((group_env_num,), bool(v), dtype=bool) for k, v in inputs[_mask_key].items()}
-            for _tok_key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
-                if _tok_key in inputs and inputs[_tok_key] is not None:
-                    arr = np.asarray(inputs[_tok_key])
-                    if arr.ndim == 1:
-                        inputs[_tok_key] = np.repeat(arr[np.newaxis], group_env_num, axis=0)
-            obs_for_prefix = _model.Observation.from_dict(inputs)
-            prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
-            prefix = np.asarray(prefix)
-            if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
-            # prefix: [group_env_num, embed_dim]
-
-            # 3. Build critic observation (normalize + pad state to match buffer preprocessing)
+            # 2. Build critic observation (normalize + pad state to match buffer preprocessing)
             raw_state = np.asarray(processed_obs["observation/state"])
             state = np.asarray(self._state_normalize({"state": raw_state})["state"])
             if state.shape[-1] < self._transition_state_dim:
@@ -297,8 +292,31 @@ class BestofNLearner(FilteredSFTLearner):
                 pad_width[-1] = (0, self._transition_state_dim - state.shape[-1])
                 state = np.pad(state, pad_width, mode="constant", constant_values=0.0)
             state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
-            prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
-            critic_obs = {"state": state, PREFIX_EMBEDDING_NAME: prefix_tiled}
+
+            if self._config.rl.critic_encoder_type == "pi0_prefix":
+                # Compute prefix embedding (on non-tiled obs, then tile)
+                inputs = self._policy._input_transform(processed_obs)
+                for _mask_key in ("image_mask", "image_masks"):
+                    if _mask_key in inputs:
+                        inputs[_mask_key] = {k: np.full((group_env_num,), bool(v), dtype=bool) for k, v in inputs[_mask_key].items()}
+                for _tok_key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
+                    if _tok_key in inputs and inputs[_tok_key] is not None:
+                        arr = np.asarray(inputs[_tok_key])
+                        if arr.ndim == 1:
+                            inputs[_tok_key] = np.repeat(arr[np.newaxis], group_env_num, axis=0)
+                obs_for_prefix = _model.Observation.from_dict(inputs)
+                prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
+                prefix = np.asarray(prefix)
+                if prefix.ndim == 3:
+                    prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+                # prefix: [group_env_num, embed_dim]
+                prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
+                critic_obs = {"state": state, PREFIX_EMBEDDING_NAME: prefix_tiled}
+            else:  # resnet
+                # Use raw images directly; no prefix computation needed
+                image = np.repeat(np.asarray(processed_obs["observation/image"], dtype=np.uint8), n_samples, axis=0)
+                wrist_image = np.repeat(np.asarray(processed_obs["observation/wrist_image"], dtype=np.uint8), n_samples, axis=0)
+                critic_obs = {"state": state, "image": jnp.asarray(image), "wrist_image": jnp.asarray(wrist_image)}
 
             # 4. Score all candidates with Q-critic
             # Normalize robot-space actions (7-dim for LIBERO), then zero-pad to model_act_dim.
@@ -518,7 +536,8 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             }
 
-        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+        batch_size = self._config.batch_size
+        online_batch_size = int(batch_size * min(1.0, self._config.rl.online_ratio))
         use_online = (
                 online_batch_size > 0 and self._online_data_buffer.size >= online_batch_size
         )
@@ -535,7 +554,7 @@ class BestofNLearner(FilteredSFTLearner):
             )
         if use_online:
             critic_source_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
-            
+
             if offline_batch is not None and rl_config.online_ratio < 1.0:
                 n_online = min(
                     int(batch_size * rl_config.online_ratio),

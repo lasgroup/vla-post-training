@@ -198,13 +198,17 @@ def _update_train_state(
         opt_state=new_opt_state,
     )
     if state.ema_decay is not None and state.ema_params is not None:
+        # Only EMA nnx.Param leaves. BatchStat (BatchNorm running stats) and RngState
+        # (PRNG keys) are non-arithmetic — pass them through as-is from new_params.
+        param_keys = set(nnx.filter_state(new_params, nnx.Param).flat_state())
+        old_flat = dict(state.ema_params.flat_state())
+        def _ema_or_copy(path, new_val):
+            if path in param_keys:
+                return state.ema_decay * old_flat[path] + (1 - state.ema_decay) * new_val
+            return new_val
         new_state = dataclasses.replace(
             new_state,
-            ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
-                state.ema_params,
-                new_params,
-            ),
+            ema_params=new_params.map(_ema_or_copy),
         )
     return new_state
 

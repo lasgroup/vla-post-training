@@ -65,6 +65,7 @@ from src.rl.networks.decoders.values.state_action_value import (
     StateActionEnsembleDecoder,
 )
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
+from src.rl.networks.encoders.resnet_encoderv1 import ResNetEncoder, ResNetBlock
 from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
@@ -111,13 +112,42 @@ def _make_dummy_critic_observation(
     *,
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> dict[str, jax.Array]:
+    assert isinstance(config.rl, _config.BestofNLearnerConfig)
     fake_obs = config.model.fake_obs(batch_size=1)
     dummy_obs = {"state": jnp.asarray(fake_obs.state, dtype=jnp.float32)}
-    if prefix_embedding_shape is not None:
+    if config.rl.critic_encoder_type == "pi0_prefix" and prefix_embedding_shape is not None:
         dummy_obs[PREFIX_EMBEDDING_NAME] = jnp.zeros(
             (1, *prefix_embedding_shape), dtype=jnp.float32
         )
+    elif config.rl.critic_encoder_type == "resnet":
+        # Images are stored in the buffer with the "observation/" prefix stripped.
+        dummy_obs["image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
+        dummy_obs["wrist_image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
     return dummy_obs
+
+
+class ResNetStateEncoder(nnx.Module):
+    """Encodes images with ResNet (spatial softmax), concatenates with state, then passes through a shared MLP."""
+
+    def __init__(self, observation: ObsType, stage_sizes: tuple[int, ...], image_keys: list[str], hidden_dims: tuple[int, ...], *, rngs: nnx.Rngs):
+        self.resnet = ResNetEncoder(
+            input_example=observation,
+            stage_sizes=stage_sizes,
+            block_cls=ResNetBlock,
+            image_keys=image_keys,
+            use_spatial_softmax=True,
+            rngs=rngs,
+        )
+        dummy_img_features = self.resnet(observation, train=False)
+        dummy_state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        dummy_concat = jnp.concatenate([dummy_img_features, dummy_state], axis=-1)
+        self.mlp = MLP(input=dummy_concat, hidden_dims=hidden_dims, activate_final=True, rngs=rngs)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
+        img_features = self.resnet(observation, train=training)
+        state = observation["state"].astype(jnp.float32)
+        x = jnp.concatenate([img_features, state], axis=-1)
+        return self.mlp(x, training=training)
 
 
 def _build_pi0_backbone_critic_defs(
@@ -132,18 +162,24 @@ def _build_pi0_backbone_critic_defs(
     critic_num_vs = config.rl.critic_num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        network_def = lambda o, rg: MLP(
-            input=o,
-            hidden_dims=critic_encoder_hidden_dims,
-            activate_final=True,
-            rngs=rg,
-        )
-        state_vector_keys = ["state"]
-        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
-            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+        if config.rl.critic_encoder_type == "resnet":
+            return ResNetStateEncoder(
+                observation=observation,
+                stage_sizes=(2, 2, 2, 2),  # ResNet-18
+                image_keys=["image", "wrist_image"],
+                hidden_dims=critic_encoder_hidden_dims,
+                rngs=rngs,
+            )
+        # pi0_prefix: concatenate [prefix_embedding, state] through an MLP encoder
+        state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"] if prefix_embedding_shape is not None else ["state"]
         return MLPEncoder(
             dummy_obs=observation,
-            encoder_def=network_def,
+            encoder_def=lambda o, rg: MLP(
+                input=o,
+                hidden_dims=critic_encoder_hidden_dims,
+                activate_final=True,
+                rngs=rg,
+            ),
             state_vector_keys=state_vector_keys,
             rngs=rngs,
         )
@@ -271,7 +307,7 @@ def main(config: _config.OnlineTrainConfig):
             infos = []
 
         if step % config.collect.collect_interval == 0:
-            agent.save_checkpoint(step=step)
+            # agent.save_checkpoint(step=step)
             collect_info, n_collected_episodes = collect_data(
                 agent=agent,
                 env=env,

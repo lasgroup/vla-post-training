@@ -64,8 +64,7 @@ class RLAlgorithmConfig:
     buffer_capacity: int = 1024
     buffer_save_path: str | None = None  # if set, save each episode to this directory
     buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
-    offline_buffer_load_paths: Sequence[str] = ("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf"
-                                                "/libero_online_buffer_time_to_success",)
+    offline_buffer_load_paths: Sequence[str] = ()
     num_offline_pretraining_steps: int = 0
 
 
@@ -81,6 +80,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_reduction: str = "min"
     critic_lr_schedule = ConstantSchedule(value=3e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    critic_encoder_type: str = "pi0_prefix"     # "pi0_prefix" | "resnet"
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     critic_num_qs: int = 2
