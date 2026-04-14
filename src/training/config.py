@@ -96,6 +96,8 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
     warm_start_policy_update_interval: int | None = None
+    offline_buffer_load_paths: Sequence[str] = ()
+    offline_buffer_capacity: int = 1024
 
 
 @dataclasses.dataclass(frozen=True)
