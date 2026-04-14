@@ -159,6 +159,7 @@ def generate_run_commands(
     dry: bool = False,
     prompt: bool = True,
     log_dir: str = DEFAULT_LOG_DIR,
+    job_names: Optional[List[str]] = None,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -173,6 +174,7 @@ def generate_run_commands(
         mode: "swiss-ai" for sbatch submission, "local" for sequential local execution.
         dry: If True, only print commands without executing.
         prompt: If True, ask for confirmation before submitting.
+        job_names: Optional list of names (one per command) for SLURM log files.
     """
     if mode == "swiss-ai":
         if not dry:
@@ -190,8 +192,12 @@ def generate_run_commands(
         if mem > 0:
             bsub_cmd += f"--mem-per-cpu={mem} "
 
-        for cmd in command_list:
-            cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+        for i, cmd in enumerate(command_list):
+            job_cmd = bsub_cmd
+            if job_names and i < len(job_names):
+                name = job_names[i]
+                job_cmd = bsub_cmd.replace(f"--output={log_dir}/slurm-%j.out", f"--job-name={name} --output={log_dir}/{name}_%j.out")
+            cluster_cmds.append(job_cmd + f'--wrap="{cmd}"')
 
         if dry:
             for cmd in cluster_cmds:

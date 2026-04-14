@@ -75,24 +75,24 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [1_000],
+    "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
 
 
     # --- flow-GRPO-specific knobs ---
-    #"lr_schedule.peak_lr": [1e-5, 1e-6],
+    "lr_schedule.peak_lr": [1e-5, 1e-6],
     "batch_size": [128],
-    #"rl.group_size": [4, 8],
-    #"rl.clip_epsilon": [0.1, 0.2],
-    ##"rl.num_steps": [5, 10],
-    #"rl.noise_level": [0.2, 0.3],
+    "rl.group_size": [4, 8],
+    "rl.clip_epsilon": [0.1, 0.2],
+    #"rl.num_steps": [5, 10],
+    "rl.noise_level": [0.2, 0.3],
     "rl.use_ema_for_sampling": [True],
-    #"rl.normalize_adv": [True, False],
+    "rl.normalize_adv": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
-    #    ("libero_90_14", "libero_90_14"),
+        ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
-    #    ("libero_90_64", "libero_90_64"),
-    #    ("libero_90_82", "libero_90_82"),
+        ("libero_90_64", "libero_90_64"),
+        ("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -148,6 +148,7 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
+    job_names = []
     for idx, combo in enumerate(combos):
         flags: Dict[str, Any] = {
             "overwrite": True,
@@ -191,6 +192,7 @@ def main() -> None:
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
         command_list.append(cmd)
+        job_names.append(flags["exp_name"])
 
     generate_run_commands(
         command_list,
@@ -199,6 +201,7 @@ def main() -> None:
         partition=args.partition,
         dry=args.dry,
         log_dir=args.log_dir,
+        job_names=job_names,
     )
 
 

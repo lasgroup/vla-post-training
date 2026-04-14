@@ -76,7 +76,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
-    "rl.num_offline_pretraining_steps": [1_000],
+    "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
     # --- flow-PG-specific knobs ---
     "rl.kl_coef": [0.0, 0.01, 0.05],
@@ -134,6 +134,7 @@ def main() -> None:
 
     combos = dict_permutations(applicable_configs)
     command_list = []
+    job_names = []
     for idx, combo in enumerate(combos):
         flags: Dict[str, Any] = {
             "overwrite": True,
@@ -168,6 +169,7 @@ def main() -> None:
 
         cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
         command_list.append(cmd)
+        job_names.append(flags["exp_name"])
 
     generate_run_commands(
         command_list,
@@ -176,6 +178,7 @@ def main() -> None:
         partition=args.partition,
         dry=args.dry,
         log_dir=args.log_dir,
+        job_names=job_names,
     )
 
 
