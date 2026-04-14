@@ -80,19 +80,19 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
 
 
     # --- flow-GRPO-specific knobs ---
-    "lr_schedule.peak_lr": [1e-5, 1e-6],
+    #"lr_schedule.peak_lr": [1e-5, 1e-6],
     "batch_size": [128],
-    "rl.group_size": [4, 8],
-    "rl.clip_epsilon": [0.1, 0.2],
-    #"rl.num_steps": [5, 10],
-    "rl.noise_level": [0.2, 0.3],
+    #"rl.group_size": [4, 8],
+    #"rl.clip_epsilon": [0.1, 0.2],
+    ##"rl.num_steps": [5, 10],
+    #"rl.noise_level": [0.2, 0.3],
     "rl.use_ema_for_sampling": [True],
-    "rl.normalize_adv": [True, False],
+    #"rl.normalize_adv": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
-        ("libero_90_14", "libero_90_14"),
+    #    ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
-        ("libero_90_64", "libero_90_64"),
-        ("libero_90_82", "libero_90_82"),
+    #    ("libero_90_64", "libero_90_64"),
+    #    ("libero_90_82", "libero_90_82"),
     ],
 }
 
