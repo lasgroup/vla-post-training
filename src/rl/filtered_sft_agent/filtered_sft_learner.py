@@ -41,6 +41,7 @@ from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.runtime_state import (
     load_resume_state,
+    restore_train_state,
 )
 
 
@@ -115,45 +116,13 @@ def _load_weights_and_validate(
     )
 
 
-def _to_pure_params(params: at.Params) -> at.Params:
-    if hasattr(params, "to_pure_dict"):
-        return params.to_pure_dict()
-    try:
-        return nnx.to_pure_dict(params)
-    except Exception:
-        pass
-    try:
-        flat = traverse_util.flatten_dict(params)
-    except Exception:
-        return params
-    if flat and all(kp[-1] == "value" for kp in flat):
-        flat = {kp[:-1]: v for kp, v in flat.items()}
-        return traverse_util.unflatten_dict(flat)
-    return params
+def _copy_nnx_state(state: nnx.State) -> nnx.State:
+    def _copy_value(_k, v):
+        if hasattr(v, "value") and hasattr(v, "replace"):
+            return v.replace(v.value.copy())
+        return v
 
-
-def _restore_params_only(
-    checkpoint_manager: Any,
-    params_template: at.Params,
-    *,
-    step: int | None,
-) -> at.Params:
-    with at.disable_typechecking():
-        restored = checkpoint_manager.restore(
-            step,
-            items={"params": {"params": params_template}},
-        )
-    return restored["params"]["params"]
-
-
-def _params_template_from_model(
-    config: OnlineTrainConfig, rng: at.KeyArrayLike
-) -> at.Params:
-    def init_params(r: at.KeyArrayLike) -> at.Params:
-        model = config.model.create(r)
-        return nnx.state(model)
-
-    return jax.eval_shape(init_params, rng)
+    return state.map(_copy_value)
 
 
 @at.typecheck
@@ -163,8 +132,6 @@ def init_train_state(
     mesh: jax.sharding.Mesh,
     *,
     resume: bool,
-    partial_params: at.Params | None = None,
-    state_sharding: Any | None = None,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
@@ -203,16 +170,14 @@ def init_train_state(
         )
 
     train_state_shape = jax.eval_shape(init, init_rng)
-    if state_sharding is None:
-        state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
+    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
-    if resume and partial_params is None:
+    if resume:
         return train_state_shape, state_sharding
 
-    if partial_params is None:
-        partial_params = _load_weights_and_validate(
-            config.weight_loader, nnx.to_pure_dict(train_state_shape.params)
-        )
+    partial_params = _load_weights_and_validate(
+        config.weight_loader, nnx.to_pure_dict(train_state_shape.params)
+    )
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
     # Initialize the train state and mix in the partial params.
@@ -328,53 +293,58 @@ class FilteredSFTLearner(Agent):
         self._collection_success_episodes = 0
 
         # Initialize train state.
+        self._train_state, self._train_state_sharding = init_train_state(
+            self._config, init_rng, self._mesh, resume=self._resuming
+        )
         if self._resuming:
-            params_template = _params_template_from_model(self._config, init_rng)
-            restore_step = (
-                None if self._resume_state is None else int(self._resume_state.step)
+            self._train_state = restore_train_state(
+                _checkpoints.restore_state,
+                self._checkpoint_manager,
+                self._train_state,
+                self._data_loader,
+                resume_state=self._resume_state,
             )
-            restored_params = _restore_params_only(
-                self._checkpoint_manager, params_template, step=restore_step
-            )
-            restored_params = _to_pure_params(restored_params)
-            self._train_state, self._train_state_sharding = init_train_state(
-                self._config,
-                init_rng,
-                self._mesh,
-                resume=True,
-                partial_params=restored_params,
-            )
+            restored_train_step = int(jax.device_get(self._train_state.step))
             if self._resume_state is not None:
+                if restored_train_step != int(self._resume_state.step):
+                    logging.warning(
+                        "Restored checkpoint step %d does not match manifest step %d for %s",
+                        restored_train_step,
+                        self._resume_state.step,
+                        self._config.checkpoint_dir,
+                    )
                 logging.info(
-                    "Restored params-only checkpoint from %s at committed step %d (optimizer state reset)",
+                    "Restored training checkpoint from %s at committed step %d",
                     self._config.checkpoint_dir,
                     self._resume_state.step,
                 )
                 self.training_steps = int(self._resume_state.step)
             else:
-                checkpoint_steps = tuple(self._checkpoint_manager.all_steps())
-                self.training_steps = int(checkpoint_steps[-1]) if checkpoint_steps else 0
+                self.training_steps = restored_train_step
+
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+            if self._train_state.ema_decay is not None:
+                self._resume_restore_ema = True
+                self._resume_ema_decay = self._train_state.ema_decay
+                self._train_state = dataclasses.replace(
+                    self._train_state, ema_params=None, ema_decay=None
+                )
+                logging.info(
+                    "Temporarily disabling EMA after resume; will re-enable after first update."
+                )
         else:
-            self._train_state, self._train_state_sharding = init_train_state(
-                self._config, init_rng, self._mesh, resume=False
-            )
             self.training_steps = 0
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+
         jax.block_until_ready(self._train_state)
         logging.info(
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
 
         # prepare train_step
-        self._train_step = jax.jit(
-            functools.partial(train_step, config),
-            in_shardings=(
-                self._replicated_sharding,
-                self._train_state_sharding,
-                self._data_sharding,
-            ),
-            out_shardings=(self._train_state_sharding, self._replicated_sharding),
-            donate_argnums=(1,),
-        )
+        self._refresh_train_step()
 
         # Create temporary episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
@@ -428,6 +398,21 @@ class FilteredSFTLearner(Agent):
             logging.warning(
                 "Policy model object is still alive after cleanup; other references remain."
             )
+
+    def _refresh_train_step(self):
+        self._train_state_sharding = sharding.fsdp_sharding(
+            self._train_state, self._mesh, log=False
+        )
+        self._train_step = jax.jit(
+            functools.partial(train_step, self._config),
+            in_shardings=(
+                self._replicated_sharding,
+                self._train_state_sharding,
+                self._data_sharding,
+            ),
+            out_shardings=(self._train_state_sharding, self._replicated_sharding),
+            donate_argnums=(1,),
+        )
 
     def _get_online_replay_buffer(
         self,
@@ -817,6 +802,15 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
+        if self._resume_restore_ema:
+            self._train_state = dataclasses.replace(
+                self._train_state,
+                ema_decay=self._resume_ema_decay,
+                ema_params=_copy_nnx_state(self._train_state.params),
+            )
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+            self._refresh_train_step()
         info = info | {
             "online_buffer_size": jnp.asarray(
                 float(self._online_data_buffer.size), dtype=jnp.float32
