@@ -42,7 +42,7 @@ DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
-DEFAULT_NUM_EVAL_ROLLOUTS = 32
+DEFAULT_NUM_EVAL_ROLLOUTS = 8
 NUM_TRAIN_STEPS = 5_000
 DEFAULT_GROUP_SIZE = 1
 DEFAULT_NORMALIZE_ADV = 0
@@ -75,6 +75,7 @@ def main() -> None:
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
+    parser.add_argument("--group", default=None, help="W&B group name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
     )
@@ -113,6 +114,7 @@ def main() -> None:
         flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
+            "group": args.group,
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,

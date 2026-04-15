@@ -34,11 +34,11 @@ DEFAULT_LOG_INTERVAL = 50
 DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
-DEFAULT_NUM_EVAL_ROLLOUTS = 32
+DEFAULT_NUM_EVAL_ROLLOUTS = 8
 NUM_TRAIN_STEPS = 5_000
 USE_SAME_EVAL_AND_TRAIN_TASK = True
 
@@ -59,24 +59,24 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # "libero_90_7",
         # "libero_90_9",
         # "libero_90_11",
-        ("libero_90_14", "libero_90_14"),
+        ("libero_90_32-63", "libero_90_32-63"),
         # "libero_90_26",
         # "libero_90_28",
         # "libero_90_30",
         # "libero_90_31",
         # "libero_90_35",
-        ("libero_90_38", "libero_90_38"),
+        #("libero_90_38", "libero_90_38"),
         # "libero_90_41",
         # "libero_90_53",
-        ("libero_90_59", "libero_90_59"),
+        #("libero_90_59", "libero_90_59"),
         # "libero_90_60",
         # "libero_90_61",
         # "libero_90_62",
-        ("libero_90_64", "libero_90_64"),
+        #("libero_90_64", "libero_90_64"),
         # "libero_90_74",
         # "libero_90_77",
         # "libero_90_79",
-        ("libero_90_82", "libero_90_82"),
+        #("libero_90_82", "libero_90_82"),
     ],
 }
 
@@ -93,6 +93,7 @@ def main() -> None:
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
+    parser.add_argument("--group", default=None, help="W&B group name")
     parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)
     parser.add_argument(
@@ -122,6 +123,7 @@ def main() -> None:
         flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
+            "group": args.group,
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,

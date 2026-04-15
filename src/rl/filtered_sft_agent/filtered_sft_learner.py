@@ -48,7 +48,6 @@ from src.training.runtime_state import (
 def filtered_sft_wrap_env(
     env_fn: EnvFn,
     config,
-    task_description: list[str],
     env_num: int | None = None,
 ):
     env_num = env_num if env_num is not None else config.collect.env_num
@@ -67,7 +66,6 @@ def filtered_sft_wrap_env(
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
-                task_description=task_description,
                 molmo_config=getattr(config, "molmo", None),
             )
             # Add query-frequency wrapper to rollout action chunks.
