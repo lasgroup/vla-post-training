@@ -344,8 +344,8 @@ def make_base_molmo_config(
         rl=rl_config,
         collect=CollectionConfig(
             domain="molmo",
-            resize_image_h=352,
-            resize_image_w=624,
+            resize_image_h=224,
+            resize_image_w=224,
         )
     )
 

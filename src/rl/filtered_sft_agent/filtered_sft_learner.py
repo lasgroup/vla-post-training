@@ -311,6 +311,14 @@ class FilteredSFTLearner(Agent):
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
 
+        # prepare transforms for preprocessing episode data into model input format
+        self._policy_transforms = _transforms.compose(
+            [
+                *self._data_config.repack_transforms.inputs,
+                *self._policy._input_transform.transforms
+            ]
+        )
+
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
         # so we cannot safely drop the internal model there.
@@ -343,33 +351,6 @@ class FilteredSFTLearner(Agent):
     def _get_online_replay_buffer(
         self,
     ) -> ShardedReplayBuffer:
-
-        # prepare transforms for preprocessing episode data into model input format
-        data_config = self._data_config
-        tt_types = (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
-        token_transforms = [
-            t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)
-        ]
-        non_token_transforms = [
-            t
-            for t in data_config.model_transforms.inputs
-            if not isinstance(t, tt_types)
-        ]
-        assert (
-            len(token_transforms) == 1
-        ), f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
-        self._token_transform = token_transforms[0]
-        self._pre_token_transform = _transforms.compose(
-            [
-                *data_config.repack_transforms.inputs,
-                *data_config.data_transforms.inputs,
-                _transforms.Normalize(
-                    data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
-                ),
-                *non_token_transforms,
-            ]
-        )
-        self._token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
         # prepare dummy data for initializing the replay buffer
         # TODO: this might need to be updated to store prefixes
@@ -612,37 +593,14 @@ class FilteredSFTLearner(Agent):
         _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
-        def transform(obs, act, prompt):
-            obs.update({"actions": act, "prompt": prompt})
-            obs = self._pre_token_transform(obs)
-            obs["image_mask"] = {
-                k: np.full((n_windows,), bool(v)) for k, v in obs["image_mask"].items()
-            }
-            if isinstance(self._token_transform, _transforms.TokenizePrompt):
-                if prompt not in self._token_cache:
-                    tok = self._token_transform({"prompt": prompt})
-                    self._token_cache[prompt] = (
-                        tok["tokenized_prompt"],
-                        tok["tokenized_prompt_mask"],
-                    )
-                tokens, token_masks = self._token_cache[prompt]
-                obs["tokenized_prompt"] = np.broadcast_to(
-                    tokens, (n_windows,) + tokens.shape
-                ).copy()
-                obs["tokenized_prompt_mask"] = np.broadcast_to(
-                    token_masks, (n_windows,) + token_masks.shape
-                ).copy()
-            else:
-                raise TypeError(
-                    f"Unsupported token transform: {type(self._token_transform)}"
-                )
+        def transform(input):
+            obs = self._policy_transforms(input)
             actions = obs.pop("actions")
-            prompt = obs.pop("prompt")
             return obs, actions
 
         # process observations and actions according to pi0 preprocessing
-        _next_obs, _ = transform(_next_obs, _actions, str(task_description))
-        _obs, _actions = transform(_obs, _actions, str(task_description))
+        _next_obs, _ = transform({**_next_obs, "actions": _actions, "prompt": str(task_description)})
+        _obs, _actions = transform({**_obs, "actions": _actions, "prompt": str(task_description)})
 
         self._online_data_buffer.insert(
             {
