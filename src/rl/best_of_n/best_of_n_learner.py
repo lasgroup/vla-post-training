@@ -36,10 +36,8 @@ class BestofNLearner(FilteredSFTLearner):
             dummy_act: ActionType,
             state_action_critic_def: StateActionCriticDef,
             state_value_def: StateValueDef,
-            task_description: str,
             debug: bool = False,
     ):
-        self.task_description = task_description
         self.debug = debug
 
         super().__init__(config)

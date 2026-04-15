@@ -200,17 +200,15 @@ def main(config: _config.OnlineTrainConfig):
             "from observations every update."
         )
 
-    env_fn, task_description = make_env(config, config.collect.tasks)
+    env_fn = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
         config=config,
-        task_description=task_description,
     )
-    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
+    eval_env_fn = make_env(config, config.collect.eval_tasks)
     eval_env = filtered_sft_wrap_env(
         env_fn=eval_env_fn,
         config=config,
-        task_description=eval_task_description,
         env_num=config.collect.eval_env_num,
     )
 
@@ -237,7 +235,6 @@ def main(config: _config.OnlineTrainConfig):
         dummy_act=dummy_act,
         state_action_critic_def=state_action_critic_def,
         state_value_def=state_value_def,
-        task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
@@ -273,7 +270,6 @@ def main(config: _config.OnlineTrainConfig):
             collect_info, n_collected_episodes = collect_data(
                 agent=agent,
                 env=env,
-                task_description=task_description,
                 config=config,
                 step=step,
             )
@@ -286,7 +282,6 @@ def main(config: _config.OnlineTrainConfig):
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,
-                task_description=eval_task_description,
                 config=config,
                 step=step,
             )
