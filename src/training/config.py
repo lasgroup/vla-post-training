@@ -82,6 +82,7 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_type: str = "pi0_prefix"     # "pi0_prefix" | "resnet"
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
+    critic_action_compress_dim: int | None = None  # None = no compression; e.g. 32 compresses flat action chunk via MLP
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     critic_num_qs: int = 2
     critic_num_vs: int = 2

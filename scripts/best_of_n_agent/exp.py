@@ -45,7 +45,7 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 import gc
 import platform
-from typing import Any
+from typing import Any, Callable
 
 import flax.nnx as nnx
 from flax.training import common_utils
@@ -207,6 +207,17 @@ def _build_pi0_backbone_critic_defs(
             rngs=rngs,
         )
 
+    action_compress_dim = config.rl.critic_action_compress_dim
+    action_encoder_def: Callable | None = None
+    if action_compress_dim is not None:
+        def action_encoder_def(action: jax.Array, rngs: nnx.Rngs) -> nnx.Module:
+            return MLP(
+                input=action,
+                hidden_dims=(128, action_compress_dim),
+                activate_final=True,
+                rngs=rngs,
+            )
+
     def state_action_critic_def(
         observation: ObsType, action: jax.Array, rngs: nnx.Rngs
     ) -> StateActionCritic:
@@ -216,6 +227,7 @@ def _build_pi0_backbone_critic_defs(
             encoder_def=encoder_def,
             decoder_def=state_action_decoder_def,
             rngs=rngs,
+            action_encoder_def=action_encoder_def,
         )
 
     def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
@@ -278,6 +290,30 @@ def main(config: _config.OnlineTrainConfig):
         task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    wandb.define_metric("pretrain/*", step_metric="pretrain_step")
+
+    # Offline critic pretraining
+    warmup_start_steps = agent.warm_start_training_steps
+    warmup_pbar = tqdm.tqdm(
+        range(warmup_start_steps, config.rl.num_offline_pretraining_steps),
+        initial=warmup_start_steps,
+        total=config.rl.num_offline_pretraining_steps,
+        dynamic_ncols=True,
+    )
+    pretrain_infos = []
+    for pretrain_step in warmup_pbar:
+        info = agent.pretrain_with_offline_data()
+        pretrain_infos.append(info)
+        if pretrain_step % config.log_interval == 0:
+            all_keys = set().union(*(d.keys() for d in pretrain_infos))
+            nan = jnp.array(float("nan"))
+            normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in pretrain_infos]
+            stacked_infos = common_utils.stack_forest(normalized)
+            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
+            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            warmup_pbar.write(f"Step {pretrain_step}: {info_str}")
+            wandb.log({"pretrain_step": pretrain_step, **reduced_info})
+            pretrain_infos = []
 
     start_step = int(jax.device_get(agent._train_state.step))
     agent.training_steps = start_step

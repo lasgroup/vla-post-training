@@ -433,8 +433,6 @@ class BestofNLearner(FilteredSFTLearner):
         assert isinstance(self._config.rl, BestofNLearnerConfig), (
             "Only BestofN config should be passed to the best-of-N agent"
         )
-        update_critic = False
-        critic_info = {}
 
         if self._offline_data_buffer is None or self._offline_data_buffer.size == 0:
             raise ValueError(
@@ -445,22 +443,21 @@ class BestofNLearner(FilteredSFTLearner):
         batch = self._offline_data_buffer.sample(
             batch_size=self._config.batch_size
         )
-        if update_critic:
-            critic_rng, self._rng = jax.random.split(self._rng, 2)
-            with sharding.set_mesh(self._mesh):
-                q_state, value_state, q_info, value_info = (
-                    self._update_critics_jitted(
-                        batch,
-                        self._state_action_critic_state,
-                        self._value_state,
-                        self._train_state,
-                        critic_rng,
-                    )
+        critic_rng, self._rng = jax.random.split(self._rng, 2)
+        with sharding.set_mesh(self._mesh):
+            q_state, value_state, q_info, value_info = (
+                self._update_critics_jitted(
+                    batch,
+                    self._state_action_critic_state,
+                    self._value_state,
+                    self._train_state,
+                    critic_rng,
                 )
-            self._state_action_critic_state = q_state
-            self._value_state = value_state
-            critic_info = {f"pretrain/q/{k}": v for k, v in q_info.items()
-                            } | {f"pretrain/value/{k}": v for k, v in value_info.items()}
+            )
+        self._state_action_critic_state = q_state
+        self._value_state = value_state
+        critic_info = {f"pretrain/q/{k}": v for k, v in q_info.items()
+                        } | {f"pretrain/value/{k}": v for k, v in value_info.items()}
         info = jax.tree.map(np.asarray, critic_info)
         return info
 

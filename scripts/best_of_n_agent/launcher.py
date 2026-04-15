@@ -58,13 +58,16 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
     "lr_schedule.value": [5e-5],
-    "rl.num_critic_updates_per_batch": [1],
+    "rl.num_critic_updates_per_batch": [10],
     "rl.num_offline_pretraining_steps": [0],
-    # "rl.offline_buffer_load_paths": [("/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf/libero_online_buffer_time_to_success",)],
-    "rl.td_weight_schedule.switch_step": [-1],      # If -1, will be set to match critic_inference_start_step
-    "rl.num_value_bins": [1],                   # Loss-specific
+    "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
+    "rl.td_weight_schedule.end_value": [0.5],
+    "rl.td_weight_schedule.switch_step": [500_000],      # If -1, will be set to match critic_inference_start_step
+    "rl.num_value_bins": [1],                       # Loss-specific
+    # "rl.value_target_type": ["two_hot"],
     # Ablation: frozen pi0 prefix embeddings vs. trainable ResNet encoder
-    "rl.critic_encoder_type": ["pi0_prefix"],  # ["pi0_prefix", "resnet"],
+    "rl.critic_encoder_type": ["pi0_prefix"],       # ["pi0_prefix", "resnet"],
+    "rl.critic_action_compress_dim": [32],          # Compresses 320-dim flat action chunk to 32 before concatenation with obs embedding
     # Best-of-N specific
     "rl.critic_inference_start_step": [900],
     "rl.n_samples": [32],
@@ -73,12 +76,12 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_35", "libero_90_35"),
         # ("libero_90_38", "libero_90_38"),
         # ("libero_90_41", "libero_90_41"),
-        # ("libero_90_43", "libero_90_43"),
-        # ("libero_90_44", "libero_90_44"),
-        # ("libero_90_47", "libero_90_47"),
-        # ("libero_90_53", "libero_90_53"),
-        # ("libero_90_59", "libero_90_59"),
-        ("libero_90_60", "libero_90_60"),
+        ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
+        ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
+        ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
+        # ("libero_90_53", "libero_90_53"),   
+        ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
+        ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
         # ("libero_90_63", "libero_90_63"),
     ],
     # Multi-task
@@ -172,6 +175,10 @@ def main() -> None:
             flags["rl.critic_pre_training_steps"] = policy_start        # Optimizer reset
         else:
             flags["rl.critic_pre_training_steps"] = 0                   # No reset if there is no switching
+
+        # Make sure that if we are doing offline pretraining, the offline load path is set
+        if flags["rl.num_offline_pretraining_steps"] > 0 and "rl.offline_buffer_load_paths" not in flags:
+            flags["rl.offline_buffer_load_paths"] = ["/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf/libero_online_buffer_time_to_success"]
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
 

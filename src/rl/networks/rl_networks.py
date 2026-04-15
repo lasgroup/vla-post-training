@@ -50,12 +50,19 @@ class StateActionCritic(nnx.Module):
         encoder_def: EncoderDef,
         decoder_def: StateActionDecoderDef,
         rngs: nnx.Rngs,
+        action_encoder_def: Callable[[ActionType, nnx.Rngs], nnx.Module] | None = None,
     ):
         self.encoder = encoder_def(observation, rngs)
         dummy_embedding = self.encoder(observation)
+        if action_encoder_def is not None:
+            self.action_encoder = action_encoder_def(action, rngs)
+            dummy_action = self.action_encoder(action)
+        else:
+            self.action_encoder = None
+            dummy_action = action
         self.state_action_decoder = decoder_def(
             dummy_embedding,
-            action,
+            dummy_action,
             rngs,
         )
 
@@ -63,6 +70,8 @@ class StateActionCritic(nnx.Module):
         self, observation: ObsType, action: ActionType, training: bool = False
     ) -> jnp.ndarray:
         embedding = self.encoder(observation, training=training)
+        if self.action_encoder is not None:
+            action = self.action_encoder(action, training=training)
         q = self.state_action_decoder(
             observations=embedding, actions=action, training=training
         )
