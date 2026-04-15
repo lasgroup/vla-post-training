@@ -120,6 +120,10 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
+    use_simba_critic: bool = False
+    simba_hidden_dim: int = 256
+    simba_num_blocks: int = 2
+    simba_expansion_factor: int = 4
 
 
 @dataclasses.dataclass(frozen=True)

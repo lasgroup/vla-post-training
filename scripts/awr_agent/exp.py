@@ -66,6 +66,7 @@ from src.rl.networks.decoders.values.state_action_value import (
 )
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
+from src.rl.networks.simba_critic import SimbaV2StateActionCritic, SimbaV2StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
@@ -191,6 +192,40 @@ def _build_pi0_backbone_critic_defs(
     return state_action_critic_def, state_value_def
 
 
+def _build_simba_critic_defs(
+    config: _config.OnlineTrainConfig,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    assert isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig)
+    hidden_dim = config.rl.simba_hidden_dim
+    num_blocks = config.rl.simba_num_blocks
+    expansion_factor = config.rl.simba_expansion_factor
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> SimbaV2StateActionCritic:
+        return SimbaV2StateActionCritic(
+            observation=observation,
+            action=action,
+            hidden_dim=hidden_dim,
+            num_blocks=num_blocks,
+            expansion_factor=expansion_factor,
+            rngs=rngs,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> SimbaV2StateValue:
+        return SimbaV2StateValue(
+            observation=observation,
+            hidden_dim=hidden_dim,
+            num_blocks=num_blocks,
+            expansion_factor=expansion_factor,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -228,9 +263,16 @@ def main(config: _config.OnlineTrainConfig):
         config, prefix_embedding_shape=prefix_embedding_shape
     )
     dummy_act = config.model.fake_act(batch_size=1)
-    state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
-        config, prefix_embedding_shape=prefix_embedding_shape
-    )
+    assert isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig)
+    if config.rl.use_simba_critic:
+        logging.info("Using SimbaV2 critic.")
+        state_action_critic_def, state_value_def = _build_simba_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
+    else:
+        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
     agent = AdvantageWeightedSFTLearner(
         config=config,
         dummy_obs=dummy_obs,
