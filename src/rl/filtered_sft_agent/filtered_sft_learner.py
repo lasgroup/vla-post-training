@@ -1,4 +1,5 @@
 import dataclasses
+import copy
 import functools
 import gc
 import logging
@@ -312,12 +313,27 @@ class FilteredSFTLearner(Agent):
         self._drop_policy_model()
 
         # prepare transforms for preprocessing episode data into model input format
-        self._policy_transforms = _transforms.compose(
-            [
-                *self._data_config.repack_transforms.inputs,
-                *self._policy._input_transform.transforms
+        self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
+
+    def _get_policy_transforms(self, domain: str):
+        if domain == "libero":
+            return _transforms.compose([*self._data_config.repack_transforms.inputs, *self._policy._input_transform.transforms])
+        if domain == "molmo":
+            # TODO: extract these transforms from the policy config instead of hardcoding the order here.
+            # Unfortunately, the policy input transforms do not match what was used for training:
+            # padding should occur before normalization, and delta actions should be considered.
+            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            input_transforms = [
+                copy.deepcopy(self._policy._input_transform.transforms[1]),  # droid inputs
+                _transforms.DeltaActions(delta_action_mask),                 # delta actions
+                copy.deepcopy(self._policy._input_transform.transforms[6]),  # padding
+                copy.deepcopy(self._policy._input_transform.transforms[2]),  # normalize
+                copy.deepcopy(self._policy._input_transform.transforms[4]),  # resizeimages
+                copy.deepcopy(self._policy._input_transform.transforms[0]),  # inject prompt
+                copy.deepcopy(self._policy._input_transform.transforms[5]),  # tokenizer
             ]
-        )
+            return _transforms.compose([*self._data_config.repack_transforms.inputs, *input_transforms])
+        raise NotImplementedError(f"Unknown domain: {domain}")
 
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
@@ -599,8 +615,8 @@ class FilteredSFTLearner(Agent):
             return obs, actions
 
         # process observations and actions according to pi0 preprocessing
-        _next_obs, _ = transform({**_next_obs, "actions": _actions, "prompt": str(task_description)})
-        _obs, _actions = transform({**_obs, "actions": _actions, "prompt": str(task_description)})
+        _next_obs, _ = transform({**_next_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
+        _obs, _actions = transform({**_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
 
         self._online_data_buffer.insert(
             {
