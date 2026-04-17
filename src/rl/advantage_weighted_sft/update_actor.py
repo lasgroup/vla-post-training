@@ -34,6 +34,7 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
+    scale: float = 1.0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 
@@ -42,6 +43,7 @@ def train_step(
 
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     reset_period = config.rl.reset_policy_params_to_ema_period
+    normalizer_config = config.rl.normalizer_config
 
     if config.rl.use_mc_returns:
         assert mc_return is not None, "mc_return must be provided when use_mc_returns=True"
@@ -61,7 +63,7 @@ def train_step(
             state_action_critic(critic_observation, critic_actions)
         )  # (B,)
         advantage = q_value - value  # (B, )
-
+    advantage = advantage / scale
     score = advantage / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
@@ -163,5 +165,8 @@ def train_step(
         "advantage_max": jnp.max(advantage),
         "advantage_min": jnp.min(advantage),
         "advantage_std": jnp.std(advantage),
+        "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_low),
+        "advantage_median": jnp.median(advantage),  # or jnp.quantile(advantage, 0.50)
+        "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_up),
     } | aux_data
     return new_state, info
