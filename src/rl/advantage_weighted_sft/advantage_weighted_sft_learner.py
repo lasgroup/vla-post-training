@@ -322,12 +322,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._save_episode_in_buffer(episode_data, task_description)
 
     @at.typecheck
-    def _update_normalizer(self, normalizer_state, bias, scale) -> NormalizerState:
-        return self._normalizer.update(
+    def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
+        normalizer_state = self._normalizer.update(
             normalizer_state=normalizer_state,
             bias=bias,
             scale=scale,
         )
+        return normalizer_state, {
+            'normalizer_bias': jnp.mean(normalizer_state.bias),
+            'normalizer_scale': jnp.mean(normalizer_state.scale),
+        }
 
     @at.typecheck
     def _update_critics(
@@ -557,9 +561,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 else:
                     raise NotImplementedError
                 scale = jnp.clip(scale, min=normalizer_config.min_scale)
-            self._normalizer_state = self._update_normalizer(normalizer_state=self._normalizer_state,
-                                                             bias=bias, scale=scale)
-
+            self._normalizer_state, normalizer_info = self._update_normalizer(
+                normalizer_state=self._normalizer_state,
+                bias=bias,
+                scale=scale)
+            actor_info = actor_info | normalizer_info
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
         info = (
