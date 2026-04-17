@@ -62,8 +62,6 @@ class StepSchedule(_optimizer.LRScheduleConfig):
 class RLAlgorithmConfig:
     discount: float = 0.99
     buffer_capacity: int = 1024
-    buffer_save_path: str | None = None  # if set, save each episode to this directory
-    buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
 
 
 # Define hyperparameter structures for your algorithms
@@ -276,6 +274,7 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
+    requeue: bool = False
 
 
 def make_base_online_config(

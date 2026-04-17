@@ -39,6 +39,10 @@ from src.envs.wrappers import (
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.training.runtime_state import (
+    load_resume_state,
+    restore_train_state,
+)
 
 
 def filtered_sft_wrap_env(
@@ -108,6 +112,15 @@ def _load_weights_and_validate(
             if not isinstance(v, jax.ShapeDtypeStruct)
         }
     )
+
+
+def _copy_nnx_state(state: nnx.State) -> nnx.State:
+    def _copy_value(_k, v):
+        if hasattr(v, "value") and hasattr(v, "replace"):
+            return v.replace(v.value.copy())
+        return v
+
+    return state.map(_copy_value)
 
 
 @at.typecheck
@@ -228,6 +241,21 @@ class FilteredSFTLearner(Agent):
                 resume=self._config.resume,
             )
         )
+        self._resume_state = None
+        if self._config.resume and bool(getattr(self._config, "requeue", False)):
+            self._resume_state = load_resume_state(self._config)
+            if self._resume_state is not None:
+                if not self._resuming:
+                    raise ValueError(
+                        "Found resumable runtime state, but checkpoint manager did not enter resume mode."
+                    )
+                logging.info(
+                    "Found resumable state for %s at step %d (replay shards=%s, replay transitions=%d)",
+                    self._config.checkpoint_dir,
+                    self._resume_state.step,
+                    self._resume_state.replay_shard_dir,
+                    self._resume_state.replay_size,
+                )
 
         # initialize data loader
         assert (
@@ -245,32 +273,76 @@ class FilteredSFTLearner(Agent):
         )
         self._data_iter = iter(self._data_loader)
         self._online_data_buffer = self._get_online_replay_buffer()
+        if self._resume_state is not None:
+            restored_replay = self._online_data_buffer.restore_shards(
+                self._resume_state.replay_shard_dir,
+                step=self._resume_state.step,
+                total_inserted=self._resume_state.replay_total_inserted,
+                latest_shard_path=self._resume_state.latest_replay_shard_path,
+                rng_state_json=self._resume_state.replay_rng_state_json,
+            )
+            logging.info(
+                "Restored replay buffer from %s (step=%d, transitions=%d, total_inserted=%d)",
+                restored_replay["path"],
+                self._resume_state.step,
+                restored_replay["size"],
+                restored_replay["total_inserted"],
+            )
         self._collection_success_episodes = 0
 
         # Initialize train state.
         self._train_state, self._train_state_sharding = init_train_state(
             self._config, init_rng, self._mesh, resume=self._resuming
         )
+        if self._resuming:
+            self._train_state = restore_train_state(
+                _checkpoints.restore_state,
+                self._checkpoint_manager,
+                self._train_state,
+                self._data_loader,
+                resume_state=self._resume_state,
+            )
+            restored_train_step = int(jax.device_get(self._train_state.step))
+            if self._resume_state is not None:
+                if restored_train_step != int(self._resume_state.step):
+                    logging.warning(
+                        "Restored checkpoint step %d does not match manifest step %d for %s",
+                        restored_train_step,
+                        self._resume_state.step,
+                        self._config.checkpoint_dir,
+                    )
+                logging.info(
+                    "Restored training checkpoint from %s at committed step %d",
+                    self._config.checkpoint_dir,
+                    self._resume_state.step,
+                )
+                self.training_steps = int(self._resume_state.step)
+            else:
+                self.training_steps = restored_train_step
+
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+            if self._train_state.ema_decay is not None:
+                self._resume_restore_ema = True
+                self._resume_ema_decay = self._train_state.ema_decay
+                self._train_state = dataclasses.replace(
+                    self._train_state, ema_params=None, ema_decay=None
+                )
+                logging.info(
+                    "Temporarily disabling EMA after resume; will re-enable after first update."
+                )
+        else:
+            self.training_steps = 0
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+
         jax.block_until_ready(self._train_state)
         logging.info(
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
-        if self._resuming:
-            self._train_state = _checkpoints.restore_state(
-                self._checkpoint_manager, self._train_state, self._data_loader
-            )
 
         # prepare train_step
-        self._train_step = jax.jit(
-            functools.partial(train_step, config),
-            in_shardings=(
-                self._replicated_sharding,
-                self._train_state_sharding,
-                self._data_sharding,
-            ),
-            out_shardings=(self._train_state_sharding, self._replicated_sharding),
-            donate_argnums=(1,),
-        )
+        self._refresh_train_step()
 
         # Create temporary episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
@@ -324,6 +396,21 @@ class FilteredSFTLearner(Agent):
             logging.warning(
                 "Policy model object is still alive after cleanup; other references remain."
             )
+
+    def _refresh_train_step(self):
+        self._train_state_sharding = sharding.fsdp_sharding(
+            self._train_state, self._mesh, log=False
+        )
+        self._train_step = jax.jit(
+            functools.partial(train_step, self._config),
+            in_shardings=(
+                self._replicated_sharding,
+                self._train_state_sharding,
+                self._data_sharding,
+            ),
+            out_shardings=(self._train_state_sharding, self._replicated_sharding),
+            donate_argnums=(1,),
+        )
 
     def _get_online_replay_buffer(
         self,
@@ -389,8 +476,6 @@ class FilteredSFTLearner(Agent):
             preprocess_fn=None,
             postprocess_fn=None,
             freeze_dict=False,
-            load_paths=self._config.rl.buffer_load_paths,
-            save_path=self._config.rl.buffer_save_path,
         )
 
     def _process_obs_for_pi0(
@@ -715,6 +800,15 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
+        if self._resume_restore_ema:
+            self._train_state = dataclasses.replace(
+                self._train_state,
+                ema_decay=self._resume_ema_decay,
+                ema_params=_copy_nnx_state(self._train_state.params),
+            )
+            self._resume_restore_ema = False
+            self._resume_ema_decay = None
+            self._refresh_train_step()
         info = info | {
             "online_buffer_size": jnp.asarray(
                 float(self._online_data_buffer.size), dtype=jnp.float32
