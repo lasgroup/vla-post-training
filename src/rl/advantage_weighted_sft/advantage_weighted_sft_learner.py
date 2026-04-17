@@ -153,7 +153,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._value_state_sharding,
                 self._replicated_sharding,
                 self._policy_mc_return_sharding(),
-                self._policy_mc_return_sharding(),
+                self._replicated_sharding,
             ),
             out_shardings=(
                 self._train_state_sharding,
