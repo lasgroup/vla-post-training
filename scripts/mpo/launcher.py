@@ -66,7 +66,7 @@ NAME_KEYS = [
 #   - noise_level: flow sampling stochasticity
 #   - lr: policy learning rate
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0],
+    "seed": [0,1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [2],
     "rl.policy_training_start_step": [200],
@@ -82,11 +82,11 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "lr_schedule.peak_lr": [1e-5, 5e-6],
     "batch_size": [32],
     "rl.num_steps": [5],
-    "rl.group_size": [4, 8],
-    "rl.epsilon_e": [0.05, 0.1],
-    "rl.epsilon_m": [0.005, 0.01],
-    "rl.noise_level": [0.2, 0.3],
-    "rl.use_ema_for_sampling": [True],
+    "rl.group_size": [8],
+    "rl.epsilon_e": [0.05],
+    "rl.epsilon_m": [0.01],
+    "rl.noise_level": [0.3],
+    "rl.use_ema_for_sampling": [False, True],
     "rl.reserve_buffer_size": [0, 50_000],
     ("collect.tasks", "collect.eval_tasks"): [
     #    ("libero_90_14", "libero_90_14"),

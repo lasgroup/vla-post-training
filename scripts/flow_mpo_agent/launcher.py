@@ -82,9 +82,9 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     #"rl.reset_optimizer_on_ema_reset": [True],
     #"rl.beta": [0.02, 0.05, 0.1],
     "rl.beta": [0.05],
-    "rl.clip_epsilon": [0.1, 0.2],
+    "rl.clip_epsilon": [0.2],
     "rl.num_steps": [5],
-    "rl.noise_level": [0.3, 0.5],
+    "rl.noise_level": [0.3],
     "rl.use_adaptive_advantage_scale": [False, True],
     ("collect.tasks", "collect.eval_tasks"): [
         ("libero_90_14", "libero_90_14"),
