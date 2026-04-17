@@ -130,6 +130,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
 class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     store_buffer_actions_in_batch: bool = False
     use_ema_for_sampling: bool = True
+    reset_optimizer_on_ema_reset: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -147,6 +148,8 @@ class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     noise_level: float = 0.3
     normalize_adv: bool = True
     clip_epsilon: float = 0.2
+    use_adaptive_advantage_scale: bool = False
+    advantage_scale_ema_decay: float = 0.99
 
 @dataclasses.dataclass(frozen=True)
 class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
@@ -184,6 +187,14 @@ class MPOLearnerConfig(MPOWeightedSFTLearnerConfig):
 
     # Policy resets
     reset_optimizer_on_ema_reset: bool = False
+
+    # Reserve buffer: snapshot early successful experiences to prevent collapse.
+    # During [policy_training_start_step, +reserve_fill_steps] transitions from
+    # the online buffer are copied into a fixed reserve. After filling, a fraction
+    # of each training batch is drawn from the reserve instead of the online buffer.
+    reserve_buffer_size: int = 0  # 0 = disabled
+    reserve_fill_steps: int = 500
+    reserve_ratio: float = 0.25  # fraction of online batch drawn from reserve
 
     # Critic control
     freeze_critic_at_step: int | None = None
@@ -438,6 +449,10 @@ _CONFIGS.extend(
                 policy_training_start_step=200,
                 # MPO samples its own actions, so offline data is unused.
                 online_ratio=1.0,
+                # Reserve buffer: keep early experiences to prevent collapse.
+                reserve_buffer_size=0,
+                reserve_fill_steps=500,
+                reserve_ratio=0.25,
             ),
         ),
         # 8. Best of N

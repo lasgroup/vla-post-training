@@ -34,7 +34,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 128
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
@@ -64,35 +64,41 @@ NAME_KEYS = [
 # After finding the best setting, add shared knobs (lr, online_ratio, etc.)
 # and multiple seeds/tasks in subsequent stages.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0],
+    "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "rl.reset_policy_params_to_ema_period": [500],
     "collect.use_time_to_success_as_reward": [True],
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [10],
-    "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
 
+    "rl.td_weight_schedule.switch_step": [0],
+    "rl.td_weight_schedule.init_value": [0.5],
+    "rl.td_weight_schedule.end_value": [0.5],
+
 
     # --- flow-GRPO-specific knobs ---
-    "lr_schedule.peak_lr": [1e-5, 1e-6],
-    "batch_size": [128],
+    "lr_schedule.peak_lr": [2.5e-5, 5e-5, 5e-7],
+    "rl.reset_policy_params_to_ema_period": [100],
+    #"rl.reset_optimizer_on_ema_reset": [True],
+    "batch_size": [64],
     "rl.group_size": [4, 8],
-    "rl.clip_epsilon": [0.1, 0.2],
-    #"rl.num_steps": [5, 10],
-    "rl.noise_level": [0.2, 0.3],
-    "rl.use_ema_for_sampling": [True],
+    #"rl.clip_epsilon": [0.1, 0.2],
+    "rl.clip_epsilon": [0.2],
+    "rl.num_steps": [5],
+    #"rl.noise_level": [0.2, 0.3],
+    "rl.noise_level": [0.3],
+    "rl.use_ema_for_sampling": [False, True],
     "rl.normalize_adv": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
-        ("libero_90_14", "libero_90_14"),
+    #    ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
-        ("libero_90_64", "libero_90_64"),
-        ("libero_90_82", "libero_90_82"),
+    #    ("libero_90_64", "libero_90_64"),
+    #    ("libero_90_82", "libero_90_82"),
     ],
 }
 

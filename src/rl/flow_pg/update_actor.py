@@ -127,7 +127,7 @@ def train_step(
 
     score = advantage / beta
     score = jnp.minimum(score, weight_clip)
-    score = jax.nn.softmax(score, axis=0)
+    score = jax.nn.softmax(score, axis=0) # this we need to change. 
     score = jax.lax.stop_gradient(score)
 
     if score.ndim == 1:

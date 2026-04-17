@@ -105,8 +105,18 @@ def train_step(
     assert isinstance(config.rl, MPOLearnerConfig)
     policy_observation, critic_observation, buffer_actions = batch
 
+    # Current policy for gradient computation (M-step).
     policy = nnx.merge(policy_state.model_def, policy_state.params)
-    policy.eval()  # eval mode for sampling; switched to train() before gradient tape
+    policy.eval()
+
+    # Sampling model: use EMA (slowly-moving old policy) when available.
+    # This stabilises the E-step by sampling from a smoother pi_old.
+    use_ema_for_sampling = config.rl.use_ema_for_sampling
+    if use_ema_for_sampling and policy_state.ema_params is not None:
+        sampling_model = nnx.merge(policy_state.model_def, policy_state.ema_params)
+    else:
+        sampling_model = nnx.merge(policy_state.model_def, policy_state.params)
+    sampling_model.eval()
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -149,7 +159,7 @@ def train_step(
     )
 
     _need_rollout_info = _compute_kl
-    _sample_result = policy.sample_actions(
+    _sample_result = sampling_model.sample_actions(
         rng=sample_rng,
         observation=expanded_policy_obs,
         noise=noise,
@@ -231,15 +241,32 @@ def train_step(
         # score sums to 1 per group after softmax, so sum over group axis (not mean)
         loss = jnp.mean(jnp.sum(score * grouped_chunked_loss, axis=1))
 
+        # Group-level diagnostics: detect whether groups are collapsing.
+        # Entropy of softmax weights per group — should stay well above 0.
+        # If entropy -> 0 the critic can't rank actions within a group.
+        group_entropy = -jnp.sum(
+            score_stats * jnp.log(score_stats + 1e-8), axis=-1
+        )  # (B,)
+        # Max weight per group — should stay below 1.0.
+        group_max_weight = jnp.max(score_stats, axis=-1)  # (B,)
+        # Per-group advantage std — are within-group advantages distinguishable?
+        group_adv_stds = jnp.std(adv_grouped, axis=-1)  # (B,)
+        # Per-group advantage means — are state-level advantages varying?
+        group_adv_means = jnp.mean(adv_grouped, axis=-1)  # (B,)
+
         info = {
             "q_mean": jnp.mean(q_value),
             "value_mean": jnp.mean(value),
             "advantage_mean": jnp.mean(advantage),
             "advantage_max": jnp.max(advantage),
             "advantage_min": jnp.min(advantage),
-            "advantage_std": jnp.mean(
-                jnp.std(adv_grouped, axis=-1)
-            ),
+            "advantage_std": jnp.mean(group_adv_stds),
+            "group_adv_mean_of_means": jnp.mean(group_adv_means),
+            "group_adv_std_of_means": jnp.std(group_adv_means),
+            "group_adv_mean_of_stds": jnp.mean(group_adv_stds),
+            "group_adv_min_std": jnp.min(group_adv_stds),
+            "group_score_entropy": jnp.mean(group_entropy),
+            "group_score_max_weight": jnp.mean(group_max_weight),
             "score_mean": jnp.mean(score_stats),
             "score_max": jnp.max(score_stats),
             "eta": eta,

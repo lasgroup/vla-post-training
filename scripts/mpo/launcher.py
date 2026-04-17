@@ -33,7 +33,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 2
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 32
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
@@ -53,6 +53,8 @@ NAME_KEYS = [
     ("rl.epsilon_m", "em"),
     ("rl.num_steps", "ns"),
     ("rl.noise_level", "nl"),
+    ("rl.use_ema_for_sampling", "ema"),
+    ("rl.reserve_buffer_size", "rb"),
     ("seed", "s"),
 ]
 
@@ -73,16 +75,19 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
-    "rl.num_offline_pretraining_steps": [200],
+    "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
 
     # --- MPO-specific knobs ---
     "lr_schedule.peak_lr": [1e-5, 5e-6],
-    "batch_size": [256],
+    "batch_size": [32],
+    "rl.num_steps": [5],
     "rl.group_size": [4, 8],
     "rl.epsilon_e": [0.05, 0.1],
     "rl.epsilon_m": [0.005, 0.01],
     "rl.noise_level": [0.2, 0.3],
+    "rl.use_ema_for_sampling": [True],
+    "rl.reserve_buffer_size": [0, 50_000],
     ("collect.tasks", "collect.eval_tasks"): [
     #    ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),

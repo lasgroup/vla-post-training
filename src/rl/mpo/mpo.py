@@ -1,6 +1,7 @@
 import dataclasses
 import functools
 import gc
+import logging
 
 import flax.nnx as nnx
 import jax
@@ -13,6 +14,7 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.rl.mpo.update_actor import train_step as mpo_train_step
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
+from src.rl.replay_buffer import ShardedReplayBuffer
 from src.training.config import MPOLearnerConfig
 
 
@@ -28,8 +30,27 @@ class MPOLearner(MPOWeightedSFTLearner):
         del self._update_policy_jitted
         gc.collect()
 
-        # adaptive m-step KL multiplier (Eq. 12).
+        # Adaptive M-step KL multiplier (Eq. 12).
         self._alpha_kl = jnp.asarray(rl_config.kl_coef, dtype=jnp.float32)
+
+        # Reserve buffer: keeps early successful experiences to prevent collapse.
+        self._reserve_buffer = None
+        if rl_config.reserve_buffer_size > 0:
+            self._reserve_buffer = ShardedReplayBuffer(
+                dummy_data=self._online_data_buffer.storage,
+                max_capacity=rl_config.reserve_buffer_size,
+                data_sharding=self._data_sharding,
+                seed=self._config.seed + 1,
+            )
+            self._reserve_fill_end = (
+                rl_config.policy_training_start_step + rl_config.reserve_fill_steps
+            )
+            logging.info(
+                "Reserve buffer enabled: capacity=%d, filling during steps [%d, %d]",
+                rl_config.reserve_buffer_size,
+                rl_config.policy_training_start_step,
+                self._reserve_fill_end,
+            )
 
         self._train_step = functools.partial(mpo_train_step, self._config)
 
@@ -100,7 +121,11 @@ class MPOLearner(MPOWeightedSFTLearner):
 
     def _sample_action(self, observations, rng, train_state, use_ema=True, return_prefix_rep=False):
         """Override to pass configured noise_level during data collection only."""
-        params = self._select_policy_params(train_state, prefer_ema=use_ema)
+        params = (
+            train_state.ema_params
+            if use_ema and train_state.ema_params is not None
+            else train_state.params
+        )
         model = nnx.merge(train_state.model_def, params)
         model.eval()
         first_obs = np.asarray(next(iter(observations.values())))
@@ -219,7 +244,40 @@ class MPOLearner(MPOWeightedSFTLearner):
 
         critic_info, actor_info = {}, {}
         if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+            # Draw from online buffer, optionally mixing in reserve experiences.
+            reserve_n = 0
+            if (
+                self._reserve_buffer is not None
+                and self._reserve_buffer.size > 0
+                and self.training_steps > self._reserve_fill_end
+            ):
+                reserve_n = min(
+                    int(online_batch_size * rl_config.reserve_ratio),
+                    self._reserve_buffer.size,
+                )
+            live_n = online_batch_size - reserve_n
+            online_batch = self._online_data_buffer.sample(batch_size=live_n)
+
+            if reserve_n > 0:
+                reserve_batch = self._reserve_buffer.sample(batch_size=reserve_n)
+                online_batch = jax.tree.map(
+                    lambda a, b: jnp.concatenate([a, b], axis=0),
+                    online_batch,
+                    reserve_batch,
+                )
+                del reserve_batch
+
+            # Fill reserve buffer during the early training window.
+            if (
+                self._reserve_buffer is not None
+                and self.training_steps <= self._reserve_fill_end
+                and self.training_steps >= rl_config.policy_training_start_step
+            ):
+                # Store a copy of the current online batch into the reserve.
+                self._reserve_buffer.insert(
+                    jax.tree.map(np.asarray, online_batch), save_episode=False,
+                )
+
             if update_critic:
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -297,6 +355,7 @@ class MPOLearner(MPOWeightedSFTLearner):
 
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
+        reserve_size = float(self._reserve_buffer.size) if self._reserve_buffer is not None else 0.0
         info = (
             actor_info
             | critic_info
@@ -304,6 +363,7 @@ class MPOLearner(MPOWeightedSFTLearner):
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
                 ),
+                "reserve_buffer_size": jnp.asarray(reserve_size, dtype=jnp.float32),
                 "critic_frozen": jnp.asarray(float(critic_frozen), dtype=jnp.float32),
             }
         )

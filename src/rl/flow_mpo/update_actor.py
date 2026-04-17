@@ -68,6 +68,7 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
+    advantage_scale_ema: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowMPOSFTLearnerConfig)
     policy_observation, critic_observation, actions = batch
@@ -148,10 +149,34 @@ def train_step(
     )
     advantage = q_value - value
 
-    # calvulate scores
-    score = advantage / beta
+    # Compute batch advantage percentiles (always logged for monitoring)
+    adv_p5 = jnp.percentile(advantage, 5)
+    adv_p95 = jnp.percentile(advantage, 95)
+    batch_adv_range = adv_p95 - adv_p5
+
+    if config.rl.use_adaptive_advantage_scale:
+        # dreamer style adaptive advantage normalization
+        # normalize returns by a percentile range smoothed with ema (Eq. 7 in dreamer paper)
+        #   S = EMA(Per(R, 95) - Per(R, 5), decay=0.99)
+        # and divides advantages by max(1, S) to avoid amplifying noise under
+        #   normalized = (R - V(s)) / max(1, S)
+        #
+        # we apply the same idea to raw advantages A = Q(s,a) - V(s).
+        # the EMA scale is maintained in the learner and passed in via advantage_scale_ema
+        advantage_scale = advantage_scale_ema if advantage_scale_ema is not None else jnp.asarray(1.0)
+        advantage_scale = jnp.maximum(1.0, advantage_scale)
+        normalized_advantage = advantage / advantage_scale
+    else:
+        # Fixed normalization: divide by advantage_scale from config
+        advantage_scale = jnp.asarray(config.rl.advantage_scale, dtype=advantage.dtype)
+        normalized_advantage = advantage
+
+    score = normalized_advantage / beta
     score = jnp.minimum(score, weight_clip)
-    score = jax.nn.softmax(score, axis=0)
+    score = jnp.exp(score)
+    if not config.rl.use_adaptive_advantage_scale:
+        score = score / advantage_scale
+    score = jnp.clip(score, min=1e-6)
     score = jax.lax.stop_gradient(score)
 
     if score.ndim == 1:
@@ -184,10 +209,16 @@ def train_step(
         surr1 = ratio * score
         surr2 = clipped_ratio * score
         loss = -jnp.mean(jnp.minimum(surr1, surr2))
-
+        
         info = {
             "loss": loss,
             "q_mean": jnp.mean(q_value),
+            "v_mean": jnp.mean(value),
+            "advantage_mean": jnp.mean(advantage),
+            "adv_p5": adv_p5,
+            "adv_p95": adv_p95,
+            "batch_adv_range": batch_adv_range,
+            "advantage_scale": advantage_scale,
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(current_log_probs),
             "old_log_prob_mean": jnp.mean(old_log_probs),

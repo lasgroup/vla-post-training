@@ -20,8 +20,11 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
         # Override _train_step with the flow mpo actor update
         self._train_step = functools.partial(flow_mpo_train_step, self._config)
 
-        # Re-create policy JIT wrapper
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
+        # DreamerV3-style EMA scale for advantage normalization (Eq. 7)
+        self._advantage_scale_ema = jnp.asarray(1.0, dtype=jnp.float32)
+
+        # Re-create policy JIT wrapper with an extra advantage_scale_ema slot
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, advantage_scale_ema):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -29,6 +32,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                 value_state=value_state,
                 rng=rng,
                 mc_return=mc_return,
+                advantage_scale_ema=advantage_scale_ema,
             )
 
         self._update_policy_jitted = jax.jit(
@@ -40,6 +44,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
                 self._replicated_sharding,  # mc_return
+                self._replicated_sharding,  # advantage_scale_ema
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -47,6 +52,40 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
             ),
             donate_argnums=(1,),
         )
+
+    def _update_policy(
+        self,
+        batch,
+        policy_state,
+        q_state,
+        value_state,
+        rng,
+        mc_return=None,
+        advantage_scale_ema=None,
+    ):
+        assert isinstance(self._config.rl, FlowMPOSFTLearnerConfig)
+        if self._replace_buffer_actions_with_policy_actions(critic_update=False):
+            policy_sample_rng, rng = jax.random.split(rng, 2)
+            on_policy_action = self._get_on_policy_action(
+                online_observation=batch[0],
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
+            batch = (batch[0], on_policy_action)
+        batch = self._sft_batch_to_actor_batch(
+            batch,
+            policy_state=policy_state,
+        )
+        policy_state, info = self._train_step(
+            rng,
+            policy_state,
+            q_state,
+            value_state,
+            batch,
+            mc_return=mc_return,
+            advantage_scale_ema=advantage_scale_ema,
+        )
+        return policy_state, info
 
     def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
         if critic_update:
@@ -137,8 +176,19 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                     self._value_state,
                     policy_rng,
                     None,
+                    self._advantage_scale_ema,
                 )
             self._train_state = policy_state
+
+            # Update EMA advantage scale on host (DreamerV3 Eq. 7)
+            if rl_config.use_adaptive_advantage_scale:
+                ema_decay = rl_config.advantage_scale_ema_decay
+                batch_range = actor_info["batch_adv_range"]
+                self._advantage_scale_ema = (
+                    ema_decay * self._advantage_scale_ema
+                    + (1.0 - ema_decay) * batch_range
+                )
+
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
         info = (

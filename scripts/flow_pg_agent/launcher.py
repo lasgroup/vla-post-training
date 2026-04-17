@@ -34,7 +34,7 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-DEFAULT_BATCH_SIZE = 256
+DEFAULT_BATCH_SIZE = 64
 DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
@@ -62,25 +62,27 @@ NAME_KEYS = [
 # After finding the best setting, add shared knobs (lr, online_ratio, etc.)
 # and multiple seeds/tasks in subsequent stages.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0],
+    "seed": [0,1,2],
     "log_interval": [25],
     # --- shared training knobs (frozen for stage 1) ---
-    "lr_schedule.peak_lr": [1e-5],
     "rl.num_critic_updates_per_batch": [10],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "rl.reset_policy_params_to_ema_period": [500],
     "collect.use_time_to_success_as_reward": [True],
-    "batch_size": [256],
+    "batch_size": [64],
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [10],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [False],
     "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
+
     # --- flow-PG-specific knobs ---
-    "rl.kl_coef": [0.0, 0.01, 0.05],
-    "rl.num_steps": [5, 10],
+    "rl.kl_coef": [0.0, 0.05],
+    "lr_schedule.peak_lr": [2.5e-5, 5e-7],
+    "rl.reset_policy_params_to_ema_period": [100],
+    #"rl.reset_optimizer_on_ema_reset": [True],
+    "rl.num_steps": [5],
     "rl.noise_level": [0.2, 0.3],
     "rl.use_ema_for_sampling": [True, False],
     ("collect.tasks", "collect.eval_tasks"): [
