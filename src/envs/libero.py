@@ -13,6 +13,7 @@ from src.envs.wrappers import (
     WarmUpOnResetWrapper,
 )
 
+
 class LiberoWrapper(gym.Wrapper):
 
     def __init__(self, **args):
@@ -27,18 +28,28 @@ class LiberoWrapper(gym.Wrapper):
 
     def reset(self, seed=None, options={}):
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
+        perturbation = ""
+        if task.endswith("_swap") or task.endswith("_object") or task.endswith("_position"):
+            perturbation = "_" + task.split("_")[-1]
+            task = "_".join(task.split("_")[:-1])
+        task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task_id.split("_")[-1])
         task_suite = benchmark.get_benchmark_dict()["libero_90"]()
         task = task_suite.get_task(task_id)
+        problem_folder = task_suite_name + perturbation
         self._args["bddl_file_name"] = (
             pathlib.Path(get_libero_path("bddl_files"))
-            / task.problem_folder
+            / problem_folder
             / task.bddl_file
         )
         env = OffScreenRenderEnv(**self._args)
         super().__init__(env)
         self.env.reset()
-        init_states = get_task_init_states(task_suite, task_id)
+        init_states = get_task_init_states(
+            get_libero_path("init_states"),
+            problem_folder,
+            task_suite.tasks[task_id].init_states_file
+        )
         random_index = self.rng.integers(low=0, high=init_states.shape[0])
         init_state = init_states[random_index]
         obs = self.env.set_init_state(init_state)
@@ -75,26 +86,11 @@ def get_libero_warm_start_action():
 
 
 def make_env_libero(config, tasks, num_devices: int = 4):
-    benchmark_dict = benchmark.get_benchmark_dict()
     warm_start_action = get_libero_warm_start_action()
 
     task = tasks[0]
-    perturbation = ""
-    if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
-        perturbation = "_" + task.split("_")[1]
-        task = task.replace(perturbation, "")
     task_suite_name = "_".join(task.split("_")[:-1]) 
-    task_id = int(task.split("_")[-1])
-    task_suite = benchmark_dict[task_suite_name]()
-    task = task_suite.get_task(task_id)
-    problem_folder = task_suite_name + perturbation
-    task_bddl_file = (
-        pathlib.Path(get_libero_path("bddl_files"))
-        / problem_folder
-        / task.bddl_file
-    )
     env_args = {
-        "bddl_file_name": task_bddl_file,
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
