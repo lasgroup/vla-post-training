@@ -29,9 +29,9 @@ class LiberoWrapper(gym.Wrapper):
     def reset(self, seed=None, options={}):
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
         perturbation = ""
-        if task.endswith("_swap") or task.endswith("_object") or task.endswith("_position"):
-            perturbation = "_" + task.split("_")[-1]
-            task = "_".join(task.split("_")[:-1])
+        if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
+            perturbation = "_" + task.split("_")[1]
+            task = task.replace(perturbation, "")
         task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task_id.split("_")[-1])
         task_suite = benchmark.get_benchmark_dict()["libero_90"]()
