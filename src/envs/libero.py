@@ -1,3 +1,5 @@
+import gymnasium as gym
+from gymnasium.utils import seeding
 from gymnasium.wrappers import TimeLimit
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
@@ -9,8 +11,45 @@ import torch
 from src.envs.wrappers import (
     ensure_gymnasium_env,
     WarmUpOnResetWrapper,
-    SetInitialStateWrapper,
 )
+
+class LiberoWrapper(gym.Wrapper):
+
+    def __init__(self, **args):
+        self._args = args
+        env = OffScreenRenderEnv(**args)
+        super().__init__(env)
+        self.rng, _ = seeding.np_random(0)
+
+    def seed(self, seed=None):
+        if seed is not None:
+            self.rng, _ = seeding.np_random(seed)
+
+    def reset(self, seed=None, options={}):
+        task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
+        task_id = int(task_id.split("_")[-1])
+        task_suite = benchmark.get_benchmark_dict()["libero_90"]()
+        task = task_suite.get_task(task_id)
+        self._args["bddl_file_name"] = (
+            pathlib.Path(get_libero_path("bddl_files"))
+            / task.problem_folder
+            / task.bddl_file
+        )
+        env = OffScreenRenderEnv(**self._args)
+        super().__init__(env)
+        self.env.reset()
+        init_states = get_task_init_states(task_suite, task_id)
+        random_index = self.rng.integers(low=0, high=init_states.shape[0])
+        init_state = init_states[random_index]
+        obs = self.env.set_init_state(init_state)
+        self._task_description = task.language
+        info = {"task_description": self._task_description}
+        return obs, info
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        info["task_description"] = self._task_description
+        return obs, reward, done, False, info
 
 
 def get_task_init_states(init_root: str = None, problem_folder: str = None, init_states_file: str = None):
@@ -39,50 +78,34 @@ def make_env_libero(config, tasks, num_devices: int = 4):
     benchmark_dict = benchmark.get_benchmark_dict()
     warm_start_action = get_libero_warm_start_action()
 
-    env_args_multitask = []
-    max_steps_multitask = []
-    initial_states_multitask = []
-    task_descriptions = []
-
-    for task in tasks:
-        perturbation = ""
-        if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
-            perturbation = "_" + task.split("_")[1]
-            task = task.replace(perturbation, "")
-        task_suite_name = "_".join(task.split("_")[:-1]) 
-        task_id = int(task.split("_")[-1])
-        task_suite = benchmark_dict[task_suite_name]()
-        task = task_suite.get_task(task_id)
-        problem_folder = task_suite_name + perturbation
-        task_bddl_file = (
-            pathlib.Path(get_libero_path("bddl_files"))
-            / problem_folder
-            / task.bddl_file
-        )
-        env_args_multitask.append({
-            "bddl_file_name": task_bddl_file,
-            "camera_heights": config.collect.env_resolution,
-            "camera_widths": config.collect.env_resolution,
-        })
-        max_steps_multitask.append(get_max_steps_libero(task_suite_name))
-        initial_states_multitask.append(
-            get_task_init_states(
-                get_libero_path("init_states"),
-                problem_folder,
-                task_suite.tasks[task_id].init_states_file
-            )
-        )
-        task_descriptions.append(task.language)
+    task = tasks[0]
+    perturbation = ""
+    if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
+        perturbation = "_" + task.split("_")[1]
+        task = task.replace(perturbation, "")
+    task_suite_name = "_".join(task.split("_")[:-1]) 
+    task_id = int(task.split("_")[-1])
+    task_suite = benchmark_dict[task_suite_name]()
+    task = task_suite.get_task(task_id)
+    problem_folder = task_suite_name + perturbation
+    task_bddl_file = (
+        pathlib.Path(get_libero_path("bddl_files"))
+        / problem_folder
+        / task.bddl_file
+    )
+    env_args = {
+        "bddl_file_name": task_bddl_file,
+        "camera_heights": config.collect.env_resolution,
+        "camera_widths": config.collect.env_resolution,
+    }
+    max_steps = get_max_steps_libero(task_suite_name)
 
     def env_fn(rank: int):
-        task_index = rank % len(tasks)
-        args = env_args_multitask[task_index].copy()
+        args = env_args.copy()
         args["render_gpu_device_id"] = rank % num_devices
-        env = OffScreenRenderEnv(**args)
+        env = LiberoWrapper(**args)
         # Converts gym envs to gymnasium style envs
         env = ensure_gymnasium_env(env)
-        # Sets initial states for the environment
-        env = SetInitialStateWrapper(env, initial_states=initial_states_multitask[task_index])
         # Warm ups upon reset
         env = WarmUpOnResetWrapper(
             env=env,
@@ -92,11 +115,11 @@ def make_env_libero(config, tasks, num_devices: int = 4):
         # Add timelimit wrapper
         env = TimeLimit(
             env,
-            max_episode_steps=max_steps_multitask[task_index],
+            max_episode_steps=max_steps,
         )
         return env
 
-    return env_fn, task_descriptions
+    return env_fn
 
 
 def get_max_steps_libero(task_suite_name):

@@ -59,12 +59,12 @@ def main(config: _config.OnlineTrainConfig):
     if bool(getattr(config.collect, "store_prefix_rep", False)):
         raise ValueError("DSRL does not support collect.store_prefix_rep=True.")
     
-    env_fn, task_description = make_env(config, config.collect.tasks)
-    env, task_description = dsrl_wrap_env(env_fn, config, task_description)
+    env_fn = make_env(config, config.collect.tasks)
+    env = dsrl_wrap_env(env_fn, config)
     
-    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
-    eval_env, eval_task_description = dsrl_wrap_env(
-        eval_env_fn, config, eval_task_description, env_num=config.collect.eval_env_num
+    eval_env_fn = make_env(config, config.collect.eval_tasks)
+    eval_env = dsrl_wrap_env(
+        eval_env_fn, config, env_num=config.collect.eval_env_num
     )
 
     # Dummy observation and action
@@ -92,7 +92,7 @@ def main(config: _config.OnlineTrainConfig):
                         dummy_act=dummy_act,
                         state_action_critic_def=state_action_critic_def,
                         policy_def=policy_def,
-                        task_description=task_description)
+                    )
     
     init_wandb(config, resuming=False, enabled=config.wandb_enabled) #agent._resuming
 
@@ -123,7 +123,6 @@ def main(config: _config.OnlineTrainConfig):
             collect_info, n_collected_episodes = collect_data(
                 agent=agent,
                 env=env,
-                task_description=task_description,
                 config=config,
                 step=step,
             )
@@ -137,7 +136,6 @@ def main(config: _config.OnlineTrainConfig):
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,
-                task_description=eval_task_description,
                 config=config,
                 step=step,
             )

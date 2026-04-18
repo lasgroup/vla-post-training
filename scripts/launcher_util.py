@@ -1,5 +1,6 @@
 import datetime as dt
 import itertools
+import logging
 import os
 import secrets
 import shlex
@@ -10,9 +11,12 @@ DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "03:30:00"
 DEFAULT_PARTITION = "normal"
+DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
 # Online configs default to num_workers=4; keep at least that many CPUs per task.
 DEFAULT_CPUS_PER_TASK = 4
-DEFAULT_CHECKPOINT_BASE_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+DEFAULT_CHECKPOINT_BASE_DIR = (
+    f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
+)
 DEFAULT_LOG_DIR = "logs"
 
 
@@ -32,6 +36,7 @@ def generate_srun_command(
         flags: Dictionary of CLI flags and their values.
         account: SLURM account.
         environment: SLURM environment name.
+        ntasks: Number of tasks for the job step.
 
     Returns:
         Full srun command string.
@@ -48,6 +53,65 @@ def generate_srun_command(
     ]
     tokens.extend(flags_to_cli_tokens(flags))
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
+
+
+def _write_sbatch_script(path: str, *, command: str, requeue: bool) -> None:
+    cwd = os.getcwd()
+    if requeue:
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+cd {shlex.quote(cwd)}
+
+requeue_requested=0
+requeue_submitted=0
+child_pid=""
+
+handle_term() {{
+  if [[ "$requeue_requested" -eq 1 ]]; then
+    return
+  fi
+  requeue_requested=1
+  echo "[$(date --iso-8601=seconds)] Received SIGTERM in batch shell for job ${{SLURM_JOB_ID}}; requesting requeue." >&2
+  if scontrol requeue "${{SLURM_JOB_ID}}"; then
+    requeue_submitted=1
+    echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
+  else
+    echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}}." >&2
+  fi
+  if [[ -n "$child_pid" ]]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+  fi
+}}
+
+trap handle_term TERM
+
+{command} &
+child_pid=$!
+child_status=0
+wait "$child_pid" || child_status=$?
+
+if [[ "$requeue_requested" -eq 1 ]]; then
+  if [[ "$requeue_submitted" -eq 1 ]]; then
+    exit 0
+  fi
+  exit "$child_status"
+fi
+
+exit "$child_status"
+"""
+    else:
+        script = f"""#!/bin/bash
+set -euo pipefail
+
+cd {shlex.quote(cwd)}
+
+exec {command}
+"""
+
+    with open(path, "w", encoding="ascii") as f:
+        f.write(script)
+    os.chmod(path, 0o755)
 
 
 def auto_exp_name(project_name: str, combo: Dict[str, Any], run_idx: int) -> str:
@@ -101,6 +165,45 @@ def flags_to_cli_tokens(flags: Optional[Dict[str, Any]]) -> List[str]:
     return tokens
 
 
+def apply_requeue_flags(flags: Dict[str, Any], *, enabled: bool) -> Dict[str, Any]:
+    updated = dict(flags)
+    if enabled:
+        overrides = {}
+        desired_values = {
+            "resume": True,
+            "overwrite": False,
+            "requeue": True,
+        }
+        for key, value in desired_values.items():
+            if updated.get(key) != value:
+                overrides[key] = (updated.get(key), value)
+            updated[key] = value
+        if overrides:
+            logging.warning(
+                "Requeue enabled: overriding flags for resumable execution: %s",
+                ", ".join(
+                    f"{key}={old!r}->{new!r}" for key, (old, new) in overrides.items()
+                ),
+            )
+    return updated
+
+
+def validate_unique_exp_names(flags_list: List[Dict[str, Any]]) -> None:
+    seen: dict[str, int] = {}
+    for idx, flags in enumerate(flags_list):
+        exp_name = flags.get("exp_name")
+        if not exp_name:
+            raise ValueError(
+                "Requeue-enabled runs require every job to have an exp_name."
+            )
+        if exp_name in seen:
+            raise ValueError(
+                "Requeue-enabled sweeps require unique exp_name values, "
+                f"but jobs {seen[exp_name]} and {idx} both use '{exp_name}'."
+            )
+        seen[exp_name] = idx
+
+
 def generate_run_commands(
     command_list: List[str],
     num_tasks: int = 1,
@@ -114,11 +217,13 @@ def generate_run_commands(
     dry: bool = False,
     prompt: bool = True,
     log_dir: str = DEFAULT_LOG_DIR,
+    requeue: bool = False,
+    environment: str = DEFAULT_ENVIRONMENT,
 ) -> None:
     """Submit or run a list of commands.
 
     Args:
-        command_list: List of srun command strings.
+        command_list: List of training command strings.
         num_tasks: Number of tasks per job (only used if > 0).
         num_cpus: CPUs per task (only used if > 0).
         num_gpus: GPUs per task (only used if > 0).
@@ -133,7 +238,14 @@ def generate_run_commands(
         if not dry:
             os.makedirs(log_dir, exist_ok=True)
         cluster_cmds = []
-        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} --output={log_dir}/slurm-%j.out "
+        bsub_cmd = (
+            f"sbatch --account={account} --time={duration} --partition={partition} "
+            f"--output={log_dir}/slurm-%j.out "
+        )
+        if requeue:
+            bsub_cmd += (
+                f"--requeue --signal=B:TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} "
+            )
 
         if num_tasks > 0:
             bsub_cmd += f"--ntasks={num_tasks} "
@@ -144,8 +256,15 @@ def generate_run_commands(
         if mem > 0:
             bsub_cmd += f"--mem-per-cpu={mem} "
 
-        for cmd in command_list:
-            cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+        script_dir = os.path.join(log_dir, "sbatch")
+        if not dry:
+            os.makedirs(script_dir, exist_ok=True)
+
+        for idx, cmd in enumerate(command_list):
+            script_path = os.path.join(script_dir, f"job_{idx:04d}.sbatch.sh")
+            if not dry:
+                _write_sbatch_script(script_path, command=cmd, requeue=requeue)
+            cluster_cmds.append(bsub_cmd + shlex.quote(script_path))
 
         if dry:
             for cmd in cluster_cmds:
@@ -192,13 +311,15 @@ def dict_permutations(d: dict) -> List[dict]:
     """
     seen: set = set()
     for k in d:
-        for key in ((k,) if isinstance(k, str) else k):
+        for key in (k,) if isinstance(k, str) else k:
             if key in seen:
                 raise ValueError(f"Conflicting key in grid: '{key}'")
             seen.add(key)
 
-    groups = [(([k], [[v] for v in vals]) if isinstance(k, str) else (list(k), vals))
-              for k, vals in d.items()]
+    groups = [
+        (([k], [[v] for v in vals]) if isinstance(k, str) else (list(k), vals))
+        for k, vals in d.items()
+    ]
     result = []
     for combo in itertools.product(*[g[1] for g in groups]):
         flat = {}
