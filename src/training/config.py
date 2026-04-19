@@ -200,8 +200,8 @@ class CollectionConfig:
         metadata={
             "help": (
                 "Task(s) to collect. Can be a single string (e.g., 'libero_90_59') or a list. "
-                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59' "
-                "or 'libero_90_22-56'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
+                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
                 "or 'libero_position' to specify perturbations."
             )
         },
@@ -211,8 +211,8 @@ class CollectionConfig:
         metadata={
             "help": (
                 "Task(s) to evaluate. Can be a single string (e.g., 'libero_90_59') or a list. "
-                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59' "
-                "or 'libero_90_22-56'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
+                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
+                "or 'libero_90_22-56x4'). 'libero' can be swapped out for 'libero_swap', 'libero_object', "
                 "or 'libero_position' to specify perturbations."
             )
         },
