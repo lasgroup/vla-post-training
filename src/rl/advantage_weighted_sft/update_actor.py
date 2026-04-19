@@ -34,7 +34,7 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
-    scale: float = 1.0,
+    scale: at.Array | float = 1.0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 

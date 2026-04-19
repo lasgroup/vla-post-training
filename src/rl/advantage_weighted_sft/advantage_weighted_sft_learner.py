@@ -321,7 +321,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         else:
             self._save_episode_in_buffer(episode_data, task_description)
 
-    @at.typecheck
     def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(
             normalizer_state=normalizer_state,
@@ -382,7 +381,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
         mc_return: at.Array | None = None,
-        scale: float = 1.0,
+        scale: at.Array | float = 1.0,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
