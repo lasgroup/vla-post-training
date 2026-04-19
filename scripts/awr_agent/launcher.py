@@ -40,9 +40,9 @@ DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 300
+DEFAULT_EVAL_INTERVAL = 2000
 DEFAULT_NUM_EVAL_ROLLOUTS = 8
-NUM_TRAIN_STEPS = 5_000
+NUM_TRAIN_STEPS = 10_000
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -58,17 +58,17 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
-    "rl.use_mc_returns": [True],
+    "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.td_weight_schedule.switch_step": [1_000_000],
+    "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [True],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
         # "libero_90_7",
         # "libero_90_9",
         # "libero_90_11",
-        ("libero_90_32-63", "libero_90_32-63"),
+        (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
         # "libero_90_26",
         # "libero_90_28",
         # "libero_90_30",
@@ -77,7 +77,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_38", "libero_90_38"),
         # "libero_90_41",
         # "libero_90_53",
-        # ("libero_90_59", "libero_90_59"),
+        #("libero_90_59", "libero_90_59"),
         # "libero_90_60",
         # "libero_90_61",
         # "libero_90_62",
