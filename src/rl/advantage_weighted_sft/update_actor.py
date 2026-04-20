@@ -165,8 +165,8 @@ def train_step(
         "advantage_max": jnp.max(advantage),
         "advantage_min": jnp.min(advantage),
         "advantage_std": jnp.std(advantage),
-        "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_low),
+        "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_up),
         "advantage_median": jnp.median(advantage),  # or jnp.quantile(advantage, 0.50)
-        "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_up),
+        "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_low),
     } | aux_data
     return new_state, info
