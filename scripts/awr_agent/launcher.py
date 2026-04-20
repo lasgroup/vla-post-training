@@ -63,6 +63,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "lr_schedule.value": [2.5e-5],
     "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [True],
+    "rl.normalizer_config.ema_weight": [0.99, 1.0],
     ("collect.tasks", "collect.eval_tasks"): [
         # "libero_90_2",
         # "libero_90_7",

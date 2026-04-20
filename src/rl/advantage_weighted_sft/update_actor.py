@@ -63,8 +63,8 @@ def train_step(
             state_action_critic(critic_observation, critic_actions)
         )  # (B,)
         advantage = q_value - value  # (B, )
-    advantage = advantage / scale
-    score = advantage / _awr_beta(config)
+    score = advantage / scale
+    score = score / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
 
