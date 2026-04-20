@@ -29,8 +29,7 @@ from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
-
+from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(
@@ -81,6 +80,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         del self._train_step
         gc.collect()
 
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
+        self._normalizer = Normalizer(
+            ema_weight=self._config.rl.normalizer_config.ema_weight,
+        )
+        self._normalizer_state = self._normalizer.init()
+
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
         self._q_train_step = functools.partial(train_q_step, self._config)
         self._value_train_step = functools.partial(train_value_step, self._config)
@@ -96,7 +101,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, scale):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -104,6 +109,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 value_state=value_state,
                 rng=rng,
                 mc_return=mc_return,
+                scale=scale,
             )
 
         # 3. JIT the wrappers with your distributed shardings
@@ -134,6 +140,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
                 self._data_sharding,  # mc_return
+                self._policy_mc_return_sharding(),
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -250,6 +257,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._save_episode_in_buffer(episode_data, task_description)
 
     @at.typecheck
+    def _update_normalizer(self, normalizer_state, bias, scale) -> NormalizerState:
+        return self._normalizer.update(
+            normalizer_state=normalizer_state,
+            bias=bias,
+            scale=scale,
+        )
+
+    @at.typecheck
     def _update_critics(
         self,
         batch: Dict[str, Any],
@@ -298,6 +313,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
         mc_return: at.Array | None = None,
+        scale: float = 1.0,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -312,6 +328,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             value_state,
             batch,
             mc_return=mc_return,
+            scale=scale,
         )
 
         return policy_state, info
@@ -408,6 +425,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             "Only Advantage SFT config should " "be passed to the filtered SFT agent"
         )
         rl_config = self._config.rl
+        normalizer_config = rl_config.normalizer_config
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
@@ -521,6 +539,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if self.debug:
                 log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
+            scale = self._normalizer_state.scale
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,
@@ -529,6 +548,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     self._value_state,
                     policy_rng,
                     mc_return,
+                    scale,
                 )
 
             self._train_state = policy_state

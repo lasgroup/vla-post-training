@@ -2,7 +2,7 @@ import gc
 import functools
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
 from src.rl.flow_mpo.update_actor import train_step as flow_mpo_train_step
-from src.training.config import FlowMPOSFTLearnerConfig
+from src.training.config import FlowMPOSFTLearnerConfig, Normalizer, NormalizerState
 import openpi.training.sharding as sharding
 import jax
 import jax.numpy as jnp
@@ -20,11 +20,19 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
         # Override _train_step with the flow mpo actor update
         self._train_step = functools.partial(flow_mpo_train_step, self._config)
 
-        # DreamerV3-style EMA scale for advantage normalization (Eq. 7)
-        self._advantage_scale_ema = jnp.asarray(1.0, dtype=jnp.float32)
+        # NormalizerState-based EMA for advantage scale (DreamerV3-style).
+        # Initialize scale to config.rl.advantage_scale instead of 1.0 so the
+        # adaptive path does not have a cold-start: at step 0, exp(A / scale / beta)
+        normalizer_config = self._config.rl.normalizer_config
+        self._normalizer = Normalizer(ema_weight=normalizer_config.ema_weight)
+        self._normalizer_state = NormalizerState(
+            bias=jnp.asarray(0.0, dtype=jnp.float32),
+            scale=jnp.asarray(self._config.rl.advantage_scale, dtype=jnp.float32),
+            ema_weight=normalizer_config.ema_weight,
+        )
 
-        # Re-create policy JIT wrapper with an extra advantage_scale_ema slot
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, advantage_scale_ema):
+        # Re-create policy JIT wrapper with an extra normalizer_state slot
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, normalizer_state):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -32,7 +40,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                 value_state=value_state,
                 rng=rng,
                 mc_return=mc_return,
-                advantage_scale_ema=advantage_scale_ema,
+                normalizer_state=normalizer_state,
             )
 
         self._update_policy_jitted = jax.jit(
@@ -44,7 +52,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                 self._value_state_sharding,  # value_state
                 self._replicated_sharding,  # rng
                 self._replicated_sharding,  # mc_return
-                self._replicated_sharding,  # advantage_scale_ema
+                self._replicated_sharding,  # normalizer_state
             ),
             out_shardings=(
                 self._train_state_sharding,  # policy_state
@@ -61,7 +69,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
         value_state,
         rng,
         mc_return=None,
-        advantage_scale_ema=None,
+        normalizer_state=None,
     ):
         assert isinstance(self._config.rl, FlowMPOSFTLearnerConfig)
         if self._replace_buffer_actions_with_policy_actions(critic_update=False):
@@ -83,7 +91,7 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
             value_state,
             batch,
             mc_return=mc_return,
-            advantage_scale_ema=advantage_scale_ema,
+            normalizer_state=normalizer_state,
         )
         return policy_state, info
 
@@ -176,17 +184,30 @@ class FlowMPOLearner(MPOWeightedSFTLearner):
                     self._value_state,
                     policy_rng,
                     None,
-                    self._advantage_scale_ema,
+                    self._normalizer_state,
                 )
             self._train_state = policy_state
 
-            # Update EMA advantage scale on host (DreamerV3 Eq. 7)
+            # Update NormalizerState on host using batch advantage stats.
+            # The updated state will be consumed by the next train_step.
             if rl_config.use_adaptive_advantage_scale:
-                ema_decay = rl_config.advantage_scale_ema_decay
-                batch_range = actor_info["batch_adv_range"]
-                self._advantage_scale_ema = (
-                    ema_decay * self._advantage_scale_ema
-                    + (1.0 - ema_decay) * batch_range
+                normalizer_config = rl_config.normalizer_config
+                if normalizer_config.method == "quantile":
+                    scale = actor_info["advantage_q_up"] - actor_info["advantage_q_low"]
+                    bias = actor_info["advantage_q_low"]
+                elif normalizer_config.method == "standard_normal":
+                    scale = actor_info["advantage_std"]
+                    bias = actor_info["advantage_mean"]
+                elif normalizer_config.method == "min_max":
+                    scale = actor_info["advantage_max"] - actor_info["advantage_min"]
+                    bias = actor_info["advantage_min"]
+                else:
+                    raise NotImplementedError(
+                        f"Unknown normalizer method: {normalizer_config.method}"
+                    )
+                scale = jnp.clip(scale, min=normalizer_config.min_scale)
+                self._normalizer_state = self._normalizer.update(
+                    self._normalizer_state, bias=bias, scale=scale
                 )
 
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}

@@ -1,5 +1,5 @@
 # ruff: noqa: F722
-from src.training.config import OnlineTrainConfig, FlowMPOSFTLearnerConfig
+from src.training.config import OnlineTrainConfig, FlowMPOSFTLearnerConfig, NormalizerState
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
     flatten_action_horizon,
@@ -68,7 +68,7 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
-    advantage_scale_ema: at.Array | None = None,
+    normalizer_state: NormalizerState | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowMPOSFTLearnerConfig)
     policy_observation, critic_observation, actions = batch
@@ -149,25 +149,29 @@ def train_step(
     )
     advantage = q_value - value
 
-    # Compute batch advantage percentiles (always logged for monitoring)
-    adv_p5 = jnp.percentile(advantage, 5)
-    adv_p95 = jnp.percentile(advantage, 95)
-    batch_adv_range = adv_p95 - adv_p5
-
-    if config.rl.use_adaptive_advantage_scale:
-        # dreamer style adaptive advantage normalization
-        # normalize returns by a percentile range smoothed with ema (Eq. 7 in dreamer paper)
-        #   S = EMA(Per(R, 95) - Per(R, 5), decay=0.99)
-        # and divides advantages by max(1, S) to avoid amplifying noise under
-        #   normalized = (R - V(s)) / max(1, S)
-        #
-        # we apply the same idea to raw advantages A = Q(s,a) - V(s).
-        # the EMA scale is maintained in the learner and passed in via advantage_scale_ema
-        advantage_scale = advantage_scale_ema if advantage_scale_ema is not None else jnp.asarray(1.0)
-        advantage_scale = jnp.maximum(1.0, advantage_scale)
+    # Use EMA-smoothed scale from the learner's NormalizerState to rescale
+    # advantages before the exponential weighting.
+    #
+    # Rationale (DreamerV3, Hafner et al. 2023, Eq. 6-7):
+    #   S = EMA(Per(R, q_up) - Per(R, q_low), decay)
+    #   normalized = (R - V(s)) / max(min_scale, S)
+    # We apply the same trick to A = Q(s,a) - V(s). Note we divide by scale only
+    # and do NOT subtract bias: Dreamer's REINFORCE gradient is invariant to a
+    # constant offset, but our exp(A/beta) weighting is not - subtracting a
+    # bias would rescale all weights by exp(-bias/beta), which would push weights
+    # uniformly above 1 and prevent downweighting of bad actions.
+    if config.rl.use_adaptive_advantage_scale and normalizer_state is not None:
+        # Cast to advantage dtype (e.g. bfloat16) to avoid silent dtype promotion.
+        advantage_scale = normalizer_state.scale.astype(advantage.dtype)
+        # Also clip at use time (DreamerV3 Eq. 6 applies max at use, not at EMA).
+        # This is a safety net in case min_scale was set < 1.0 in NormalizerConfig.
+        min_scale = jnp.asarray(
+            config.rl.normalizer_config.min_scale, dtype=advantage.dtype
+        )
+        advantage_scale = jnp.maximum(min_scale, advantage_scale)
         normalized_advantage = advantage / advantage_scale
     else:
-        # Fixed normalization: divide by advantage_scale from config
+        # Legacy path: fixed divisor from config, applied AFTER exp().
         advantage_scale = jnp.asarray(config.rl.advantage_scale, dtype=advantage.dtype)
         normalized_advantage = advantage
 
@@ -214,11 +218,7 @@ def train_step(
             "loss": loss,
             "q_mean": jnp.mean(q_value),
             "v_mean": jnp.mean(value),
-            "advantage_mean": jnp.mean(advantage),
-            "adv_p5": adv_p5,
-            "adv_p95": adv_p95,
-            "batch_adv_range": batch_adv_range,
-            "advantage_scale": advantage_scale,
+            "advantage_scale_used": advantage_scale,
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(current_log_probs),
             "old_log_prob_mean": jnp.mean(old_log_probs),
@@ -295,9 +295,20 @@ def train_step(
             lambda _, x: x.value.ndim > 1,
         ),
     )
+    # Advantage statistics for the host-side NormalizerState update.
+    # These match the keys used in advantage_weighted_sft_learner so the same
+    # normalizer code path can be reused across learners.
+    normalizer_config = config.rl.normalizer_config
     info = {
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
+        "advantage_mean": jnp.mean(advantage),
+        "advantage_std": jnp.std(advantage),
+        "advantage_max": jnp.max(advantage),
+        "advantage_min": jnp.min(advantage),
+        "advantage_median": jnp.median(advantage),
+        "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_up),
+        "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_low),
     } | aux_data
     return new_state, info

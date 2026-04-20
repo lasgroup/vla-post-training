@@ -81,20 +81,19 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.reset_policy_params_to_ema_period": [None],
     #"rl.reset_optimizer_on_ema_reset": [True],
     #"rl.beta": [0.02, 0.05, 0.1],
-    "rl.beta": [0.05],
+    "rl.beta": [0.005, 0.1, 0.2],
     "rl.clip_epsilon": [0.2],
     "rl.num_steps": [5],
     "rl.noise_level": [0.3],
     "rl.use_adaptive_advantage_scale": [False, True],
     ("collect.tasks", "collect.eval_tasks"): [
-        ("libero_90_14", "libero_90_14"),
+        #("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
         #("libero_90_64", "libero_90_64"),
         #("libero_90_82", "libero_90_82"),
     ],
     ("rl.td_weight_schedule.switch_step", "rl.td_weight_schedule.init_value", "rl.td_weight_schedule.end_value"): [
         (0, 0.5, 0.5),
-        (900, 0.0, 1.0),
     ],
 }
 

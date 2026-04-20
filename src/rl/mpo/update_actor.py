@@ -107,16 +107,19 @@ def train_step(
 
     # Current policy for gradient computation (M-step).
     policy = nnx.merge(policy_state.model_def, policy_state.params)
-    policy.eval()
+    policy.eval()  # eval mode for sampling; switched to train() before gradient tape
 
     # Sampling model: use EMA (slowly-moving old policy) when available.
-    # This stabilises the E-step by sampling from a smoother pi_old.
-    use_ema_for_sampling = config.rl.use_ema_for_sampling
-    if use_ema_for_sampling and policy_state.ema_params is not None:
+    # When EMA is disabled, reuse `policy` (same instance, no second merge) so
+    # behaviour matches the original implementation exactly.
+    use_ema_for_sampling = (
+        config.rl.use_ema_for_sampling and policy_state.ema_params is not None
+    )
+    if use_ema_for_sampling:
         sampling_model = nnx.merge(policy_state.model_def, policy_state.ema_params)
+        sampling_model.eval()
     else:
-        sampling_model = nnx.merge(policy_state.model_def, policy_state.params)
-    sampling_model.eval()
+        sampling_model = policy
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -222,7 +225,34 @@ def train_step(
     # Per-group softmax: q(a|s) proportional to pi(a|s) exp(Q(s,a)/eta*) (Eq. 8)
     score = jax.nn.softmax(score, axis=-1)
 
-    score_stats = score
+    # Group-level diagnostics: computed OUTSIDE the gradient tape so they
+    # never enter the tracer's view of the loss.  All inputs are stop_gradient'd.
+    _score_stats = jax.lax.stop_gradient(score)
+    _adv_stop = jax.lax.stop_gradient(adv_grouped)
+    _group_entropy = jnp.mean(
+        -jnp.sum(_score_stats * jnp.log(_score_stats + 1e-8), axis=-1)
+    )
+    _group_max_weight = jnp.mean(jnp.max(_score_stats, axis=-1))
+    _group_adv_stds = jnp.std(_adv_stop, axis=-1)
+    _group_adv_means = jnp.mean(_adv_stop, axis=-1)
+    diag_info = {
+        "q_mean": jnp.mean(q_value),
+        "value_mean": jnp.mean(value),
+        "advantage_mean": jnp.mean(advantage),
+        "advantage_max": jnp.max(advantage),
+        "advantage_min": jnp.min(advantage),
+        "advantage_std": jnp.mean(_group_adv_stds),
+        "group_adv_mean_of_means": jnp.mean(_group_adv_means),
+        "group_adv_std_of_means": jnp.std(_group_adv_means),
+        "group_adv_mean_of_stds": jnp.mean(_group_adv_stds),
+        "group_adv_min_std": jnp.min(_group_adv_stds),
+        "group_score_entropy": _group_entropy,
+        "group_score_max_weight": _group_max_weight,
+        "score_mean": jnp.mean(_score_stats),
+        "score_max": jnp.max(_score_stats),
+        "eta": eta,
+    }
+
     score = jax.lax.stop_gradient(score[..., jnp.newaxis])
 
     # M-step: weighted maximum likelihood policy fitting (paper Eq. 10).
@@ -240,38 +270,7 @@ def train_step(
         grouped_chunked_loss = chunked_loss.reshape(base_batch_size, group_size, -1)
         # score sums to 1 per group after softmax, so sum over group axis (not mean)
         loss = jnp.mean(jnp.sum(score * grouped_chunked_loss, axis=1))
-
-        # Group-level diagnostics: detect whether groups are collapsing.
-        # Entropy of softmax weights per group — should stay well above 0.
-        # If entropy -> 0 the critic can't rank actions within a group.
-        group_entropy = -jnp.sum(
-            score_stats * jnp.log(score_stats + 1e-8), axis=-1
-        )  # (B,)
-        # Max weight per group — should stay below 1.0.
-        group_max_weight = jnp.max(score_stats, axis=-1)  # (B,)
-        # Per-group advantage std — are within-group advantages distinguishable?
-        group_adv_stds = jnp.std(adv_grouped, axis=-1)  # (B,)
-        # Per-group advantage means — are state-level advantages varying?
-        group_adv_means = jnp.mean(adv_grouped, axis=-1)  # (B,)
-
-        info = {
-            "q_mean": jnp.mean(q_value),
-            "value_mean": jnp.mean(value),
-            "advantage_mean": jnp.mean(advantage),
-            "advantage_max": jnp.max(advantage),
-            "advantage_min": jnp.min(advantage),
-            "advantage_std": jnp.mean(group_adv_stds),
-            "group_adv_mean_of_means": jnp.mean(group_adv_means),
-            "group_adv_std_of_means": jnp.std(group_adv_means),
-            "group_adv_mean_of_stds": jnp.mean(group_adv_stds),
-            "group_adv_min_std": jnp.min(group_adv_stds),
-            "group_score_entropy": jnp.mean(group_entropy),
-            "group_score_max_weight": jnp.mean(group_max_weight),
-            "score_mean": jnp.mean(score_stats),
-            "score_max": jnp.max(score_stats),
-            "eta": eta,
-        }
-        return loss, info
+        return loss, {}
 
     policy.train()  # switch to train mode for gradient computation
     diff_state = nnx.DiffState(0, config.trainable_filter)
@@ -284,6 +283,7 @@ def train_step(
         sampled_actions,
         score,
     )
+    aux_data = aux_data | diag_info
 
     # M-step KL constraint (Eq. 12) penalise divergence from the sampling (pre-update) policy.  
     # seperate gradient tape to avoid OOM. 

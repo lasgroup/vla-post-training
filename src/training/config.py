@@ -14,7 +14,38 @@ import re
 import openpi.training.optimizer as _optimizer
 import optax
 import openpi.training.weight_loaders as weight_loaders
+import jax
+import jax.numpy as jnp
+from flax import struct
 
+
+@struct.dataclass
+class NormalizerState:
+    bias: jax.Array
+    scale: jax.Array
+    ema_weight: float
+
+
+class Normalizer:
+    def __init__(self, ema_weight: float = 0.99):
+        self._ema_weight = ema_weight
+
+    def init(self) -> NormalizerState:
+        return NormalizerState(
+            bias=jnp.array(0.0),
+            scale=jnp.array(1.0),
+            ema_weight=self._ema_weight,
+        )
+
+    @staticmethod
+    @jax.jit
+    def update(normalizer_state: NormalizerState, bias: jax.Array, scale: jax.Array) -> NormalizerState:
+        prev_bias = normalizer_state.bias
+        prev_scale = normalizer_state.scale
+        ema_weight = normalizer_state.ema_weight
+        new_bias = (1.0 - ema_weight) * bias + ema_weight * prev_bias
+        new_scale = (1.0 - ema_weight) * scale + ema_weight * prev_scale
+        return normalizer_state.replace(bias=new_bias, scale=new_scale)
 
 @dataclasses.dataclass(frozen=True)
 class ConstantSchedule(_optimizer.LRScheduleConfig):
@@ -57,6 +88,13 @@ class StepSchedule(_optimizer.LRScheduleConfig):
             boundaries=[self.switch_step],
         )
 
+@dataclasses.dataclass(frozen=True)
+class NormalizerConfig:
+    q_up: float = 0.95
+    q_low: float = 0.05
+    method: str = 'quantile'
+    min_scale: float = 1.0
+    ema_weight: float = 0.99
 
 @dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
@@ -120,6 +158,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic_pre_training_steps: int = 1_000
     critic_num_qs: int = 2
     critic_num_vs: int = 2
+    normalizer_config: NormalizerConfig = NormalizerConfig()
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
@@ -148,8 +187,10 @@ class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     noise_level: float = 0.3
     normalize_adv: bool = True
     clip_epsilon: float = 0.2
+    # When True, use NormalizerState (see normalizer_config inherited from
+    # AdvantageWeightedSFTLearnerConfig) to rescale advantages before exp().
+    # When False, fall back to the legacy fixed divisor: score / config.rl.advantage_scale.
     use_adaptive_advantage_scale: bool = False
-    advantage_scale_ema_decay: float = 0.99
 
 @dataclasses.dataclass(frozen=True)
 class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):

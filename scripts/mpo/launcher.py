@@ -2,7 +2,7 @@
 """Launcher for MPO experiments (Abdolmaleki et al. 2018, adapted for flow policies).
 
 Usage:
-    ./scripts/mpo/launcher.py --project_name mpo_sweep
+    ./scripts/mpo/launcher.py --project_name mpo_sweep_buffer
     ./scripts/mpo/launcher.py --project_name mpo_sweep --dry
     ./scripts/mpo/launcher.py --project_name mpo_sweep --mode local
 """
@@ -66,20 +66,18 @@ NAME_KEYS = [
 #   - noise_level: flow sampling stochasticity
 #   - lr: policy learning rate
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0,1],
+    "seed": [0,1,2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [2],
     "rl.policy_training_start_step": [200],
-    "rl.online_ratio": [1.0],
     "collect.use_time_to_success_as_reward": [True],
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [10],
-    "rl.td_weight_schedule.switch_step": [-1],
     "rl.num_offline_pretraining_steps": [0],
     "rl.warm_start_critic_update_interval": [1],
 
     # --- MPO-specific knobs ---
-    "lr_schedule.peak_lr": [1e-5, 5e-6],
+    #"lr_schedule.peak_lr": [1e-5, 1e-6],
     "batch_size": [32],
     "rl.num_steps": [5],
     "rl.group_size": [8],
@@ -88,11 +86,15 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.noise_level": [0.3],
     "rl.use_ema_for_sampling": [False, True],
     "rl.reserve_buffer_size": [0, 50_000],
+    "rl.online_ratio": [0.5, 1.0],
     ("collect.tasks", "collect.eval_tasks"): [
     #    ("libero_90_14", "libero_90_14"),
         ("libero_90_59", "libero_90_59"),
     #    ("libero_90_64", "libero_90_64"),
     #    ("libero_90_82", "libero_90_82"),
+    ],
+    ("rl.td_weight_schedule.switch_step", "rl.td_weight_schedule.init_value", "rl.td_weight_schedule.end_value"): [
+        (0, 0.5, 0.5),
     ],
 }
 

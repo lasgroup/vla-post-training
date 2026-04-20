@@ -41,6 +41,7 @@ class MPOLearner(MPOWeightedSFTLearner):
                 max_capacity=rl_config.reserve_buffer_size,
                 data_sharding=self._data_sharding,
                 seed=self._config.seed + 1,
+                freeze_dict=False,  # match online buffer output type
             )
             self._reserve_fill_end = (
                 rl_config.policy_training_start_step + rl_config.reserve_fill_steps
