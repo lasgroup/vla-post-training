@@ -2,7 +2,7 @@
 """Launcher for MPO experiments (Abdolmaleki et al. 2018, adapted for flow policies).
 
 Usage:
-    ./scripts/mpo/launcher.py --project_name mpo_sweep_buffer
+    ./scripts/mpo/launcher.py --project_name mpo_sweep_onlineratio
     ./scripts/mpo/launcher.py --project_name mpo_sweep --dry
     ./scripts/mpo/launcher.py --project_name mpo_sweep --mode local
 """

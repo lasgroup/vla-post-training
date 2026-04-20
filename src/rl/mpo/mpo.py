@@ -19,6 +19,12 @@ from src.training.config import MPOLearnerConfig
 
 
 class MPOLearner(MPOWeightedSFTLearner):
+    def _policy_mc_return_sharding(self):
+        """Stub required by the parent's __init__ JIT setup. MPOLearner rebuilds
+        _update_policy_jitted with its own signature right after super().__init__(),
+        so this sharding is only used transiently."""
+        return self._replicated_sharding
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Propagate flow sampling settings to the data collection policy so that online rollouts use the same num_steps / noise_level as the actor loss

@@ -2,7 +2,7 @@
 """Launcher for Flow-MPO experiments.
 
 Usage:
-    ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep_nosoftmax
+    ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep_normbeta
     ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep --dry
     ./scripts/flow_mpo_agent/launcher.py --project_name flow_mpo_sweep --mode local
 """
