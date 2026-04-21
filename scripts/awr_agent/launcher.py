@@ -64,8 +64,6 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_rollouts": [12],
     "collect.use_time_to_success_as_reward": [True],
     "rl.num_critic_updates_per_batch": [10],
-    "rl.num_offline_pretraining_steps": [0],
-    "rl.critic_inference_start_step": [900],
     "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
     "rl.td_weight_schedule.end_value": [0.5],
     "rl.td_weight_schedule.switch_step": [500_000],
