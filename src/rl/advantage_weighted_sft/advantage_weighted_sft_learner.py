@@ -24,6 +24,10 @@ from src.rl.advantage_weighted_sft.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
+from src.rl.advantage_weighted_sft.update_simba_critic import (
+    train_simba_q_step,
+    train_simba_value_step,
+)
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
@@ -81,8 +85,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
-        self._q_train_step = functools.partial(train_q_step, self._config)
-        self._value_train_step = functools.partial(train_value_step, self._config)
+        assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+        if config.rl.use_simba_critic:
+            print("Using Simba critic")
+            self._q_train_step = functools.partial(train_simba_q_step, self._config)
+            self._value_train_step = functools.partial(train_simba_value_step, self._config)
+        else:
+            self._q_train_step = functools.partial(train_q_step, self._config)
+            self._value_train_step = functools.partial(train_value_step, self._config)
         self._train_step = functools.partial(train_actor_step, self._config)
 
         # 2. Create closures to drop 'self' from the JIT signature

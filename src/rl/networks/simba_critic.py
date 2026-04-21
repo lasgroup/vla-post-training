@@ -1,19 +1,19 @@
-"""SimbaV2-based critic networks for AWR.
-
-Drop-in replacements for StateActionCritic and StateValue in rl_networks.py.
-Same __call__ interface, same inputs — just a different backbone.
+"""SimbaV2-based critic networks for AWR using Hyper* building blocks.
 
 Architecture per SimbaV2:
-    input → linear embed → N x ResidualBlock(LayerNorm → Linear(expand) → GELU → Linear(contract)) → linear head
-"""
-from typing import Sequence
+    input → HyperEmbedder → N × HyperLERPBlock → HyperCategoricalValue
 
-import flax.nnx as nnx
+Output: each critic returns (expected_values, log_probs) where
+    expected_values: (num_qs/vs, B)          — scalar Q/V per ensemble member
+    log_probs:       (num_qs/vs, B, num_bins) — categorical distribution per member
+"""
 import jax.numpy as jnp
+import flax.nnx as nnx
 from flax.core.frozen_dict import FrozenDict
 
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.networks.simba_hyper import HyperEmbedder, HyperLERPBlock, HyperCategoricalValue
 
 
 def _prepare_obs_vector(observation: ObsType) -> jnp.ndarray:
@@ -27,53 +27,71 @@ def _prepare_obs_vector(observation: ObsType) -> jnp.ndarray:
     return jnp.asarray(observation, dtype=jnp.float32)
 
 
-class SimbaV2ResidualBlock(nnx.Module):
-    """Single SimbaV2 residual block: LayerNorm → Linear(expand) → GELU → Linear(contract) → skip."""
-
-    def __init__(self, hidden_dim: int, expansion_factor: int = 4, *, rngs: nnx.Rngs):
-        self.norm = nnx.LayerNorm(hidden_dim, rngs=rngs)
-        self.linear_expand = nnx.Linear(hidden_dim, hidden_dim * expansion_factor, rngs=rngs)
-        self.linear_contract = nnx.Linear(hidden_dim * expansion_factor, hidden_dim, rngs=rngs)
-
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        residual = x
-        x = self.norm(x)
-        x = self.linear_expand(x)
-        x = nnx.gelu(x)
-        x = self.linear_contract(x)
-        return x + residual
-
-
-class SimbaV2Backbone(nnx.Module):
-    """SimbaV2 backbone: embed → N residual blocks."""
+class _SimbaV2HyperSingleCritic(nnx.Module):
+    """Single SimbaV2 critic: HyperEmbedder → N × HyperLERPBlock → HyperCategoricalValue."""
 
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int,
         num_blocks: int,
-        expansion_factor: int = 4,
+        num_bins: int,
+        min_v: float,
+        max_v: float,
+        scaler_init: float,
+        scaler_scale: float,
+        alpha_init: float,
+        alpha_scale: float,
+        c_shift: float,
+        expansion: int = 4,
         *,
         rngs: nnx.Rngs,
     ):
-        self.embed = nnx.Linear(input_dim, hidden_dim, rngs=rngs)
+        self.embedder = HyperEmbedder(
+            in_dim=input_dim,
+            hidden_dim=hidden_dim,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            c_shift=c_shift,
+            rngs=rngs,
+        )
         self.blocks = [
-            SimbaV2ResidualBlock(hidden_dim, expansion_factor, rngs=rngs)
+            HyperLERPBlock(
+                hidden_dim=hidden_dim,
+                scaler_init=scaler_init,
+                scaler_scale=scaler_scale,
+                alpha_init=alpha_init,
+                alpha_scale=alpha_scale,
+                expansion=expansion,
+                rngs=rngs,
+            )
             for _ in range(num_blocks)
         ]
+        self.predictor = HyperCategoricalValue(
+            in_dim=hidden_dim,
+            hidden_dim=hidden_dim,
+            num_bins=num_bins,
+            min_v=min_v,
+            max_v=max_v,
+            scaler_init=1.0,
+            scaler_scale=1.0,
+            rngs=rngs,
+        )
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x = self.embed(x)
+    def __call__(self, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        x = self.embedder(x)
         for block in self.blocks:
             x = block(x)
-        return x
+        expected, info = self.predictor(x)
+        return expected, info["log_prob"]
 
 
 class SimbaV2StateActionCritic(nnx.Module):
-    """SimbaV2 Q-critic.
+    """SimbaV2 Q-critic ensemble.
 
-    Inputs: observation dict (prefix_embedding + state) + action → scalar Q-value.
-    Matches the __call__ interface of StateActionCritic.
+    Returns:
+        expected_values: (num_qs, B)          — expected Q per ensemble member
+        log_probs:       (num_qs, B, num_bins) — categorical distribution per member
     """
 
     def __init__(
@@ -82,8 +100,16 @@ class SimbaV2StateActionCritic(nnx.Module):
         action: ActionType,
         hidden_dim: int,
         num_blocks: int,
+        num_bins: int,
+        min_v: float,
+        max_v: float,
+        scaler_init: float = 1.0,
+        scaler_scale: float = 1.0,
+        alpha_init: float = 0.0,
+        alpha_scale: float = 1.0,
+        c_shift: float = 1.0,
         num_qs: int = 2,
-        expansion_factor: int = 4,
+        expansion: int = 4,
         *,
         rngs: nnx.Rngs,
     ):
@@ -91,32 +117,47 @@ class SimbaV2StateActionCritic(nnx.Module):
         act_vec = jnp.asarray(action, dtype=jnp.float32).reshape(action.shape[0], -1)
         input_dim = obs_vec.shape[-1] + act_vec.shape[-1]
 
-        # TODO: replace with vmap ensemble (same pattern as StateActionEnsembleDecoder)
-        # For now: single critic head as boilerplate
-        self.backbone = SimbaV2Backbone(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_blocks=num_blocks,
-            expansion_factor=expansion_factor,
-            rngs=rngs,
-        )
-        self.head = nnx.Linear(hidden_dim, 1, rngs=rngs)
+        @nnx.split_rngs(splits=num_qs)
+        @nnx.vmap(out_axes=0, in_axes=0)
+        def create_ensemble(rgs: nnx.Rngs) -> _SimbaV2HyperSingleCritic:
+            return _SimbaV2HyperSingleCritic(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_blocks=num_blocks,
+                num_bins=num_bins,
+                min_v=min_v,
+                max_v=max_v,
+                scaler_init=scaler_init,
+                scaler_scale=scaler_scale,
+                alpha_init=alpha_init,
+                alpha_scale=alpha_scale,
+                c_shift=c_shift,
+                expansion=expansion,
+                rngs=rgs,
+            )
+
+        self.ensemble = create_ensemble(rngs)
 
     def __call__(
         self, observation: ObsType, action: ActionType, training: bool = False
-    ) -> jnp.ndarray:
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
         obs_vec = _prepare_obs_vector(observation)
         act_vec = jnp.asarray(action, dtype=jnp.float32).reshape(action.shape[0], -1)
         x = jnp.concatenate([obs_vec, act_vec], axis=-1)
-        x = self.backbone(x)
-        return jnp.squeeze(self.head(x), -1)  # (B,)
+
+        @nnx.vmap(in_axes=(0, None), out_axes=0)
+        def call_member(model: _SimbaV2HyperSingleCritic, inp: jnp.ndarray):
+            return model(inp)
+
+        return call_member(self.ensemble, x)  # ((num_qs, B), (num_qs, B, num_bins))
 
 
 class SimbaV2StateValue(nnx.Module):
-    """SimbaV2 V-critic.
+    """SimbaV2 V-critic ensemble.
 
-    Inputs: observation dict (prefix_embedding + state) → scalar V-value.
-    Matches the __call__ interface of StateValue.
+    Returns:
+        expected_values: (num_vs, B)          — expected V per ensemble member
+        log_probs:       (num_vs, B, num_bins) — categorical distribution per member
     """
 
     def __init__(
@@ -124,25 +165,48 @@ class SimbaV2StateValue(nnx.Module):
         observation: ObsType,
         hidden_dim: int,
         num_blocks: int,
+        num_bins: int,
+        min_v: float,
+        max_v: float,
+        scaler_init: float = 1.0,
+        scaler_scale: float = 1.0,
+        alpha_init: float = 0.0,
+        alpha_scale: float = 1.0,
+        c_shift: float = 1.0,
         num_vs: int = 2,
-        expansion_factor: int = 4,
+        expansion: int = 4,
         *,
         rngs: nnx.Rngs,
     ):
         obs_vec = _prepare_obs_vector(observation)
         input_dim = obs_vec.shape[-1]
 
-        # TODO: replace with vmap ensemble
-        self.backbone = SimbaV2Backbone(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_blocks=num_blocks,
-            expansion_factor=expansion_factor,
-            rngs=rngs,
-        )
-        self.head = nnx.Linear(hidden_dim, 1, rngs=rngs)
+        @nnx.split_rngs(splits=num_vs)
+        @nnx.vmap(out_axes=0, in_axes=0)
+        def create_ensemble(rgs: nnx.Rngs) -> _SimbaV2HyperSingleCritic:
+            return _SimbaV2HyperSingleCritic(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_blocks=num_blocks,
+                num_bins=num_bins,
+                min_v=min_v,
+                max_v=max_v,
+                scaler_init=scaler_init,
+                scaler_scale=scaler_scale,
+                alpha_init=alpha_init,
+                alpha_scale=alpha_scale,
+                c_shift=c_shift,
+                expansion=expansion,
+                rngs=rgs,
+            )
 
-    def __call__(self, observation: ObsType, training: bool = False) -> jnp.ndarray:
+        self.ensemble = create_ensemble(rngs)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> tuple[jnp.ndarray, jnp.ndarray]:
         obs_vec = _prepare_obs_vector(observation)
-        x = self.backbone(obs_vec)
-        return jnp.squeeze(self.head(x), -1)  # (B,)
+
+        @nnx.vmap(in_axes=(0, None), out_axes=0)
+        def call_member(model: _SimbaV2HyperSingleCritic, inp: jnp.ndarray):
+            return model(inp)
+
+        return call_member(self.ensemble, obs_vec)  # ((num_vs, B), (num_vs, B, num_bins))

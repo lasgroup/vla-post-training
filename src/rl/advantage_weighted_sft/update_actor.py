@@ -155,6 +155,7 @@ def train_step(
             lambda _, x: x.value.ndim > 1,
         ),
     )
+    clip_frac = jnp.mean((advantage / _awr_beta(config)) >= config.rl.weight_clip)
     info = {
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
@@ -163,5 +164,6 @@ def train_step(
         "advantage_max": jnp.max(advantage),
         "advantage_min": jnp.min(advantage),
         "advantage_std": jnp.std(advantage),
+        "advantage_clip_frac": clip_frac,
     } | aux_data
     return new_state, info

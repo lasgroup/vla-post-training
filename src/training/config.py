@@ -124,6 +124,14 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     simba_hidden_dim: int = 256
     simba_num_blocks: int = 2
     simba_expansion_factor: int = 4
+    simba_num_bins: int = 1000
+    simba_min_v: float = -110.0
+    simba_max_v: float = 0.0
+    simba_scaler_init: float = 1.0
+    simba_scaler_scale: float = 1.0
+    simba_alpha_init: float = 0.0
+    simba_alpha_scale: float = 1.0
+    simba_c_shift: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)

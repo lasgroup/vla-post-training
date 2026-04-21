@@ -67,8 +67,11 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 
 @at.typecheck
 def summarize_critic_values(
-    critic_values: at.ArrayLike, critic_reduction: str = "min"
+    critic_values: at.ArrayLike | tuple, critic_reduction: str = "min"
 ) -> at.Float[at.Array, " b"]:
+    # SimbaV2 critics return (expected_values, log_probs) — extract just the values
+    if isinstance(critic_values, tuple):
+        critic_values = critic_values[0]
     critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
     # using an ensemble of critics
     if critic_values.ndim > 1:

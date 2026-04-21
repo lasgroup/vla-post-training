@@ -200,7 +200,17 @@ def _build_simba_critic_defs(
     assert isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig)
     hidden_dim = config.rl.simba_hidden_dim
     num_blocks = config.rl.simba_num_blocks
-    expansion_factor = config.rl.simba_expansion_factor
+    expansion = config.rl.simba_expansion_factor
+    num_bins = config.rl.simba_num_bins
+    min_v = config.rl.simba_min_v
+    max_v = config.rl.simba_max_v
+    scaler_init = config.rl.simba_scaler_init
+    scaler_scale = config.rl.simba_scaler_scale
+    alpha_init = config.rl.simba_alpha_init
+    alpha_scale = config.rl.simba_alpha_scale
+    c_shift = config.rl.simba_c_shift
+    num_qs = config.rl.critic_num_qs
+    num_vs = config.rl.critic_num_vs
 
     def state_action_critic_def(
         observation: ObsType, action: jax.Array, rngs: nnx.Rngs
@@ -210,7 +220,16 @@ def _build_simba_critic_defs(
             action=action,
             hidden_dim=hidden_dim,
             num_blocks=num_blocks,
-            expansion_factor=expansion_factor,
+            expansion=expansion,
+            num_bins=num_bins,
+            min_v=min_v,
+            max_v=max_v,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            alpha_init=alpha_init,
+            alpha_scale=alpha_scale,
+            c_shift=c_shift,
+            num_qs=num_qs,
             rngs=rngs,
         )
 
@@ -219,7 +238,16 @@ def _build_simba_critic_defs(
             observation=observation,
             hidden_dim=hidden_dim,
             num_blocks=num_blocks,
-            expansion_factor=expansion_factor,
+            expansion=expansion,
+            num_bins=num_bins,
+            min_v=min_v,
+            max_v=max_v,
+            scaler_init=scaler_init,
+            scaler_scale=scaler_scale,
+            alpha_init=alpha_init,
+            alpha_scale=alpha_scale,
+            c_shift=c_shift,
+            num_vs=num_vs,
             rngs=rngs,
         )
 
