@@ -22,6 +22,7 @@ from src.rl.networks.rl_networks import (
     StateActionCritic,
     StateValue,
 )
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 CriticBatch = tuple[
     ObsType,
@@ -131,14 +132,20 @@ def init_state_action_critic_train_state(
             ema_params=None if ema_decay is None else params,
         )
 
-    train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
-    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    train_state = jax.jit(
-        init,
-        in_shardings=replicated_sharding,
-        out_shardings=state_sharding,
-    )(dummy_obs, dummy_act, init_rng)
+    # Initialize eagerly on CPU so that _orthogonal_cpu (used by MLP's default_init)
+    # actually runs on CPU and avoids the gpusolverDnCreate failure on GH200/Hopper.
+    # jax.default_device(cpu) inside jax.jit has no effect on XLA device placement,
+    # so the JIT path always sends linalg.qr to GPU, which fails on this cluster.
+    cpu = jax.devices("cpu")[0]
+    train_state = init(
+        jax.device_put(dummy_obs, cpu),
+        jax.device_put(dummy_act, cpu),
+        jax.device_put(init_rng, cpu),
+    )
+    # Derive sharding from the exact initialized tree to keep GraphDef metadata
+    # (including function-valued statics) aligned with the sharding pytree.
+    state_sharding = sharding.fsdp_sharding(train_state, mesh, log=False)
+    train_state = jax.device_put(train_state, state_sharding)
     return train_state, state_sharding
 
 
@@ -169,14 +176,15 @@ def init_state_value_train_state(
             ema_params=None if ema_decay is None else params,
         )
 
-    train_state_shape = jax.eval_shape(init, dummy_obs, init_rng)
-    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    train_state = jax.jit(
-        init,
-        in_shardings=replicated_sharding,
-        out_shardings=state_sharding,
-    )(dummy_obs, init_rng)
+    cpu = jax.devices("cpu")[0]
+    train_state = init(
+        jax.device_put(dummy_obs, cpu),
+        jax.device_put(init_rng, cpu),
+    )
+    # Derive sharding from the exact initialized tree to keep GraphDef metadata
+    # (including function-valued statics) aligned with the sharding pytree.
+    state_sharding = sharding.fsdp_sharding(train_state, mesh, log=False)
+    train_state = jax.device_put(train_state, state_sharding)
     return train_state, state_sharding
 
 
@@ -366,3 +374,191 @@ def train_value_step(
         "param_norm": _kernel_param_norm(value_model),
     } | aux_data
     return new_state, info
+
+
+# ---------------------------------------------------------------------------
+# Variants that finetune the Pi0 prefix encoder jointly with the critics.
+# When train_pi0_prefix_encoder=False these are never called.
+# ---------------------------------------------------------------------------
+
+# Raw-observation batch: observations are full buffer dicts (images + state +
+# tokenized prompt), not pre-processed CriticBatch tuples.
+RawCriticBatch = tuple[
+    dict,                                    # raw observation
+    _model.Actions,
+    dict,                                    # raw next_observation
+    at.Float[at.Array, " b"],               # reward
+    at.Float[at.Array, " b"],               # discount
+    at.Float[at.Array, " b"],               # mc_return
+]
+
+
+def _compute_prefix(
+    pi0_model: _model.BaseModel,
+    raw_obs: dict,
+) -> jax.Array:
+    """Run the Pi0 VLM prefix forward pass and mean-pool tokens. Differentiable."""
+    obs_obj = _model.Observation.from_dict(raw_obs)
+    prefix = pi0_model.get_prefix_rep(obs_obj)
+    if isinstance(prefix, tuple):
+        prefix = prefix[0]
+    prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1])
+    return jnp.mean(prefix, axis=1)
+
+
+@at.typecheck
+def train_q_step_with_encoder(
+    config: OnlineTrainConfig,
+    rng: at.KeyArrayLike,
+    q_state: training_utils.TrainState,
+    value_state: training_utils.TrainState,
+    pi0_encoder_state: training_utils.TrainState,
+    batch: RawCriticBatch,
+) -> tuple[training_utils.TrainState, training_utils.TrainState, dict[str, at.Array]]:
+    """Q update that also backpropagates into the Pi0 prefix encoder."""
+    del rng
+    q_model = nnx.merge(q_state.model_def, q_state.params)
+    q_model.train()
+    pi0_model = nnx.merge(pi0_encoder_state.model_def, pi0_encoder_state.params)
+    pi0_model.eval()
+    value_model = create_critic(value_state, config)
+    value_model.eval()
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    step = q_state.step // config.rl.num_critic_updates_per_batch
+
+    raw_obs, actions, raw_next_obs, reward, discount, mc_return = batch
+    reward = _as_scalar_batch(reward)
+    discount = _as_scalar_batch(discount)
+    mc_return = _as_scalar_batch(mc_return)
+    actions = flatten_action_horizon(actions)
+
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    def loss_fn(
+        critic_model: StateActionCritic,
+        pi0_enc: _model.BaseModel,
+        raw_obs: dict,
+        raw_next_obs: dict,
+        actions: _model.Actions,
+        reward: at.Float[at.ArrayLike, " b"],
+        discount: at.Float[at.ArrayLike, " b"],
+        mc_return: at.Float[at.ArrayLike, " b"],
+        target_value_model: StateValue,
+    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        prefix = _compute_prefix(pi0_enc, raw_obs)
+        next_prefix = _compute_prefix(pi0_enc, raw_next_obs)
+        observation = {"state": raw_obs["state"], PREFIX_EMBEDDING_NAME: prefix}
+        next_observation = {"state": raw_next_obs["state"], PREFIX_EMBEDDING_NAME: next_prefix}
+
+        q_logits = critic_model(observation, actions)
+        bootstrapped_values = summarize_critic_values(
+            target_value_model(next_observation),
+            config,
+            critic_reduction=config.rl.critic_reduction,
+        )
+        td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
+        _lower, _upper = get_value_bounds(config)
+        q_dist = make_value_distribution(
+            q_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type
+        )
+        td_weight = config.rl.td_weight_schedule.create()(step)
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
+        td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+        mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        return loss, {
+            "value_mean": jnp.mean(q_dist.mean()),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            "td_weight": td_weight,
+        }
+
+    diff_state_q = nnx.DiffState(0, nnx.Param)
+    diff_state_pi0 = nnx.DiffState(1, nnx.Param)
+    (loss, aux_data), (grads_q, grads_pi0) = nnx.value_and_grad(
+        loss_fn, has_aux=True, argnums=(diff_state_q, diff_state_pi0)
+    )(q_model, pi0_model, raw_obs, raw_next_obs, actions, reward, discount, mc_return, value_model)
+
+    new_q_state = _update_train_state(q_state, q_model, grads_q)
+    new_pi0_state = _update_train_state(pi0_encoder_state, pi0_model, grads_pi0)
+    info = {
+        "loss": loss,
+        "grad_norm": optax.global_norm(grads_q),
+        "param_norm": _kernel_param_norm(q_model),
+        "encoder_grad_norm": optax.global_norm(grads_pi0),
+    } | aux_data
+    return new_q_state, new_pi0_state, info
+
+
+@at.typecheck
+def train_value_step_with_encoder(
+    config: OnlineTrainConfig,
+    rng: at.KeyArrayLike,
+    value_state: training_utils.TrainState,
+    q_state: training_utils.TrainState,
+    pi0_encoder_state: training_utils.TrainState,
+    batch: RawCriticBatch,
+) -> tuple[training_utils.TrainState, training_utils.TrainState, dict[str, at.Array]]:
+    """V update that also backpropagates into the Pi0 prefix encoder."""
+    del rng
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    step = value_state.step // config.rl.num_critic_updates_per_batch
+    value_model = nnx.merge(value_state.model_def, value_state.params)
+    value_model.train()
+    pi0_model = nnx.merge(pi0_encoder_state.model_def, pi0_encoder_state.params)
+    pi0_model.eval()
+    q_model = create_critic(q_state, config)
+    q_model.eval()
+
+    raw_obs, actions, _, _, _, mc_return = batch
+    actions = flatten_action_horizon(actions)
+    mc_return = _as_scalar_batch(mc_return)
+
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    def loss_fn(
+        critic_model: StateValue,
+        pi0_enc: _model.BaseModel,
+        raw_obs: dict,
+        actions: _model.Actions,
+        mc_return: at.Float[at.ArrayLike, " b"],
+        target_q_model: StateActionCritic,
+    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        prefix = _compute_prefix(pi0_enc, raw_obs)
+        observation = {"state": raw_obs["state"], PREFIX_EMBEDDING_NAME: prefix}
+
+        td_weight = config.rl.td_weight_schedule.create()(step)
+        td_weight = jnp.clip(td_weight, 0.0, 1.0)
+        value_logits = critic_model(observation)
+        q_values = summarize_critic_values(
+            target_q_model(observation, actions),
+            config,
+            critic_reduction=config.rl.critic_reduction,
+        )
+        _lower, _upper = get_value_bounds(config)
+        v_dist = make_value_distribution(
+            value_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type
+        )
+        mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
+        td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        return loss, {
+            "value_mean": jnp.mean(v_dist.mean()),
+            "mc_loss": mc_loss,
+            "td_loss": td_loss,
+            "td_weight": td_weight,
+        }
+
+    diff_state_v = nnx.DiffState(0, nnx.Param)
+    diff_state_pi0 = nnx.DiffState(1, nnx.Param)
+    (loss, aux_data), (grads_v, grads_pi0) = nnx.value_and_grad(
+        loss_fn, has_aux=True, argnums=(diff_state_v, diff_state_pi0)
+    )(value_model, pi0_model, raw_obs, actions, mc_return, q_model)
+
+    new_value_state = _update_train_state(value_state, value_model, grads_v)
+    new_pi0_state = _update_train_state(pi0_encoder_state, pi0_model, grads_pi0)
+    info = {
+        "loss": loss,
+        "grad_norm": optax.global_norm(grads_v),
+        "param_norm": _kernel_param_norm(value_model),
+        "encoder_grad_norm": optax.global_norm(grads_pi0),
+    } | aux_data
+    return new_value_state, new_pi0_state, info

@@ -15,11 +15,14 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
+import openpi.training.optimizer as _optimizer
 from src.rl.best_of_n.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
     train_q_step,
     train_value_step,
+    train_q_step_with_encoder,
+    train_value_step_with_encoder,
     StateActionCriticDef,
     StateValueDef,
 )
@@ -121,6 +124,67 @@ class BestofNLearner(FilteredSFTLearner):
             donate_argnums=(1, 2),  # Donates q_state (arg 1) and value_state (arg 2)
         )
 
+        # 4. Optionally finetune the Pi0 prefix encoder jointly with the critics.
+        #    When disabled, _pi0_encoder_state / _update_critics_with_encoder_jitted
+        #    are never created and the existing code paths are used unchanged.
+        if config.rl.train_pi0_prefix_encoder:
+            self._q_train_step_with_encoder = functools.partial(train_q_step_with_encoder, self._config)
+            self._value_train_step_with_encoder = functools.partial(train_value_step_with_encoder, self._config)
+
+            pi0_tx = _optimizer.create_optimizer(
+                config.rl.critic_optimizer,
+                config.rl.pi0_encoder_lr_schedule,
+                weight_decay_mask=None,
+            )
+            # Reuse the policy TrainState: only swap tx and ema_decay (both are
+            # pytree_node=False), so no JAX tensors are allocated and the pytree
+            # structure stays identical to self._train_state.  The existing AdamW
+            # opt_state from SFT training is warm-started for the encoder updates.
+            self._pi0_encoder_state = dataclasses.replace(
+                self._train_state, tx=pi0_tx, ema_decay=None
+            )
+            # The sharding must have the same pytree metadata (tx, ema_decay) as
+            # pi0_encoder_state. dataclasses.replace calls __init__ which triggers
+            # jaxtyping and rejects NamedSharding leaves. Instead, borrow the
+            # sharding leaves from train_state_sharding and unflatten them with
+            # pi0_encoder_state's treedef (which has tx=pi0_tx, ema_decay=None).
+            # tree_unflatten bypasses __init__ and thus bypasses jaxtyping.
+            sharding_leaves = jax.tree_util.tree_leaves(self._train_state_sharding)
+            _, pi0_treedef = jax.tree_util.tree_flatten(self._pi0_encoder_state)
+            self._pi0_encoder_state_sharding = jax.tree_util.tree_unflatten(
+                pi0_treedef, sharding_leaves
+            )
+
+            def _critics_with_encoder_wrapper(batch, q_state, value_state, policy_state, pi0_encoder_state, rng):
+                return self._update_critics_with_encoder(
+                    batch=batch,
+                    q_state=q_state,
+                    value_state=value_state,
+                    policy_state=policy_state,
+                    pi0_encoder_state=pi0_encoder_state,
+                    rng=rng,
+                )
+
+            self._update_critics_with_encoder_jitted = jax.jit(
+                _critics_with_encoder_wrapper,
+                in_shardings=(
+                    self._data_sharding,                          # batch
+                    self._state_action_critic_state_sharding,     # q_state
+                    self._value_state_sharding,                   # value_state
+                    self._train_state_sharding,                   # policy_state
+                    self._pi0_encoder_state_sharding,             # pi0_encoder_state
+                    self._replicated_sharding,                    # rng
+                ),
+                out_shardings=(
+                    self._state_action_critic_state_sharding,     # q_state
+                    self._value_state_sharding,                   # value_state
+                    self._pi0_encoder_state_sharding,             # pi0_encoder_state
+                    self._replicated_sharding,                    # q_info
+                    self._replicated_sharding,                    # value_info
+                ),
+                donate_argnums=(1, 2),  # q_state, value_state only (pi0 shares buffers with policy_state)
+            )
+
     def _recompute_prefix_embedding(
             self,
             *,
@@ -170,7 +234,8 @@ class BestofNLearner(FilteredSFTLearner):
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
 
-        if self._config.rl.critic_encoder_type == "pi0_prefix":
+        encoder_type = self._config.rl.critic_encoder_type
+        if encoder_type in ("pi0_prefix", "pi0_prefix_resnet"):
             curr_prefix_embedding = self._recompute_prefix_embedding(
                 observation=online_observation,
                 policy_state=policy_state,
@@ -181,7 +246,7 @@ class BestofNLearner(FilteredSFTLearner):
                 observation=next_observation, policy_state=policy_state
             )
             next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
-        else:  # resnet
+        if encoder_type in ("resnet", "pi0_prefix_resnet"):
             # Buffer stores images under observation["image"]["base_0_rgb"] / ["left_wrist_0_rgb"]
             # after the pi0 LiberoInputs transform (uint8, HWC).
             observation_dict["image"] = online_observation["image"]["base_0_rgb"]
@@ -210,13 +275,14 @@ class BestofNLearner(FilteredSFTLearner):
             "state": policy_obs_dict["state"],
         }
 
-        if self._config.rl.critic_encoder_type == "pi0_prefix":
+        encoder_type = self._config.rl.critic_encoder_type
+        if encoder_type in ("pi0_prefix", "pi0_prefix_resnet"):
             prefix_embedding = self._recompute_prefix_embedding(
                 observation=policy_obs_dict,
                 policy_state=policy_state,
             )
             critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
-        else:  # resnet
+        if encoder_type in ("resnet", "pi0_prefix_resnet"):
             # policy_obs_dict["image"] is a dict of float32 images in [-1, 1]; convert to uint8.
             def _to_uint8(img):
                 return jnp.clip((jnp.asarray(img) + 1.0) * 127.5, 0, 255).astype(jnp.uint8)
@@ -293,7 +359,9 @@ class BestofNLearner(FilteredSFTLearner):
                 state = np.pad(state, pad_width, mode="constant", constant_values=0.0)
             state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
 
-            if self._config.rl.critic_encoder_type == "pi0_prefix":
+            encoder_type = self._config.rl.critic_encoder_type
+            critic_obs: dict = {"state": state}
+            if encoder_type in ("pi0_prefix", "pi0_prefix_resnet"):
                 # Compute prefix embedding (on non-tiled obs, then tile)
                 inputs = self._policy._input_transform(processed_obs)
                 for _mask_key in ("image_mask", "image_masks"):
@@ -311,12 +379,12 @@ class BestofNLearner(FilteredSFTLearner):
                     prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
                 # prefix: [group_env_num, embed_dim]
                 prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
-                critic_obs = {"state": state, PREFIX_EMBEDDING_NAME: prefix_tiled}
-            else:  # resnet
-                # Use raw images directly; no prefix computation needed
+                critic_obs[PREFIX_EMBEDDING_NAME] = prefix_tiled
+            if encoder_type in ("resnet", "pi0_prefix_resnet"):
                 image = np.repeat(np.asarray(processed_obs["observation/image"], dtype=np.uint8), n_samples, axis=0)
                 wrist_image = np.repeat(np.asarray(processed_obs["observation/wrist_image"], dtype=np.uint8), n_samples, axis=0)
-                critic_obs = {"state": state, "image": jnp.asarray(image), "wrist_image": jnp.asarray(wrist_image)}
+                critic_obs["image"] = jnp.asarray(image)
+                critic_obs["wrist_image"] = jnp.asarray(wrist_image)
 
             # 4. Score all candidates with Q-critic
             # Normalize robot-space actions (7-dim for LIBERO), then zero-pad to model_act_dim.
@@ -428,6 +496,61 @@ class BestofNLearner(FilteredSFTLearner):
 
         return q_state, value_state, q_info, value_info
 
+    @at.typecheck
+    def _update_critics_with_encoder(
+            self,
+            batch: Dict[str, Any],
+            q_state: training_utils.TrainState,
+            value_state: training_utils.TrainState,
+            policy_state: training_utils.TrainState,
+            pi0_encoder_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> Tuple[
+        training_utils.TrainState,
+        training_utils.TrainState,
+        training_utils.TrainState,
+        dict[str, at.Array],
+        dict[str, at.Array],
+    ]:
+        """Critic update that backpropagates into the Pi0 prefix encoder.
+
+        Unlike _update_critics, the prefix embeddings are computed inside each
+        step function (inside value_and_grad) so gradients flow through them.
+        The raw buffer observations are passed directly — no pre-processing via
+        _online_batch_to_critic_batch.
+        """
+        assert isinstance(self._config.rl, BestofNLearnerConfig)
+        if self._config.rl.train_on_policy_value_function:
+            policy_sample_rng, rng = jax.random.split(rng, 2)
+            value_actions = self._get_on_policy_action(
+                online_observation=_model.Observation.from_dict(batch["observation"]),
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
+        else:
+            value_actions = batch["actions"]
+
+        raw_q_batch = (
+            batch["observation"], batch["actions"], batch["next_observation"],
+            batch["reward"], batch["discount"], batch["mc_return"],
+        )
+        raw_v_batch = (
+            batch["observation"], value_actions, batch["next_observation"],
+            batch["reward"], batch["discount"], batch["mc_return"],
+        )
+
+        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        for _ in range(num_updates):
+            q_rng, v_rng, rng = jax.random.split(rng, 3)
+            q_state, pi0_encoder_state, q_info = self._q_train_step_with_encoder(
+                q_rng, q_state, value_state, pi0_encoder_state, raw_q_batch,
+            )
+            value_state, pi0_encoder_state, value_info = self._value_train_step_with_encoder(
+                v_rng, value_state, q_state, pi0_encoder_state, raw_v_batch,
+            )
+
+        return q_state, value_state, pi0_encoder_state, q_info, value_info
+
     def pretrain_with_offline_data(self):
         self.warm_start_training_steps += 1
         assert isinstance(self._config.rl, BestofNLearnerConfig), (
@@ -445,15 +568,35 @@ class BestofNLearner(FilteredSFTLearner):
         )
         critic_rng, self._rng = jax.random.split(self._rng, 2)
         with sharding.set_mesh(self._mesh):
-            q_state, value_state, q_info, value_info = (
-                self._update_critics_jitted(
-                    batch,
-                    self._state_action_critic_state,
-                    self._value_state,
-                    self._train_state,
-                    critic_rng,
+            if self._config.rl.train_pi0_prefix_encoder:
+                q_state, value_state, pi0_encoder_state, q_info, value_info = (
+                    self._update_critics_with_encoder_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        self._pi0_encoder_state,
+                        critic_rng,
+                    )
                 )
-            )
+                self._pi0_encoder_state = pi0_encoder_state
+                # Sync updated backbone into _train_state so sample_actions uses it.
+                # ema_params is set to params (no smoothing; latest params used for inference).
+                self._train_state = dataclasses.replace(
+                    self._train_state,
+                    params=self._pi0_encoder_state.params,
+                    ema_params=self._pi0_encoder_state.params,
+                )
+            else:
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
         self._state_action_critic_state = q_state
         self._value_state = value_state
         critic_info = {f"pretrain/q/{k}": v for k, v in q_info.items()
@@ -590,15 +733,33 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             critic_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
-                q_state, value_state, q_info, value_info = (
-                    self._update_critics_jitted(
-                        critic_source_batch,
-                        self._state_action_critic_state,
-                        self._value_state,
-                        self._train_state,
-                        critic_rng,
+                if rl_config.train_pi0_prefix_encoder:
+                    q_state, value_state, pi0_encoder_state, q_info, value_info = (
+                        self._update_critics_with_encoder_jitted(
+                            critic_source_batch,
+                            self._state_action_critic_state,
+                            self._value_state,
+                            self._train_state,
+                            self._pi0_encoder_state,
+                            critic_rng,
+                        )
                     )
-                )
+                    self._pi0_encoder_state = pi0_encoder_state
+                    self._train_state = dataclasses.replace(
+                        self._train_state,
+                        params=self._pi0_encoder_state.params,
+                        ema_params=self._pi0_encoder_state.params,
+                    )
+                else:
+                    q_state, value_state, q_info, value_info = (
+                        self._update_critics_jitted(
+                            critic_source_batch,
+                            self._state_action_critic_state,
+                            self._value_state,
+                            self._train_state,
+                            critic_rng,
+                        )
+                    )
             self._state_action_critic_state = q_state
             self._value_state = value_state
 

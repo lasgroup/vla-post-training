@@ -115,11 +115,11 @@ def _make_dummy_critic_observation(
     assert isinstance(config.rl, _config.BestofNLearnerConfig)
     fake_obs = config.model.fake_obs(batch_size=1)
     dummy_obs = {"state": jnp.asarray(fake_obs.state, dtype=jnp.float32)}
-    if config.rl.critic_encoder_type == "pi0_prefix" and prefix_embedding_shape is not None:
+    if config.rl.critic_encoder_type in ("pi0_prefix", "pi0_prefix_resnet") and prefix_embedding_shape is not None:
         dummy_obs[PREFIX_EMBEDDING_NAME] = jnp.zeros(
             (1, *prefix_embedding_shape), dtype=jnp.float32
         )
-    elif config.rl.critic_encoder_type == "resnet":
+    if config.rl.critic_encoder_type in ("resnet", "pi0_prefix_resnet"):
         # Images are stored in the buffer with the "observation/" prefix stripped.
         dummy_obs["image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
         dummy_obs["wrist_image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
@@ -150,6 +150,46 @@ class ResNetStateEncoder(nnx.Module):
         return self.mlp(x, training=training)
 
 
+class Pi0PrefixResNetEncoder(nnx.Module):
+    """Combines frozen pi0 prefix embedding with trainable ResNet image features.
+
+    Concatenates [ResNet(images), prefix_embedding, state] and passes through a shared MLP.
+    The ResNet is trainable; the prefix embedding is provided externally (computed from frozen Pi0).
+    """
+
+    def __init__(
+        self,
+        observation: ObsType,
+        stage_sizes: tuple[int, ...],
+        image_keys: list[str],
+        prefix_embedding_key: str,
+        hidden_dims: tuple[int, ...],
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.prefix_embedding_key = prefix_embedding_key
+        self.resnet = ResNetEncoder(
+            input_example=observation,
+            stage_sizes=stage_sizes,
+            block_cls=ResNetBlock,
+            image_keys=image_keys,
+            use_spatial_softmax=True,
+            rngs=rngs,
+        )
+        dummy_img_features = self.resnet(observation, train=False)
+        dummy_prefix = jnp.asarray(observation[prefix_embedding_key], dtype=jnp.float32)
+        dummy_state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        dummy_concat = jnp.concatenate([dummy_img_features, dummy_prefix, dummy_state], axis=-1)
+        self.mlp = MLP(input=dummy_concat, hidden_dims=hidden_dims, activate_final=True, rngs=rngs)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
+        img_features = self.resnet(observation, train=training)
+        prefix = jnp.asarray(observation[self.prefix_embedding_key], dtype=jnp.float32)
+        state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        x = jnp.concatenate([img_features, prefix, state], axis=-1)
+        return self.mlp(x, training=training)
+
+
 def _build_pi0_backbone_critic_defs(
     config: _config.OnlineTrainConfig,
     *,
@@ -167,6 +207,15 @@ def _build_pi0_backbone_critic_defs(
                 observation=observation,
                 stage_sizes=(2, 2, 2, 2),  # ResNet-18
                 image_keys=["image", "wrist_image"],
+                hidden_dims=critic_encoder_hidden_dims,
+                rngs=rngs,
+            )
+        if config.rl.critic_encoder_type == "pi0_prefix_resnet":
+            return Pi0PrefixResNetEncoder(
+                observation=observation,
+                stage_sizes=(2, 2, 2, 2),  # ResNet-18
+                image_keys=["image", "wrist_image"],
+                prefix_embedding_key=PREFIX_EMBEDDING_NAME,
                 hidden_dims=critic_encoder_hidden_dims,
                 rngs=rngs,
             )
@@ -291,6 +340,24 @@ def main(config: _config.OnlineTrainConfig):
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
     wandb.define_metric("pretrain/*", step_metric="pretrain_step")
+    wandb.define_metric("eval/*", step_metric="eval/total_collected_episodes")
+
+    # Evaluate at step 0 before any training so that wandb has a baseline data point.
+    # This must happen before the pretraining loop because each pretrain wandb.log
+    # (which uses no explicit step=) advances wandb's internal counter, causing 
+    # wandb.log(..., step=0) later inside the main loop to be silently dropped.
+    if not agent._resuming:
+        initial_eval_info = evaluate_policy(
+            agent=agent,
+            env=eval_env,
+            task_description=eval_task_description,
+            config=config,
+            step=0,
+        )
+        wandb.log(initial_eval_info, step=0)
+        logging.info(
+            f"Initial eval (step 0): {', '.join(f'{k}={v:.4f}' for k, v in initial_eval_info.items())}"
+        )
 
     # Offline critic pretraining
     warmup_start_steps = agent.warm_start_training_steps
@@ -356,7 +423,7 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
-        if step % config.collect.eval_interval == 0:
+        if step > 0 and step % config.collect.eval_interval == 0:
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,
