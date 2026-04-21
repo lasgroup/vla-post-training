@@ -11,6 +11,12 @@ import openpi.shared.array_typing as at
 
 
 class FlowMPOLearner(MPOWeightedSFTLearner):
+    def _policy_mc_return_sharding(self):
+        """Stub required by the parent's __init__ JIT setup. MPOLearner rebuilds
+        _update_policy_jitted with its own signature right after super().__init__(),
+        so this sharding is only used transiently."""
+        return self._replicated_sharding
+        
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Delete only the policy JIT method; keep _update_critics_jitted from parent
