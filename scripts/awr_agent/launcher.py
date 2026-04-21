@@ -57,7 +57,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.store_success_episodes_only": [True],
+    "rl.store_success_episodes_only": [False],
     "rl.normalizer_config.ema_weight": [0.99, 1.0],
     "rl.beta": [0.01, 0.05, 0.1, 0.2],
     # Ralf settings:
