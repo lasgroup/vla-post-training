@@ -88,6 +88,25 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # "libero_90_79",
         # ("libero_90_82", "libero_90_82"),
     ],
+
+    # Ralf settings:
+    "seed": [0, 1, 2, 3, 4],
+    "collect.num_rollouts": [12],
+    "collect.use_time_to_success_as_reward": [True],
+    "rl.num_critic_updates_per_batch": [10],
+    "rl.num_offline_pretraining_steps": [0],
+    "rl.critic_inference_start_step": [900],
+    "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
+    "rl.td_weight_schedule.end_value": [0.5],
+    "rl.td_weight_schedule.switch_step": [500_000],
+    # Single-task
+        ("collect.tasks", "collect.eval_tasks"): [
+            ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
+            ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
+            ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
+            ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
+            ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
+        ],
 }
 
 
