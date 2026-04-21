@@ -53,6 +53,7 @@ def main() -> None:
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
+    parser.add_argument("--group", default=None, help="W&B group name")
     parser.add_argument("--config_name", default=CONFIG_NAME, help="Training config name")
     parser.add_argument("--log_interval", type=int, default=DEFAULT_LOG_INTERVAL)
     parser.add_argument(
@@ -69,6 +70,7 @@ def main() -> None:
         flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
+            "group": args.group,
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,

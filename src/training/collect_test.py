@@ -97,7 +97,6 @@ def test_collect_data_integration():
         dataset=dataset,
         sharding_spec=sharding_spec,
         env=env,
-        task_description="Test Task",
         config=config
     )
 

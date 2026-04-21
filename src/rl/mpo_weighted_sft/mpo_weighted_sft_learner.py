@@ -1,78 +1,19 @@
-import gc
-from typing import Dict, Any, Tuple
-from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import (
-    AdvantageWeightedSFTLearner,
-)
+from typing import Any, Dict, Tuple
+
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
 import jax
+
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import (
+    AdvantageWeightedSFTLearner,
+)
 from src.training.config import MPOWeightedSFTLearnerConfig
 
 
 class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Delete super class methods
-        del self._update_critics_jitted
-        del self._update_policy_jitted
-        gc.collect()
-
-        # 2. Create closures to drop 'self' from the JIT signature
-        def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
-            return self._update_critics(
-                batch=batch,
-                q_state=q_state,
-                value_state=value_state,
-                policy_state=policy_state,
-                rng=rng,
-            )
-
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
-            return self._update_policy(
-                batch=batch,
-                policy_state=policy_state,
-                q_state=q_state,
-                value_state=value_state,
-                rng=rng,
-                mc_return=mc_return,
-            )
-
-        # 3. JIT the wrappers with your distributed shardings
-        self._update_critics_jitted = jax.jit(
-            _critics_wrapper,
-            in_shardings=(
-                self._data_sharding,  # batch
-                self._state_action_critic_state_sharding,  # q_state
-                self._value_state_sharding,  # value_state
-                self._train_state_sharding,  # policy_state
-                self._replicated_sharding,  # rng
-            ),
-            out_shardings=(
-                self._state_action_critic_state_sharding,  # q_state
-                self._value_state_sharding,  # value_state
-                self._replicated_sharding,  # q_info
-                self._replicated_sharding,  # value_info
-            ),
-            donate_argnums=(1, 2),  # Donates q_state (arg 1) and value_state (arg 2)
-        )
-
-        self._update_policy_jitted = jax.jit(
-            _policy_wrapper,
-            in_shardings=(
-                self._data_sharding,  # batch
-                self._train_state_sharding,  # policy_state
-                self._state_action_critic_state_sharding,  # q_state
-                self._value_state_sharding,  # value_state
-                self._replicated_sharding,  # rng
-                self._replicated_sharding,  # mc_return
-            ),
-            out_shardings=(
-                self._train_state_sharding,  # policy_state
-                self._replicated_sharding,  # info
-            ),
-            donate_argnums=(1,),  # Donates policy_state (arg 1)
-        )
+    def _policy_mc_return_sharding(self):
+        return self._replicated_sharding
 
     @at.typecheck
     def _get_on_policy_action(

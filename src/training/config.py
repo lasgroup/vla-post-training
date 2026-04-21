@@ -62,8 +62,6 @@ class StepSchedule(_optimizer.LRScheduleConfig):
 class RLAlgorithmConfig:
     discount: float = 0.99
     buffer_capacity: int = 1024
-    buffer_save_path: str | None = None  # if set, save each episode to this directory
-    buffer_load_paths: Sequence[str] = ()  # directories to load episodes from on init
 
 
 # Define hyperparameter structures for your algorithms
@@ -215,8 +213,7 @@ class CollectionConfig:
             "help": (
                 "Task(s) to collect. Can be a single string (e.g., 'libero_90_59') or a list. "
                 "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). After expansion, the number of tasks must divide env_num evenly; "
-                "tasks are then repeated to fill all env_num environments."
+                "or 'libero_90_22-56x4')."
             )
         },
     )
@@ -226,8 +223,7 @@ class CollectionConfig:
             "help": (
                 "Task(s) to evaluate. Can be a single string (e.g., 'libero_90_59') or a list. "
                 "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4'). After expansion, the number of eval tasks must divide eval_env_num "
-                "evenly; tasks are then repeated to fill all eval_env_num environments."
+                "or 'libero_90_22-56x4')."
             )
         },
     )
@@ -271,17 +267,11 @@ class CollectionConfig:
     def __post_init__(self):
         tasks = [self.tasks] if isinstance(self.tasks, str) else self.tasks
         expanded_tasks = self.expand_tasks(tasks)
-        assert self.env_num % len(expanded_tasks) == 0, (
-            f"env_num ({self.env_num}) must be divisible by the number of expanded tasks ({len(expanded_tasks)})."
-        )
-        object.__setattr__(self, 'tasks', expanded_tasks * (self.env_num // len(expanded_tasks)))
+        object.__setattr__(self, 'tasks', expanded_tasks)
 
         eval_tasks = [self.eval_tasks] if isinstance(self.eval_tasks, str) else self.eval_tasks
         expanded_eval_tasks = self.expand_tasks(eval_tasks)
-        assert self.eval_env_num % len(expanded_eval_tasks) == 0, (
-            f"eval_env_num ({self.eval_env_num}) must be divisible by the number of expanded eval tasks ({len(expanded_eval_tasks)})."
-        )
-        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks * (self.eval_env_num // len(expanded_eval_tasks)))
+        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -296,6 +286,7 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
+    requeue: bool = False
 
 
 def make_base_online_config(

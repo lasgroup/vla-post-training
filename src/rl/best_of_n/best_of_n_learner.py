@@ -1,13 +1,16 @@
 # ruff: noqa: F722
 import dataclasses
 import functools
+import logging
 from typing import Any, Dict, Tuple
 import gc
 
+import etils.epath as epath
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -22,7 +25,10 @@ from src.rl.best_of_n.update_critic import (
     StateValueDef,
 )
 from src.rl.networks.rl_networks import ObsType, ActionType
-from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
+from src.rl.filtered_sft_agent.filtered_sft_learner import (
+    FilteredSFTLearner,
+    _copy_nnx_state,
+)
 from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import BestofNLearnerConfig, OnlineTrainConfig
@@ -36,10 +42,8 @@ class BestofNLearner(FilteredSFTLearner):
             dummy_act: ActionType,
             state_action_critic_def: StateActionCriticDef,
             state_value_def: StateValueDef,
-            task_description: str,
             debug: bool = False,
     ):
-        self.task_description = task_description
         self.debug = debug
 
         super().__init__(config)
@@ -63,6 +67,9 @@ class BestofNLearner(FilteredSFTLearner):
             critic_def=state_value_def,
             dummy_obs=dummy_obs,
         )
+        self._rl_state_checkpointer = ocp.StandardCheckpointer()
+        if self._resuming:
+            self._restore_rl_checkpoint(step=int(self.training_steps))
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
@@ -81,8 +88,13 @@ class BestofNLearner(FilteredSFTLearner):
         self._q_train_step = functools.partial(train_q_step, self._config)
         self._value_train_step = functools.partial(train_value_step, self._config)
         # self._train_step = functools.partial(train_actor_step, self._config)
+        self._refresh_critic_update_function()
 
-        # 2. Create closures to drop 'self' from the JIT signature
+    def _refresh_critic_update_function(self):
+        self._train_state_sharding = sharding.fsdp_sharding(
+            self._train_state, self._mesh, log=False
+        )
+
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
             return self._update_critics(
                 batch=batch,
@@ -92,23 +104,74 @@ class BestofNLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        # 3. JIT the wrappers with your distributed shardings
         self._update_critics_jitted = jax.jit(
             _critics_wrapper,
             in_shardings=(
-                self._data_sharding,  # batch
-                self._state_action_critic_state_sharding,  # q_state
-                self._value_state_sharding,  # value_state
-                self._train_state_sharding,  # policy_state
-                self._replicated_sharding,  # rng
+                self._data_sharding,
+                self._state_action_critic_state_sharding,
+                self._value_state_sharding,
+                self._train_state_sharding,
+                self._replicated_sharding,
             ),
             out_shardings=(
-                self._state_action_critic_state_sharding,  # q_state
-                self._value_state_sharding,  # value_state
-                self._replicated_sharding,  # q_info
-                self._replicated_sharding,  # value_info
+                self._state_action_critic_state_sharding,
+                self._value_state_sharding,
+                self._replicated_sharding,
+                self._replicated_sharding,
             ),
-            donate_argnums=(1, 2),  # Donates q_state (arg 1) and value_state (arg 2)
+            donate_argnums=(1, 2),
+        )
+
+    def _maybe_restore_policy_ema_after_resume(self):
+        if not self._resume_restore_ema:
+            return
+        self._train_state = dataclasses.replace(
+            self._train_state,
+            ema_decay=self._resume_ema_decay,
+            ema_params=_copy_nnx_state(self._train_state.params),
+        )
+        self._resume_restore_ema = False
+        self._resume_ema_decay = None
+        self._refresh_critic_update_function()
+
+    def _rl_checkpoint_state(self) -> dict[str, training_utils.TrainState]:
+        return {
+            "state_action_critic_state": self._state_action_critic_state,
+            "value_state": self._value_state,
+        }
+
+    def _rl_checkpoint_dir(self) -> epath.Path:
+        return epath.Path(self._config.checkpoint_dir) / "rl_state"
+
+    def _rl_checkpoint_path(self, step: int) -> epath.Path:
+        return self._rl_checkpoint_dir() / str(int(step))
+
+    def _restore_rl_checkpoint(self, *, step: int) -> None:
+        path = self._rl_checkpoint_path(step)
+        if not path.exists():
+            logging.warning(
+                "No RL critic checkpoint found at %s; starting critics from scratch.",
+                path,
+            )
+            return
+        restored = self._rl_state_checkpointer.restore(
+            path,
+            self._rl_checkpoint_state(),
+        )
+        self._state_action_critic_state = restored["state_action_critic_state"]
+        self._value_state = restored["value_state"]
+
+    def save_checkpoint(self, step: int | None = None):
+        if step is None:
+            step = self.training_steps
+        super().save_checkpoint(step=step)
+        path = self._rl_checkpoint_path(step)
+        if path.exists():
+            return
+        self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
+        self._rl_state_checkpointer.save(
+            path,
+            self._rl_checkpoint_state(),
         )
 
     def _recompute_prefix_embedding(
@@ -440,6 +503,7 @@ class BestofNLearner(FilteredSFTLearner):
                               } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
+        self._maybe_restore_policy_ema_after_resume()
         info = (
                 critic_info
                 | {
