@@ -27,7 +27,7 @@ from launcher_util import (
 SCRIPT = "scripts/awr_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_aw_sft"
 PROJECT_NAME = "awr_agent_sweep"
-DEFAULT_LOG_INTERVAL = 50
+DEFAULT_LOG_INTERVAL = 25
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
@@ -50,10 +50,6 @@ NUM_TRAIN_STEPS = 10_000
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [
-        10
-    ],
-    "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
@@ -61,36 +57,10 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.td_weight_schedule.switch_step": [-1],
     "rl.store_success_episodes_only": [True],
     "rl.normalizer_config.ema_weight": [0.99, 1.0],
-    ("collect.tasks", "collect.eval_tasks"): [
-        # "libero_90_2",
-        # "libero_90_7",
-        # "libero_90_9",
-        # "libero_90_11",
-        (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
-        # "libero_90_26",
-        # "libero_90_28",
-        # "libero_90_30",
-        # "libero_90_31",
-        # "libero_90_35",
-        # ("libero_90_38", "libero_90_38"),
-        # "libero_90_41",
-        # "libero_90_53",
-        #("libero_90_59", "libero_90_59"),
-        # "libero_90_60",
-        # "libero_90_61",
-        # "libero_90_62",
-        # ("libero_90_64", "libero_90_64"),
-        # "libero_90_74",
-        # "libero_90_77",
-        # "libero_90_79",
-        # ("libero_90_82", "libero_90_82"),
-    ],
-
+    "rl.beta": [0.01, 0.05, 0.1, 0.2],
     # Ralf settings:
-    "seed": [0, 1, 2, 3, 4],
     "collect.num_rollouts": [12],
     "collect.use_time_to_success_as_reward": [True],
     "rl.num_critic_updates_per_batch": [10],
@@ -103,9 +73,9 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         ("collect.tasks", "collect.eval_tasks"): [
             ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
             ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
-            ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
+           # ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
             ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
-            ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
+            # ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
         ],
 }
 
