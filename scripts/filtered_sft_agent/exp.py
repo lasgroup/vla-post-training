@@ -46,6 +46,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
 from src.envs import make_env
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
+from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, init_wandb
 
 
@@ -53,17 +54,6 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    agent = FilteredSFTLearner(config)
-    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
-
-    start_step = int(jax.device_get(agent._train_state.step))
-    agent.training_steps = start_step
-    pbar = tqdm.tqdm(
-        range(start_step, config.num_train_steps),
-        initial=start_step,
-        total=config.num_train_steps,
-        dynamic_ncols=True,
-    )
 
     env_fn, task_description = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
@@ -77,6 +67,17 @@ def main(config: _config.OnlineTrainConfig):
         config=config,
         task_description=eval_task_description,
         env_num=config.collect.eval_env_num,
+    )
+
+    agent = FilteredSFTLearner(config)
+    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+
+    start_step = int(agent.training_steps)
+    pbar = tqdm.tqdm(
+        range(start_step, config.num_train_steps),
+        initial=start_step,
+        total=config.num_train_steps,
+        dynamic_ncols=True,
     )
 
     infos = []
@@ -98,7 +99,6 @@ def main(config: _config.OnlineTrainConfig):
             infos = []
 
         if step % config.collect.collect_interval == 0:
-            agent.save_checkpoint(step=step)
             collect_info, n_collected_episodes = collect_data(
                 agent=agent,
                 env=env,
@@ -111,6 +111,7 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
+            save_epoch_state(agent, config)
 
         if step % config.collect.eval_interval == 0:
             eval_info = evaluate_policy(
@@ -124,11 +125,6 @@ def main(config: _config.OnlineTrainConfig):
             logging.info(
                 f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
             )
-
-        if (
-            step % config.save_interval == 0 and step > start_step
-        ) or step == config.num_train_steps - 1:
-            agent.save_checkpoint(step=step)
 
     logging.info("Waiting for checkpoint manager to finish")
     agent._checkpoint_manager.wait_until_finished()

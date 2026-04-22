@@ -16,10 +16,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
     DEFAULT_CHECKPOINT_BASE_DIR,
     DEFAULT_LOG_DIR,
+    apply_requeue_flags,
     auto_exp_name,
     dict_permutations,
     generate_run_commands,
     generate_srun_command,
+    validate_unique_exp_names,
 )
 
 SCRIPT = "scripts/mpo_agent/exp.py"
@@ -35,11 +37,11 @@ DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
-DEFAULT_NUM_EVAL_ROLLOUTS = 32
+DEFAULT_NUM_EVAL_ROLLOUTS = 8
 NUM_TRAIN_STEPS = 5_000
 USE_SAME_EVAL_AND_TRAIN_TASK = True
 
@@ -96,6 +98,7 @@ def main() -> None:
     parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
+    parser.add_argument("--group", default=None, help="W&B group name")
     parser.add_argument(
         "--config_name", default=CONFIG_NAME, help="Training config name"
     )
@@ -124,6 +127,7 @@ def main() -> None:
     )
     parser.add_argument("--num_train_steps", type=int, default=NUM_TRAIN_STEPS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
+    parser.add_argument("--requeue", action="store_true", help="Submit requeue-safe resumable jobs")
 
     args = parser.parse_args()
 
@@ -133,6 +137,7 @@ def main() -> None:
         flags: Dict[str, Any] = {
             "overwrite": True,
             "project_name": args.project_name,
+            "group": args.group,
             "seed": DEFAULT_SEED,
             "log_interval": args.log_interval,
             "checkpoint_base_dir": args.checkpoint_base_dir,
@@ -152,6 +157,7 @@ def main() -> None:
             "num_train_steps": args.num_train_steps,
         }
         flags.update(combo)
+        flags = apply_requeue_flags(flags, enabled=args.requeue)
 
         # Keep these in sync with policy_training_start_step
         policy_start = flags["rl.policy_training_start_step"]
@@ -159,17 +165,24 @@ def main() -> None:
         flags["rl.critic_pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
+        command_list.append(flags)
 
-        cmd = generate_srun_command(SCRIPT, args.config_name, flags=flags)
-        command_list.append(cmd)
+    if args.requeue:
+        validate_unique_exp_names(command_list)
+
+    rendered_commands = [
+        generate_srun_command(SCRIPT, args.config_name, flags=flags)
+        for flags in command_list
+    ]
 
     generate_run_commands(
-        command_list,
+        rendered_commands,
         mode=args.mode,
         duration=args.duration,
         partition=args.partition,
         dry=args.dry,
         log_dir=args.log_dir,
+        requeue=args.requeue,
     )
 
 

@@ -6,7 +6,10 @@ import gymnasium as gym
 import numpy as np
 import pickle
 import logging
+import json
+import os
 from pathlib import Path
+import tempfile
 
 import copy
 
@@ -308,8 +311,6 @@ class ShardedReplayBuffer:
         preprocess_fn: Callable[[NestedData], NestedData] | None = None,
         postprocess_fn: Callable[[NestedData], Any] | None = None,
         freeze_dict: bool = True,
-        load_paths: Optional[list[str]] = None,
-        save_path: Optional[str] = None,
     ):
         """
         Args:
@@ -326,39 +327,52 @@ class ShardedReplayBuffer:
         self._preprocess_fn = preprocess_fn
         self._postprocess_fn = postprocess_fn
         self._freeze_dict = freeze_dict
-        self._save_path = save_path
 
         # 1. Pre-allocate the entire buffer in Host RAM (NumPy)
         # This prevents memory fragmentation during long training runs.
-        # 1. Pre-allocate storage preserving the nested structure
-        # We define a helper to create a zero-buffer for a single leaf array
+        self.storage = self._allocate_storage(dummy_data, max_capacity)
+        self._refresh_storage_views()
+
+        # Seeding
+        self._rng = np.random.default_rng(seed)
+        self.total_inserted = 0
+        self._persisted_total_inserted = 0
+        self._latest_saved_shard_path: Path | None = None
+
+    @staticmethod
+    def _allocate_storage(dummy_data: NestedData, capacity: int) -> NestedData:
         def create_buffer(leaf_array):
             # leaf_array shape: (batch, features...) -> storage shape: (capacity, features...)
-            buffer_shape = (max_capacity,) + leaf_array.shape[1:]
+            buffer_shape = (capacity,) + leaf_array.shape[1:]
             return np.zeros(buffer_shape, dtype=leaf_array.dtype)
 
-        # jax.tree_util.tree_map automatically traverses the dict/list structure
-        # and applies `create_buffer` to every array found at the bottom.
-        self.storage = jax.tree_util.tree_map(create_buffer, dummy_data)
+        return jax.tree_util.tree_map(create_buffer, dummy_data)
+
+    def _refresh_storage_views(self) -> None:
         self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(
             self.storage
         )
 
-        # Seeding
-        self._rng = np.random.default_rng(seed)
+    def _ordered_indices(self, count: int) -> np.ndarray:
+        if count < 0 or count > self.size:
+            raise ValueError(f"Requested {count} active transitions from buffer size {self.size}.")
+        start = (self.ptr - self.size) % self.max_capacity
+        return (np.arange(count, dtype=np.int32) + start) % self.max_capacity
 
-        # Prefill
-        if load_paths:
-            self.load_episodes(load_paths)
+    def _recent_indices(self, count: int) -> np.ndarray:
+        if count < 0 or count > self.size:
+            raise ValueError(f"Requested {count} recent transitions from buffer size {self.size}.")
+        start = (self.ptr - count) % self.max_capacity
+        return (np.arange(count, dtype=np.int32) + start) % self.max_capacity
 
-    def insert(self, data: NestedData, save_episode: bool = True):
+    def _slice_storage(self, indices: np.ndarray) -> NestedData:
+        return jax.tree_util.tree_map(lambda leaf: leaf[indices].copy(), self.storage)
+
+    def insert(self, data: NestedData):
         """
         Inserts nested data into the buffer.
         Assumes data structure matches the initialized dummy_data.
         """
-
-        if save_episode and self._save_path is not None:
-            self.save_episode(data, self._save_path)
 
         if self._preprocess_fn is not None:
             data = self._preprocess_fn(data)
@@ -385,6 +399,7 @@ class ShardedReplayBuffer:
         # Update pointers
         self.ptr = int((self.ptr + num_new) % self.max_capacity)
         self.size = int(min(self.size + num_new, self.max_capacity))
+        self.total_inserted += num_new
 
     def sample(self, batch_size=None) -> NestedData:
         """
@@ -417,26 +432,126 @@ class ShardedReplayBuffer:
     def __len__(self):
         return self.size
 
-    def save_episode(self, data: NestedData, save_dir: str):
-        path = Path(save_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        existing_indices = [int(p.stem.split("_")[1]) for p in path.glob("episode_*.h5df")]
-        idx = max(existing_indices) + 1 if existing_indices else 0
-        file_path = path / f"episode_{idx:06d}.h5df"
-        with h5py.File(file_path, "w") as f:
-            write_nested(f, data)
-        logging.info("Saved episode to %s", file_path)
+    def rng_state_json(self) -> str:
+        return json.dumps(self._rng.bit_generator.state)
 
-    def load_episodes(self, paths: list[str]) -> int:
-        total = 0
-        for dir_path in paths:
-            episode_files = sorted(Path(dir_path).glob("episode_*.h5df"))
-            for file_path in episode_files:
-                with h5py.File(file_path, "r") as f:
-                    data = read_nested(f)
-                self.insert(data, save_episode=False)
-                total += 1
-        logging.info("Loaded %d episodes total (buffer size: %d)", total, self.size)
+    def set_rng_state_json(self, rng_state_json: str | None) -> None:
+        if rng_state_json is None:
+            return
+        self._rng = np.random.default_rng()
+        self._rng.bit_generator.state = json.loads(rng_state_json)
+
+    def save_shard(self, path: str | Path) -> dict[str, int | str | None]:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        delta_count = self.total_inserted - self._persisted_total_inserted
+        if delta_count < 0:
+            raise ValueError("Replay buffer total_inserted went backwards.")
+        if delta_count == 0:
+            logging.info(
+                "No new replay transitions to save; reusing latest shard %s",
+                self._latest_saved_shard_path,
+            )
+            return {
+                "size": int(self.size),
+                "total_inserted": int(self.total_inserted),
+                "path": (
+                    None
+                    if self._latest_saved_shard_path is None
+                    else str(self._latest_saved_shard_path)
+                ),
+            }
+
+        shard_data = self._slice_storage(self._recent_indices(delta_count))
+        num_transitions = int(delta_count)
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+
+        try:
+            with h5py.File(tmp_path, "w") as f:
+                write_nested(f.create_group("transitions"), shard_data)
+                metadata = f.create_group("metadata")
+                metadata.attrs["num_transitions"] = num_transitions
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+        self._persisted_total_inserted = int(self.total_inserted)
+        self._latest_saved_shard_path = path
+        logging.info(
+            "Saved replay buffer shard to %s (new transitions=%d, replay size=%d)",
+            path,
+            num_transitions,
+            self.size,
+        )
+        return {
+            "size": int(self.size),
+            "total_inserted": int(self.total_inserted),
+            "path": str(path),
+        }
+
+    def restore_shards(
+        self,
+        shard_dir: str | Path,
+        *,
+        step: int | None = None,
+        total_inserted: int | None = None,
+        latest_shard_path: str | Path | None = None,
+        rng_state_json: str | None = None,
+    ) -> dict[str, int | str | None]:
+        shard_dir = Path(shard_dir)
+        if not shard_dir.exists():
+            raise FileNotFoundError(f"Replay shard directory does not exist: {shard_dir}")
+
+        dummy_data = jax.tree_util.tree_map(lambda leaf: leaf[:1].copy(), self.storage)
+        self.storage = self._allocate_storage(dummy_data, self.max_capacity)
+        self.ptr = 0
+        self.size = 0
+        self.total_inserted = 0
+        self._persisted_total_inserted = 0
+        self._latest_saved_shard_path = None
+        self._refresh_storage_views()
+        shard_paths = sorted(shard_dir.glob("step_*.h5"))
+        if step is not None:
+            shard_paths = [p for p in shard_paths if int(p.stem.split("_")[-1]) <= int(step)]
+
+        for shard_path in shard_paths:
+            with h5py.File(shard_path, "r") as f:
+                restored_data = read_nested(f["transitions"])
+            self.insert(restored_data)
+            self._latest_saved_shard_path = shard_path
+
+        if total_inserted is not None:
+            self.total_inserted = int(total_inserted)
+        self._persisted_total_inserted = int(self.total_inserted)
+        self._latest_saved_shard_path = (
+            None if latest_shard_path is None else Path(latest_shard_path)
+        )
+        self.set_rng_state_json(rng_state_json)
+
+        logging.info(
+            "Restored replay buffer from shards in %s (step=%s, transitions=%d, latest shard=%s)",
+            shard_dir,
+            step,
+            self.size,
+            self._latest_saved_shard_path,
+        )
+        return {
+            "step": (None if step is None else int(step)),
+            "size": int(self.size),
+            "total_inserted": int(self.total_inserted),
+            "path": (
+                None
+                if self._latest_saved_shard_path is None
+                else str(self._latest_saved_shard_path)
+            ),
+        }
 
 
 if __name__ == "__main__":

@@ -284,26 +284,3 @@ class WarmUpOnResetWrapper(gym.Wrapper):
         for _ in range(self._num_steps_wait):
             obs, _, _, _, info = self.env.step(self._warm_up_action)
         return obs, info
-
-
-class SetInitialStateWrapper(gym.Wrapper):
-    def __init__(self, env, initial_states: np.ndarray):
-        super().__init__(env)
-        self._init_states = initial_states
-
-    def _set_init_state(self):
-        assert hasattr(self.env, "set_init_state"), (
-            "The environment must have a set_init_state method to use SetInitialStateWrapper"
-        )
-        random_index = self.np_random.integers(low=0, high=self._init_states.shape[0])
-        init_state = self._init_states[random_index]
-        return self.env.set_init_state(init_state)
-
-    def seed(self, seed):
-        self.env.seed(seed)
-        self.np_random = np.random.default_rng(seed)
-
-    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-        obs, info = self.env.reset(seed=seed, options=options)
-        obs = self._set_init_state()
-        return obs, info

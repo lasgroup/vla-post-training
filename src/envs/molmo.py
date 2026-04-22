@@ -118,7 +118,6 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self.action_space = gym.spaces.Dict({})
 
     def _make_eval_config(self):
-        # TODO: simplify
         spec = self._config.eval_config_cls
         if ":" not in spec:
             raise ValueError(

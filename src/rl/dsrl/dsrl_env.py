@@ -235,15 +235,10 @@ class DSRLVectorEnv(SubprocVectorEnv):
         env_fns,
         *,
         config: OnlineTrainConfig,
-        task_description: list[str],
         **kwargs: Any,
     ) -> None:
         super().__init__(env_fns, **kwargs)
 
-        assert len(task_description) == self.env_num, (
-            f"Expected {self.env_num} task descriptions, got {len(task_description)}"
-        )
-        self._task_description = task_description
         self._query_frequency = int(config.collect.replan_steps)
         self._resize_image = int(config.collect.resize_image)
 
@@ -271,7 +266,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
             return arr
         return jax.tree_util.tree_map(_pick_last, observations)
 
-    def _process_obs_for_pi0(self, observations: Dict, env_ids: List[int] | None = None) -> Dict[str, Any]:
+    def _process_obs_for_pi0(self, observations: Dict, info: Dict, env_ids: List[int] | None = None) -> Dict[str, Any]:
         current_obs = self._select_latest_frame(observations)
 
         _IMAGE_AND_STATE_KEYS = frozenset({
@@ -300,9 +295,9 @@ class DSRLVectorEnv(SubprocVectorEnv):
             processed[obs_key] = val
 
         if env_ids is None:
-            task_descs = self._task_description
+            task_descs = info["task_description"]
         else:
-            task_descs = [self._task_description[i] for i in env_ids]
+            task_descs = [info["task_description"][i] for i in env_ids]
         processed["prompt"] = np.array(task_descs)
         return processed
 
@@ -429,7 +424,7 @@ class DSRLVectorEnv(SubprocVectorEnv):
             obs, info = reset_returns, None
 
         batch_size = len(reset_ids)
-        processed_obs = self._process_obs_for_pi0(obs, env_ids=reset_ids)
+        processed_obs = self._process_obs_for_pi0(obs, info=info, env_ids=reset_ids)
         dummy_noise = np.zeros(
             (batch_size, self._decoder.action_horizon, self._decoder.action_dim),
             dtype=np.float32,
@@ -472,25 +467,10 @@ class DSRLVectorEnv(SubprocVectorEnv):
 # Environment factory
 # ---------------------------------------------------------------------------
 
-def _normalize_task_descriptions(
-    task_description: list[str] | str,
-    env_num: int,
-) -> list[str]:
-    if isinstance(task_description, str):
-        return [task_description] * env_num
-    if not task_description:
-        return [""] * env_num
-    if len(task_description) == env_num:
-        return [str(x) for x in task_description]
-    if len(task_description) == 1:
-        return [str(task_description[0])] * env_num
-    return [str(task_description[i % len(task_description)]) for i in range(env_num)]
-
 
 def dsrl_wrap_env(
     env_fn,
     config: _config.OnlineTrainConfig,
-    task_description: list[str] | str,
     env_num: int | None = None,
 ) -> tuple[DSRLVectorEnv, list[str]]:
     """Build a DSRLVectorEnv with all necessary wrappers."""
@@ -498,13 +478,10 @@ def dsrl_wrap_env(
     replan_steps = int(config.collect.replan_steps)
     domain = str(config.collect.domain)
 
-    task_description = _normalize_task_descriptions(task_description, env_num)
-
     env_factories = []
     for i in range(env_num):
-        task_desc_i = task_description[i]
 
-        def _make_env(rank=i, task_description_single=task_desc_i):
+        def _make_env(rank=i):
             base_env = env_fn(rank)
             if config.collect.use_time_to_success_as_reward:
                 base_env = TimeToSuccessAsRewardWrapper(base_env)
@@ -524,7 +501,6 @@ def dsrl_wrap_env(
     env = DSRLVectorEnv(
         env_factories,
         config=config,
-        task_description=task_description,
     )
     env.seed(int(config.seed))
-    return env, task_description
+    return env
