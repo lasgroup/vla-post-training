@@ -36,17 +36,20 @@ def generate_srun_command(
     Returns:
         Full srun command string.
     """
+    inner_cmd_parts = ["uv", "run", script, config_name] + flags_to_cli_tokens(flags)
+    inner_cmd = " ".join(shlex.quote(str(t)) for t in inner_cmd_parts)
+    # Run through bash so ulimit -c 0 is set inside the container process, not
+    # just in the sbatch shell (ulimit may not propagate through --environment).
+    bash_arg = f"ulimit -c 0 && {inner_cmd}"
     tokens = [
         "srun",
         f"--account={account}",
         f"--environment={environment}",
         f"--ntasks={ntasks}",
-        "uv",
-        "run",
-        script,
-        config_name,
+        "bash",
+        "-c",
+        bash_arg,
     ]
-    tokens.extend(flags_to_cli_tokens(flags))
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
 
 
@@ -145,7 +148,7 @@ def generate_run_commands(
             bsub_cmd += f"--mem-per-cpu={mem} "
 
         for cmd in command_list:
-            cluster_cmds.append(bsub_cmd + f'--wrap="{cmd}"')
+            cluster_cmds.append(bsub_cmd + f'--wrap="ulimit -c 0 && {cmd}"')
 
         if dry:
             for cmd in cluster_cmds:

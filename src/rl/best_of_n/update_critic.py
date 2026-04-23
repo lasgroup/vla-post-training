@@ -132,20 +132,9 @@ def init_state_action_critic_train_state(
             ema_params=None if ema_decay is None else params,
         )
 
-    # Initialize eagerly on CPU so that _orthogonal_cpu (used by MLP's default_init)
-    # actually runs on CPU and avoids the gpusolverDnCreate failure on GH200/Hopper.
-    # jax.default_device(cpu) inside jax.jit has no effect on XLA device placement,
-    # so the JIT path always sends linalg.qr to GPU, which fails on this cluster.
-    cpu = jax.devices("cpu")[0]
-    train_state = init(
-        jax.device_put(dummy_obs, cpu),
-        jax.device_put(dummy_act, cpu),
-        jax.device_put(init_rng, cpu),
-    )
-    # Derive sharding from the exact initialized tree to keep GraphDef metadata
-    # (including function-valued statics) aligned with the sharding pytree.
-    state_sharding = sharding.fsdp_sharding(train_state, mesh, log=False)
-    train_state = jax.device_put(train_state, state_sharding)
+    abstract_state = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
+    state_sharding = sharding.fsdp_sharding(abstract_state, mesh, log=False)
+    train_state = jax.jit(init, out_shardings=state_sharding)(dummy_obs, dummy_act, init_rng)
     return train_state, state_sharding
 
 
@@ -176,15 +165,9 @@ def init_state_value_train_state(
             ema_params=None if ema_decay is None else params,
         )
 
-    cpu = jax.devices("cpu")[0]
-    train_state = init(
-        jax.device_put(dummy_obs, cpu),
-        jax.device_put(init_rng, cpu),
-    )
-    # Derive sharding from the exact initialized tree to keep GraphDef metadata
-    # (including function-valued statics) aligned with the sharding pytree.
-    state_sharding = sharding.fsdp_sharding(train_state, mesh, log=False)
-    train_state = jax.device_put(train_state, state_sharding)
+    abstract_state = jax.eval_shape(init, dummy_obs, init_rng)
+    state_sharding = sharding.fsdp_sharding(abstract_state, mesh, log=False)
+    train_state = jax.jit(init, out_shardings=state_sharding)(dummy_obs, init_rng)
     return train_state, state_sharding
 
 
