@@ -54,7 +54,6 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-
     env_fn = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,
@@ -101,7 +100,6 @@ def main(config: _config.OnlineTrainConfig):
                 agent=agent,
                 env=env,
                 config=config,
-                task_description=task_description,
                 step=step,
             )
             wandb.log(collect_info, step=step)
@@ -115,7 +113,6 @@ def main(config: _config.OnlineTrainConfig):
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,
-                task_description=eval_task_description,
                 config=config,
                 step=step,
             )

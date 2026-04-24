@@ -67,7 +67,6 @@ def filtered_sft_wrap_env(
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
-                task_description=task_description,
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (

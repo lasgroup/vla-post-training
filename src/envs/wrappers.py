@@ -242,12 +242,9 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self,
         env: gym.Env,
         env_class: str,
-        task_description: str,
     ):
         super().__init__(env)
         self._env_class = env_class
-        self.task_description = task_description
-        logging.info(f"\nTask: {self.task_description}")
 
         dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
