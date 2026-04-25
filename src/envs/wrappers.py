@@ -5,8 +5,6 @@ import logging
 import math
 import numpy as np
 
-from src.envs.molmo_openpi import obs_to_openpi_input
-
 
 class GymnasiumEnvAdapter(gym.Env):
     """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
@@ -82,7 +80,6 @@ def _quat2axisangle(quat):
 def obs_to_pi_zero_input(
     obs,
     env_class: str,
-    molmo_config: Any | None = None,
 ):
     if env_class == "libero":
         obs_pi_zero = {
@@ -102,32 +99,16 @@ def obs_to_pi_zero_input(
             ),
         }
     elif env_class == "molmo":
-        base_obs = obs_to_openpi_input(
-            obs,
-            exo_camera_key=getattr(molmo_config, "exo_camera_key", "exo_camera_1"),
-            wrist_camera_key=getattr(molmo_config, "wrist_camera_key", "wrist_camera"),
-            gripper_obs_norm=float(getattr(molmo_config, "gripper_obs_norm", 0.824033)),
-        )
-        # Keep both key layouts so either LeRobot-DROID (no "observation/" prefix
-        # after buffer stripping) or RLDS-DROID (with prefix) transforms can consume
-        # collected online trajectories.
-        obs_pi_zero = dict(base_obs)
-        obs_pi_zero.update(
-            {
-                "observation/observation/exterior_image_1_left": base_obs[
-                    "observation/exterior_image_1_left"
-                ],
-                "observation/observation/wrist_image_left": base_obs[
-                    "observation/wrist_image_left"
-                ],
-                "observation/observation/joint_position": base_obs[
-                    "observation/joint_position"
-                ],
-                "observation/observation/gripper_position": base_obs[
-                    "observation/gripper_position"
-                ],
-            }
-        )
+        gripper_obs_norm: float = 0.824033    
+        qpos = obs["qpos"]
+        gripper = np.asarray(qpos["gripper"], dtype=np.float32)
+        grip = np.clip(float(gripper[0]) / gripper_obs_norm, 0.0, 1.0)
+        obs_pi_zero = {
+            "observation/exterior_image_1_left": obs["exo_camera_1"],
+            "observation/wrist_image_left": obs["wrist_camera"],
+            "observation/joint_position": np.asarray(qpos["arm"][:7], dtype=np.float32),
+            "observation/gripper_position": np.asarray([grip], dtype=np.float32),
+        }
     else:
         raise NotImplementedError
     return obs_pi_zero
@@ -261,11 +242,9 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         self,
         env: gym.Env,
         env_class: str,
-        molmo_config: Any | None = None,
     ):
         super().__init__(env)
         self._env_class = env_class
-        self._molmo_config = molmo_config
 
         dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
@@ -288,7 +267,6 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
         return obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
-            molmo_config=self._molmo_config,
         )
 
 

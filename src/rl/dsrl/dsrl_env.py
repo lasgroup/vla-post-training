@@ -488,7 +488,7 @@ def dsrl_wrap_env(
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=domain,
-                molmo_config=getattr(config, "molmo", None),
+                task_description=task_description_single,
             )
             base_env = QueryFrequencyWrapper(
                 env=base_env,
