@@ -178,6 +178,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return {
             "state_action_critic_state": self._state_action_critic_state,
             "value_state": self._value_state,
+            "normalizer_state": self._normalizer_state
         }
 
     def _rl_checkpoint_dir(self) -> epath.Path:
@@ -200,6 +201,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
         self._state_action_critic_state = restored["state_action_critic_state"]
         self._value_state = restored["value_state"]
+        self._normalizer_state = restored["normalizer_state"]
 
     def save_checkpoint(self, step: int | None = None):
         if step is None:
