@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Launcher for full-MPO experiments (Abdolmaleki et al. 2018, flow-policy adapted).
+"""Launcher for Flow-PG experiments.
 
-MPO has its own update() (group sampling, E-step dual eta, M-step adaptive KL,
-optional reserve buffer), so the AWR-derived knobs (normalizer, beta) play a
-smaller role. We sweep MPO-specific knobs: group_size, epsilon_e (E-step KL
-budget), epsilon_m (M-step KL target), use_dual_eta vs fixed beta.
+Holds AWR's tuned defaults constant and sweeps Flow-PG's distinctive knobs:
+kl_coef (KL penalty against EMA), clip_epsilon (PPO trust region — newly
+added after the bug fix that introduced the importance ratio), num_steps,
+noise_level.
 
 Usage:
-    ./scripts/mpo_agent/launcher.py --project_name mpo_sweep
-    ./scripts/mpo_agent/launcher.py --project_name mpo_sweep --dry
+    ./scripts/flow_pg_agent/launcher.py --project_name flow_pg_sweep
+    ./scripts/flow_pg_agent/launcher.py --project_name flow_pg_sweep --dry
 """
 
 import argparse
@@ -28,9 +28,9 @@ from launcher_util import (
     validate_unique_exp_names,
 )
 
-SCRIPT = "scripts/mpo_agent/exp.py"
-CONFIG_NAME = "pi05_libero_online_mpo"
-PROJECT_NAME = "mpo_sweep"
+SCRIPT = "scripts/flow_pg_agent/exp.py"
+CONFIG_NAME = "pi05_libero_online_flow_pg_sft"
+PROJECT_NAME = "flow_pg_sweep"
 NUM_TRAIN_STEPS = 10_000
 
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
@@ -38,34 +38,29 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "log_interval": [25],
     "batch_size": [256],
 
-    # Shared training defaults (kept consistent with AWR for fair comparison).
-    "rl.online_ratio": [1.0],
+    # AWR defaults — frozen.
+    "rl.beta": [0.2],
+    "rl.normalizer_config.ema_weight": [0.99],
+    "rl.use_mc_returns": [False],
     "rl.policy_training_start_step": [900],
+    "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
+    "rl.store_success_episodes_only": [False],
+    "rl.num_critic_updates_per_batch": [10],
     "lr_schedule.value": [2.5e-5],
     "collect.num_initial_rollouts": [5],
     "collect.num_rollouts": [8],
     "collect.use_time_to_success_as_reward": [True],
-    "rl.num_critic_updates_per_batch": [10],
     "rl.td_weight_schedule.init_value": [0.5],
     "rl.td_weight_schedule.end_value": [0.5],
     "rl.td_weight_schedule.switch_step": [500_000],
-    "rl.use_ema_for_sampling": [True],
+
+    # Flow-PG knobs
+    "rl.kl_coef": [0.0, 0.01, 0.1],
+    "rl.clip_epsilon": [0.2],
     "rl.num_steps": [10],
     "rl.noise_level": [0.3],
-
-    # MPO-specific knobs.
-    "rl.group_size": [4, 8],
-    "rl.use_dual_eta": [True],
-    "rl.epsilon_e": [0.1, 0.5],     # E-step KL budget
-    "rl.dual_eta_steps": [15],
-    "rl.dual_eta_lr": [0.5],
-    "rl.use_adaptive_kl": [True],
-    "rl.epsilon_m": [0.01],         # M-step KL target
-    "rl.alpha_kl_lr": [0.01],
-    "rl.kl_coef": [0.01],           # initial alpha_kl
-    "rl.normalize_adv": [False],    # always False when use_dual_eta=True
-    "rl.reserve_buffer_size": [0],
+    "rl.use_ema_for_sampling": [True],
     "rl.store_buffer_actions_in_batch": [False],
 
     ("collect.tasks", "collect.eval_tasks"): [
@@ -111,14 +106,8 @@ def main() -> None:
         flags.update(combo)
         flags = apply_requeue_flags(flags, enabled=args.requeue)
 
-        # Critic warmup ends right when policy training starts.
         policy_start = flags["rl.policy_training_start_step"]
         flags["rl.critic_pre_training_steps"] = policy_start
-
-        # MPO subsamples policy batch by group_size; require divisibility.
-        bs = flags.get("batch_size", 256)
-        gs = flags.get("rl.group_size", 8)
-        assert bs % gs == 0, f"batch_size {bs} must be divisible by group_size {gs}"
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)

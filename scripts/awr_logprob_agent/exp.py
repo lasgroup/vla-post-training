@@ -1,4 +1,5 @@
 # ruff: noqa: E402
+# suppress Numba FNV hashing warnings
 import warnings
 
 from src.rl.networks.mlp import MLP
@@ -6,25 +7,30 @@ from src.rl.networks.encoders.encoders import MLPEncoder
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
+# suppress lerobot version warnings
 import logging
 
 
 class VersionWarningFilter(logging.Filter):
     def filter(self, record):
+        # avoid lerobot warning
         return "is in 2.0 format" not in record.getMessage()
 
 
 logging.getLogger().addFilter(VersionWarningFilter())
 
+# disable datasets progress bars
 from datasets import disable_progress_bars
 
 disable_progress_bars()
 
+# allows using subprocenvs
 import multiprocessing as mp
 import os
 
 mp.set_start_method("spawn", force=True)
 
+# Spawned env workers re-import this module. Keep them off GPU/JAX device init.
 if mp.current_process().name != "MainProcess":
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
@@ -47,8 +53,8 @@ from src.rl.advantage_weighted_sft.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
+from src.rl.awr_logprob.awr_logprob_learner import AWRLogProbLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
-from src.rl.flow_grpo.flow_grpo_learner import FlowGRPOLearner
 from src.rl.networks.decoders.values.state_action_value import (
     StateActionEnsembleDecoder,
 )
@@ -113,7 +119,7 @@ def _build_pi0_backbone_critic_defs(
     *,
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
-    assert isinstance(config.rl, _config.FlowGRPOSFTLearnerConfig)
+    assert isinstance(config.rl, _config.AWRLogProbLearnerConfig)
     critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
     critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
     critic_num_qs = config.rl.critic_num_qs
@@ -184,7 +190,7 @@ def main(config: _config.OnlineTrainConfig):
     logging.info(f"Running on: {platform.node()}")
     if config.collect.store_prefix_rep:
         logging.info(
-            "return_prefix_rep is enabled, but Flow-GRPO critics recompute prefix "
+            "return_prefix_rep is enabled, but AWR-LogProb critics recompute prefix "
             "embeddings from observations every update."
         )
 
@@ -214,7 +220,7 @@ def main(config: _config.OnlineTrainConfig):
     state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
         config, prefix_embedding_shape=prefix_embedding_shape
     )
-    agent = FlowGRPOLearner(
+    agent = AWRLogProbLearner(
         config=config,
         dummy_obs=dummy_obs,
         dummy_act=dummy_act,

@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Dict, Tuple
 
 import openpi.models.model as _model
@@ -14,6 +15,16 @@ from src.training.config import MPOWeightedSFTLearnerConfig
 class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
     def _policy_mc_return_sharding(self):
         return self._replicated_sharding
+
+    def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
+        """Whether to replace buffer actions with policy-sampled actions.
+
+        Subclasses (e.g. flow_mpo, flow_pg, mpo) override this to express
+        intent like "use policy actions only for the critic" or "always use
+        buffer actions for the policy update".
+        """
+        assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
+        return not self._config.rl.store_buffer_actions_in_batch
 
     @at.typecheck
     def _get_on_policy_action(
@@ -48,14 +59,14 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         # Add prefix representation to the batch for the critic
         policy_sample_rng, rng = jax.random.split(rng, 2)
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        if self._config.rl.store_buffer_actions_in_batch:
-            value_action = batch["actions"]
-        else:
+        if self._replace_buffer_actions_with_policy_actions(critic_update=True):
             value_action = self._get_on_policy_action(
                 online_observation=_model.Observation.from_dict(batch["observation"]),
                 policy_state=policy_state,
                 rng=policy_sample_rng,
             )
+        else:
+            value_action = batch["actions"]
 
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -100,9 +111,10 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
         mc_return: at.Array | None = None,
+        scale: at.Array | float = 1.0,
     ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        if not self._config.rl.store_buffer_actions_in_batch:
+        if self._replace_buffer_actions_with_policy_actions(critic_update=False):
             policy_sample_rng, rng = jax.random.split(rng, 2)
             on_policy_action = self._get_on_policy_action(
                 online_observation=batch[0],
@@ -115,14 +127,34 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
             batch,
             policy_state=policy_state,
         )
-        # Update the policy state
+        # `scale` accepted to stay compatible with AdvantageWeightedSFTLearner's
+        # JIT wrapper. Only forwarded when the active actor train_step accepts
+        # it (the default AWR train_step does; subclasses that swap in their own
+        # train_step typically also override _update_policy, but FlowGRPO does
+        # not, so we introspect to stay safe).
+        train_kwargs = {"mc_return": mc_return}
+        if _train_step_accepts(self._train_step, "scale"):
+            train_kwargs["scale"] = scale
         policy_state, info = self._train_step(
             rng,
             policy_state,
             q_state,
             value_state,
             batch,
-            mc_return=mc_return,
+            **train_kwargs,
         )
 
         return policy_state, info
+
+
+def _train_step_accepts(fn, name: str) -> bool:
+    """True if `fn` (or the wrapped function inside a functools.partial) has a
+    keyword-or-positional parameter named `name`."""
+    inner = fn
+    while hasattr(inner, "func"):
+        inner = inner.func
+    try:
+        sig = inspect.signature(inner)
+    except (TypeError, ValueError):
+        return False
+    return name in sig.parameters

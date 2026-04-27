@@ -1,39 +1,59 @@
 # ruff: noqa: E402
+# suppress Numba FNV hashing warnings
+import os
+import sys
 import warnings
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+OPENPI_SRC_ROOT = os.path.join(REPO_ROOT, "openpi", "src")
+if OPENPI_SRC_ROOT not in sys.path:
+    sys.path.insert(0, OPENPI_SRC_ROOT)
 
 from src.rl.networks.mlp import MLP
 from src.rl.networks.encoders.encoders import MLPEncoder
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
+# suppress lerobot version warnings
 import logging
 
 
 class VersionWarningFilter(logging.Filter):
     def filter(self, record):
+        # avoid lerobot warning
         return "is in 2.0 format" not in record.getMessage()
 
 
 logging.getLogger().addFilter(VersionWarningFilter())
 
+# disable datasets progress bars
 from datasets import disable_progress_bars
 
 disable_progress_bars()
 
+# allows using subprocenvs
 import multiprocessing as mp
-import os
 
 mp.set_start_method("spawn", force=True)
 
+# Spawned env workers re-import this module. Keep them off GPU/JAX device init.
 if mp.current_process().name != "MainProcess":
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
+# Avoid aggressive JAX GPU preallocation in the trainer process.
+# os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+# os.environ["JAX_LOG_COMPILES"] = "1"
+# logging.getLogger("jax").setLevel(logging.WARNING)
 os.environ["JAX_LOG_COMPILES"] = "1"
+# optional: also shows dispatch
 os.environ["JAX_LOG_COMPILATION_CACHE"] = "1"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 import gc
 import platform
+from typing import Any
 
 import flax.nnx as nnx
 from flax.training import common_utils
@@ -48,7 +68,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
     StateValueDef,
 )
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
-from src.rl.flow_grpo.flow_grpo_learner import FlowGRPOLearner
+from src.rl.mpo.mpo import MPOLearner
 from src.rl.networks.decoders.values.state_action_value import (
     StateActionEnsembleDecoder,
 )
@@ -56,9 +76,8 @@ from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecode
 from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
-from src.training.collect import collect_data, evaluate_policy
-from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, init_wandb
+from src.training.train_loop import train_loop
 
 
 def _pool_prefix_embedding(prefix_rep: jax.Array) -> jax.Array:
@@ -86,7 +105,7 @@ def _infer_prefix_embedding_shape(
             prefix_rep = prefix_rep[0]
         prefix_rep = _pool_prefix_embedding(prefix_rep)
         return tuple(int(x) for x in prefix_rep.shape[1:])
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - startup fallback path
         logging.warning("Failed to infer Pi0 prefix embedding shape: %s", exc)
         return None
     finally:
@@ -113,7 +132,7 @@ def _build_pi0_backbone_critic_defs(
     *,
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
-    assert isinstance(config.rl, _config.FlowGRPOSFTLearnerConfig)
+    assert isinstance(config.rl, _config.MPOLearnerConfig)
     critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
     critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
     critic_num_qs = config.rl.critic_num_qs
@@ -182,18 +201,18 @@ def _build_pi0_backbone_critic_defs(
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
-    if config.collect.store_prefix_rep:
-        logging.info(
-            "return_prefix_rep is enabled, but Flow-GRPO critics recompute prefix "
-            "embeddings from observations every update."
-        )
 
-    env_fn = make_env(config, config.collect.tasks)
-    env = filtered_sft_wrap_env(env_fn=env_fn, config=config)
-    eval_env_fn = make_env(config, config.collect.eval_tasks)
+    env_fn, task_description = make_env(config, config.collect.tasks)
+    env = filtered_sft_wrap_env(
+        env_fn=env_fn,
+        config=config,
+        task_description=task_description,
+    )
+    eval_env_fn, eval_task_description = make_env(config, config.collect.eval_tasks)
     eval_env = filtered_sft_wrap_env(
         env_fn=eval_env_fn,
         config=config,
+        task_description=eval_task_description,
         env_num=config.collect.eval_env_num,
     )
 
@@ -214,61 +233,24 @@ def main(config: _config.OnlineTrainConfig):
     state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
         config, prefix_embedding_shape=prefix_embedding_shape
     )
-    agent = FlowGRPOLearner(
+    agent = MPOLearner(
         config=config,
         dummy_obs=dummy_obs,
         dummy_act=dummy_act,
         state_action_critic_def=state_action_critic_def,
         state_value_def=state_value_def,
+        task_description=task_description,
     )
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
-    start_step = int(agent.training_steps)
-    pbar = tqdm.tqdm(
-        range(start_step, config.num_train_steps),
-        initial=start_step,
-        total=config.num_train_steps,
-        dynamic_ncols=True,
+    train_loop(
+        config=config,
+        agent=agent,
+        env=env,
+        eval_env=eval_env,
+        task_description=task_description,
+        eval_task_description=eval_task_description,
     )
-
-    infos = []
-    for step in pbar:
-        info = agent.update()
-        infos.append(info)
-
-        if step % config.log_interval == 0:
-            all_keys = set().union(*(d.keys() for d in infos))
-            nan = jnp.array(float("nan"))
-            normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
-            stacked_infos = common_utils.stack_forest(normalized)
-            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
-            infos = []
-
-        if step % config.collect.collect_interval == 0:
-            collect_info, n_collected_episodes = collect_data(
-                agent=agent, env=env, config=config, step=step,
-            )
-            wandb.log(collect_info, step=step)
-            if n_collected_episodes > 0:
-                logging.info(
-                    f"Collected {n_collected_episodes} successful episodes at step {step}."
-                )
-            save_epoch_state(agent, config)
-
-        if step % config.collect.eval_interval == 0:
-            eval_info = evaluate_policy(
-                agent=agent, env=eval_env, config=config, step=step,
-            )
-            wandb.log(eval_info, step=step)
-            logging.info(
-                f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
-            )
-
-    logging.info("Waiting for checkpoint manager to finish")
-    agent._checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":

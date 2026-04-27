@@ -1,5 +1,4 @@
-# ruff: noqa: F722
-from src.training.config import OnlineTrainConfig, FlowGRPOSFTLearnerConfig
+from src.training.config import OnlineTrainConfig, FlowPGSFTLearnerConfig
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
     flatten_action_horizon,
@@ -17,7 +16,7 @@ import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.utils as training_utils
 from src.rl.networks.rl_networks import ObsType
 
-# calc. log-probs of a previous trajectory under new model
+
 def _compute_rollout_log_probs(
     *,
     model: _model.BaseModel,
@@ -26,16 +25,18 @@ def _compute_rollout_log_probs(
     num_steps: int,
     noise_level: float,
 ) -> at.Array:
+    """Per-flow-step log-probs (shape [batch, horizon, num_flow_steps]).
+
+    Each entry is one denoising-step transition density under *model*. PPO
+    ratios are then formed elementwise per (batch, horizon, flow-step), not as
+    a ratio of the joint trajectory likelihoods.
+    """
     rollout_x = jax.lax.stop_gradient(rollout_info["x"])
     rollout_x_next = jax.lax.stop_gradient(rollout_info["x_next"])
     rollout_time = jax.lax.stop_gradient(rollout_info["time"])
     dt = jnp.asarray(-1.0 / max(num_steps, 1), dtype=rollout_x.dtype)
 
-    def step_log_prob(
-        x_t: at.Array,
-        x_next: at.Array,
-        time: at.Array,
-    ) -> at.Array:
+    def step_log_prob(x_t, x_next, time):
         time = jnp.broadcast_to(
             jnp.asarray(time, dtype=rollout_x.dtype), (x_t.shape[0],)
         )
@@ -50,14 +51,11 @@ def _compute_rollout_log_probs(
         return log_prob
 
     policy_log_probs = jax.vmap(step_log_prob, in_axes=(0, 0, 0))(
-        rollout_x,
-        rollout_x_next,
-        rollout_time,
+        rollout_x, rollout_x_next, rollout_time,
     )
-
     # [num_steps, batch, horizon] -> [batch, horizon, num_steps]
     return jnp.moveaxis(policy_log_probs, 0, -1)
-    
+
 
 @at.typecheck
 def train_step(
@@ -69,29 +67,28 @@ def train_step(
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
+    assert isinstance(config.rl, FlowPGSFTLearnerConfig)
     policy_observation, critic_observation, actions = batch
 
     reset_period = config.rl.reset_policy_params_to_ema_period
-    group_size = config.rl.group_size
-    normalize_adv = config.rl.normalize_adv
+    weight_clip = config.rl.weight_clip
+    beta = max(config.rl.beta, 1e-6)
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
     use_ema_for_sampling = config.rl.use_ema_for_sampling
+    kl_coef = config.rl.kl_coef
     clip_epsilon = config.rl.clip_epsilon
-   
 
     # build two models one for sampling, one ema
     # current policy for gradient computatioms
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()
-    # use ema one if it is enabled with a flag and fall back to current one if not avlb
+
     if use_ema_for_sampling and policy_state.ema_params is not None:
         sampling_model = nnx.merge(policy_state.model_def, policy_state.ema_params)
-        sampling_model.eval()
     else:
         sampling_model = nnx.merge(policy_state.model_def, policy_state.params)
-        sampling_model.eval()
+    sampling_model.eval()
 
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
@@ -99,69 +96,76 @@ def train_step(
     value_critic = create_critic(value_state, config)
     value_critic.eval()
 
-    # define batch extension out of loss function
-    def expand_and_flatten(x):
-        return jnp.repeat(x, repeats=group_size, axis=0)
-
-    expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
-    expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
-
+     # sample actions from ema
     train_rng = jax.random.fold_in(rng, policy_state.step)
     step_rng, noise_rng = jax.random.split(train_rng)
 
-    # sample actions from ema
     noise = jax.random.normal(
         noise_rng,
         (
-            expanded_policy_obs.state.shape[0],
+            policy_observation.state.shape[0],
             sampling_model.action_horizon,
             sampling_model.action_dim,
         ),
     )
     sampled_actions, rollout_info = sampling_model.sample_actions(
         rng=step_rng,
-        observation=expanded_policy_obs,
+        observation=policy_observation,
         noise=noise,
         num_steps=num_steps,
         noise_level=noise_level,
         return_info_dict=True,
     )
 
-    # log-probs under ema/old policy (shape [B*G, action_horizon, num_steps])
-    old_log_probs = jnp.moveaxis(rollout_info["log_prob"], 0, -1)
-    old_log_probs = jax.lax.stop_gradient(old_log_probs)
+    # log-probs under the *sampling* (EMA) policy. We use these as `pi_old` in
+    # the PPO importance ratio so the off-policy gradient estimate is unbiased.
+    # Without it, `-mean(score * log pi_new)` is a biased estimate of REINFORCE
+    # because actions were sampled from EMA, not from the current policy.
+    old_log_probs = jax.lax.stop_gradient(
+        jnp.moveaxis(rollout_info["log_prob"], 0, -1)
+    )
 
     # fix trajectory so the current policy is evaluated correctly
     rollout_info = jax.tree.map(jax.lax.stop_gradient, rollout_info)
 
+    # compute mpo scores
     value = summarize_critic_values(
-        value_critic(expanded_critic_obs),
+        value_critic(critic_observation),
         critic_reduction=config.rl.critic_reduction,
     )
     q_value = summarize_critic_values(
-        state_action_critic(expanded_critic_obs, flatten_action_horizon(sampled_actions)),
+        state_action_critic(critic_observation, flatten_action_horizon(sampled_actions)),
         critic_reduction=config.rl.critic_reduction,
     )
     advantage = q_value - value
 
-    # calvulate scores
-    adv = advantage
-    if normalize_adv and group_size > 1:
-        total_batch_size = adv.shape[0]
-        assert (
-            total_batch_size % group_size == 0
-        ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-        B = total_batch_size // group_size
-        adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-        old_log_probs = jnp.swapaxes(old_log_probs.reshape(B, group_size, -1), 1, 2)
-        group_mean = jnp.mean(adv, axis=-1, keepdims=True)
-        group_std = jnp.std(adv, axis=-1, keepdims=True)
-        adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
-    score = jax.lax.stop_gradient(adv)
+    # Self-normalising weights: softmax over the batch turns advantages into
+    # non-negative weights that sum to 1, so the gradient magnitude is
+    # invariant to the absolute scale of the advantages. 
+    batch_size = advantage.shape[0]
+    score = advantage / beta
+    score = jnp.minimum(score, weight_clip)
+    score = jax.nn.softmax(score, axis=0) * batch_size  # mean(score) = 1
+    score = jax.lax.stop_gradient(score)
 
     if score.ndim == 1:
         score = score[:, jnp.newaxis, jnp.newaxis]
 
+    # ref. log probs for kl computation
+    reference_log_probs = None
+    if kl_coef > 0.0 and noise_level > 0.0 and policy_state.ema_params is not None:
+        ref_model = nnx.merge(policy_state.model_def, policy_state.ema_params)
+        ref_model.eval()
+        reference_log_probs = _compute_rollout_log_probs(
+            model=ref_model,
+            policy_observation=policy_observation,
+            rollout_info=rollout_info,
+            num_steps=num_steps,
+            noise_level=noise_level,
+        )
+        reference_log_probs = jax.lax.stop_gradient(reference_log_probs)
+
+    # score x log_probs + kl
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
@@ -171,33 +175,38 @@ def train_step(
         state_action_critic: nnx.Module,
         value_critic: nnx.Module,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-         # evaluate current policy log-probs on the previously ema-trajectory.
         current_log_probs = _compute_rollout_log_probs(
             model=model,
-            policy_observation=expanded_policy_obs,
+            policy_observation=policy_observation,
             rollout_info=rollout_info,
             num_steps=num_steps,
             noise_level=noise_level,
         )
 
-        if normalize_adv and group_size > 1:
-            B = current_log_probs.shape[0] // group_size
-            current_log_probs = jnp.swapaxes(
-                current_log_probs.reshape(B, group_size, -1), 1, 2
-            )
-
-        # r_t(theta) = pi_theta / pi_theta_old  -> logr_t = log_pi_theta - log_pi_theta_old
+        # PPO-style surrogate with the EMA sampling policy as pi_old.
+        # `score` is non-negative (post-softmax), so the standard PPO
+        # `min(r * w, clip(r) * w)` form keeps a recovery gradient when the
+        # ratio drifts below 1-eps.
         log_ratio = current_log_probs - old_log_probs
-        ratio = jnp.exp(log_ratio) # ratio = exp(logr) = r
-
-        # clip it with epsilon min(r * A, clip(r, 1-eps, 1+eps) * A)
+        ratio = jnp.exp(log_ratio)
         clipped_ratio = jnp.clip(ratio, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
         surr1 = ratio * score
         surr2 = clipped_ratio * score
-        loss = -jnp.mean(jnp.minimum(surr1, surr2))
+        pg_loss = -jnp.mean(jnp.minimum(surr1, surr2))
+
+        # kl against ema
+        kl_loss = jnp.asarray(0.0, dtype=current_log_probs.dtype)
+        ref_log_prob_mean = jnp.asarray(0.0, dtype=current_log_probs.dtype)
+        if kl_coef > 0.0 and reference_log_probs is not None:
+            kl_loss = jnp.mean(reference_log_probs - current_log_probs)
+            ref_log_prob_mean = jnp.mean(reference_log_probs)
+
+        loss = pg_loss + kl_coef * kl_loss
 
         info = {
             "loss": loss,
+            "pg_loss": pg_loss,
+            "kl_loss": kl_loss,
             "q_mean": jnp.mean(q_value),
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(current_log_probs),
@@ -206,13 +215,10 @@ def train_step(
             "ratio_clipped_frac": jnp.mean(
                 (ratio < 1.0 - clip_epsilon) | (ratio > 1.0 + clip_epsilon)
             ),
+            "reference_log_prob_mean": ref_log_prob_mean,
         }
-
         return loss, info
 
-    train_rng = jax.random.fold_in(rng, policy_state.step)
-
-    # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
@@ -231,7 +237,6 @@ def train_step(
     )
     new_params = optax.apply_updates(params, updates)
 
-    # Update the model in place and return the new full state.
     nnx.update(policy_model, new_params)
     new_params = nnx.state(policy_model)
 
@@ -264,7 +269,6 @@ def train_step(
                 step % reset_period == 0, revert_to_ema, keep_state, new_state
             )
 
-    # Filter out params that aren't kernels.
     kernel_params = nnx.state(
         policy_model,
         nnx.All(

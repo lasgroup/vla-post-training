@@ -163,8 +163,33 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class AWRLogProbLearnerConfig(AdvantageWeightedSFTLearnerConfig):
+    """AWR with flow-GRPO-style log-prob loss.
+
+    Keeps everything from AWR (exp(A/beta/scale) advantage weighting, normalizer
+    EMA, off-policy V critic, mc_return path) and only swaps the FM regression
+    loss for a clipped importance ratio of trajectory log-probs against actions
+    sampled from the (EMA) policy. Score is always positive, so we only use the
+    one-sided clipped surrogate `clip(r, 1-eps, 1+eps) * w` (no PPO `min`).
+    """
+    num_steps: int = 10
+    noise_level: float = 0.3
+    use_ema_for_sampling: bool = True
+    clip_epsilon: float = 0.2
+    # If True (default), use the standard PPO `min(r * w, clip(r) * w)`
+    # surrogate, which keeps a recovery gradient when the ratio drifts below
+    # 1-eps and matches stock PPO. If False, use the one-sided `clip(r) * w`
+    # form: simpler and matches "score is always positive so min is not
+    # needed" reasoning, but loses the recovery gradient. With positive AWR
+    # weights, the only material difference is the downside-recovery branch.
+    use_pessimistic_clip: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
 class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     store_buffer_actions_in_batch: bool = False
+    use_ema_for_sampling: bool = True
+    reset_optimizer_on_ema_reset: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -173,7 +198,75 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
+    clip_epsilon: float = 0.2
+    # NOTE: read into update_actor as `beta` / `weight_clip` for historical
+    # reasons but the implemented loss is signed PPO surrogate (not exp-weighted),
+    # so they have no effect. Left in MPOWeightedSFTLearnerConfig (inherited)
+    # only to keep the AWR-style critic config knobs (beta lives on AWR config).
+    use_mpo_advantage_weight: bool = True  # currently unused; kept for backward compat
+
+
+@dataclasses.dataclass(frozen=True)
+class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    group_size: int = 1
+    num_steps: int = 10
+    noise_level: float = 0.3
+    normalize_adv: bool = True
+    clip_epsilon: float = 0.2
+    # When True, use NormalizerState (see normalizer_config inherited from
+    # AdvantageWeightedSFTLearnerConfig) to rescale advantages before exp().
+    # When False, fall back to the legacy fixed divisor: score / config.rl.advantage_scale.
+    use_adaptive_advantage_scale: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class FlowPGSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    num_steps: int = 10
+    noise_level: float = 0.3
+    kl_coef: float = 0.01
+    # PPO-style trust region: needed because actions are sampled from EMA but
+    # gradients flow through the current policy. Without the ratio the loss is
+    # a biased off-policy estimate of REINFORCE.
+    clip_epsilon: float = 0.2
+
+
+@dataclasses.dataclass(frozen=True)
+class MPOLearnerConfig(MPOWeightedSFTLearnerConfig):
+    """MPO with E-step dual optimization (Abdolmaleki et al., 2018).
+
+    Implements the full MPO algorithm:
+    - E-step: solve convex dual for temperature eta* (Eq. 8-9)
+    - M-step: weighted maximum likelihood with adaptive KL constraint (Eq. 10-12)
+    """
+    group_size: int = 8
+    num_steps: int = 10
+    noise_level: float = 0.3
+
+    # E-step dual optimization (paper Eq. 9, Table 2: epsilon = 0.1)
+    epsilon_e: float = 0.1
+    use_dual_eta: bool = True
+    dual_eta_steps: int = 15
+    dual_eta_lr: float = 0.5
+
+    # M-step KL constraint (paper Eq. 12)
+    epsilon_m: float = 0.01
+    kl_coef: float = 0.01
+    use_adaptive_kl: bool = True
+    alpha_kl_lr: float = 0.01
+
+    # Score computation
+    normalize_adv: bool = False  # should be False when using dual
+
+    # Reserve buffer: snapshot early successful experiences to prevent collapse.
+    # During [policy_training_start_step, +reserve_fill_steps] transitions from
+    # the online buffer are copied into a fixed reserve. After filling, a fraction
+    # of each training batch is drawn from the reserve instead of the online buffer.
+    reserve_buffer_size: int = 0  # 0 = disabled
+    reserve_fill_steps: int = 500
+    reserve_ratio: float = 0.25  # fraction of online batch drawn from reserve
+
+    # Critic control
+    freeze_critic_at_step: int | None = None
 
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
@@ -370,6 +463,14 @@ _CONFIGS.extend(
                 policy_training_start_step=100,
             ),
         ),
+        # 2b. AWR with log-prob loss (flow-GRPO-style ratios + clipping)
+        make_base_online_config(
+            name="pi05_libero_online_awr_logprob",
+            rl_config=AWRLogProbLearnerConfig(
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
         # 3. MPO Weighted SFT
         make_base_online_config(
             name="pi05_libero_online_mpo_sft",
@@ -385,6 +486,37 @@ _CONFIGS.extend(
                 store_buffer_actions_in_batch=True,
                 policy_update_interval=20,
                 policy_training_start_step=100,
+            ),
+        ),
+        # 5. Flow-MPO SFT
+        make_base_online_config(
+            name="pi05_libero_online_flow_mpo_sft",
+            rl_config=FlowMPOSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        # 6. Flow-PG SFT
+        make_base_online_config(
+            name="pi05_libero_online_flow_pg_sft",
+            rl_config=FlowPGSFTLearnerConfig(
+                store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        # 7. MPO (Abdolmaleki et al. 2018, adapted for flow policies)
+        make_base_online_config(
+            name="pi05_libero_online_mpo",
+            rl_config=MPOLearnerConfig(
+                critic_training_start_step=0,
+                critic_pre_training_steps=200,
+                policy_training_start_step=200,
+                online_ratio=1.0,
+                reserve_buffer_size=0,
+                reserve_fill_steps=500,
+                reserve_ratio=0.25,
             ),
         ),
         # 4. Best of N

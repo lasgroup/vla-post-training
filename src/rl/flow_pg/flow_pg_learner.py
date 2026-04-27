@@ -1,32 +1,24 @@
-"""Flow-GRPO learner.
-
-a subclass of MPOWeightedSFTLearner, owns its own `_update_policy_jitted` and `update()`.
-"""
 import gc
 import functools
-
+from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
+from src.rl.flow_pg.update_actor import train_step as flow_pg_train_step
+from src.training.config import FlowPGSFTLearnerConfig
+import openpi.models.model as _model
+import openpi.training.sharding as sharding
+import openpi.training.utils as training_utils
 import jax
 import jax.numpy as jnp
 import numpy as np
-import openpi.models.model as _model
 import openpi.shared.array_typing as at
-import openpi.training.sharding as sharding
-import openpi.training.utils as training_utils
-
-from src.rl.flow_grpo.update_actor import train_step as flow_grpo_train_step
-from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
-from src.training.config import FlowGRPOSFTLearnerConfig
 
 
-class FlowGRPOLearner(MPOWeightedSFTLearner):
+class FlowPGLearner(MPOWeightedSFTLearner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Drop AWR's normalizer-aware policy JIT and rebuild with the GRPO
-        # signature (no `scale`). Critic JIT from the parent is reused.
         del self._update_policy_jitted
         gc.collect()
 
-        self._train_step = functools.partial(flow_grpo_train_step, self._config)
+        self._train_step = functools.partial(flow_pg_train_step, self._config)
 
         def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
             return self._update_policy(
@@ -41,26 +33,25 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         self._update_policy_jitted = jax.jit(
             _policy_wrapper,
             in_shardings=(
-                self._data_sharding,                         # batch
-                self._train_state_sharding,                  # policy_state
-                self._state_action_critic_state_sharding,    # q_state
-                self._value_state_sharding,                  # value_state
-                self._replicated_sharding,                   # rng
-                self._replicated_sharding,                   # mc_return (None)
+                self._data_sharding,  # batch
+                self._train_state_sharding,  # policy_state
+                self._state_action_critic_state_sharding,  # q_state
+                self._value_state_sharding,  # value_state
+                self._replicated_sharding,  # rng
+                self._replicated_sharding,  # mc_return
             ),
             out_shardings=(
-                self._train_state_sharding,                  # policy_state
-                self._replicated_sharding,                   # info
+                self._train_state_sharding,  # policy_state
+                self._replicated_sharding,  # info
             ),
             donate_argnums=(1,),
         )
 
     def _replace_buffer_actions_with_policy_actions(self, critic_update: bool = True) -> bool:
-        # GRPO's actor samples its own actions inside train_step, so re-sampling
-        # for the policy batch in the parent would just be wasted compute.
         if critic_update:
-            return super()._replace_buffer_actions_with_policy_actions(critic_update=True)
-        return False
+            return super()._replace_buffer_actions_with_policy_actions(critic_update=critic_update)
+        else:
+            return False
 
     @at.typecheck
     def _get_on_policy_action(
@@ -71,12 +62,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
     ) -> _model.Actions:
         """Match the actor's sampling distribution.
 
-        The parent default uses vanilla `sample_actions` (default num_steps /
-        noise_level=0). Our actor samples with config.rl.num_steps and
-        config.rl.noise_level, so V must be trained on the same distribution.
+        The parent's default uses default num_steps / noise_level, but our
+        actor loss samples with config.rl.num_steps and config.rl.noise_level.
+        Without this override the V critic is trained on a different action
+        distribution than the one whose Q-V advantage drives the actor.
         """
         rl_config = self._config.rl
-        assert isinstance(rl_config, FlowGRPOSFTLearnerConfig)
+        assert isinstance(rl_config, FlowPGSFTLearnerConfig)
         model = self._get_policy_model(policy_state)
         sample_rng, noise_rng = jax.random.split(rng)
         batch_size = online_observation.state.shape[0]
@@ -96,7 +88,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, FlowGRPOSFTLearnerConfig)
+        assert isinstance(self._config.rl, FlowPGSFTLearnerConfig)
         rl_config = self._config.rl
 
         self.training_steps += 1
@@ -137,10 +129,10 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     )
                 self._state_action_critic_state = q_state
                 self._value_state = value_state
+
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
-
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
@@ -164,27 +156,10 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             else:
                 batch = next(self._data_iter)
         else:
-            # Online buffer not warm yet — fall back to offline data.
+            # Online buffer not ready; fall back to offline data
             batch = next(self._data_iter)
-
         if update_policy:
-            # The GRPO actor `train_step` repeats each sample group_size times
-            # To keep the config.batch_size, we subsample 1/group_size of the rows here.
-            policy_batch = batch
-            group_size = max(rl_config.group_size, 1)
-            if group_size > 1:
-                subsample_rng, self._rng = jax.random.split(self._rng, 2)
-                cur_size = int(jax.tree.leaves(policy_batch)[0].shape[0])
-                if cur_size % group_size != 0:
-                    raise ValueError(
-                        "FlowGRPO actor batch size must be divisible by group_size: "
-                        f"{cur_size} vs {group_size}."
-                    )
-                reduced_size = cur_size // group_size
-                indices = jax.random.permutation(subsample_rng, cur_size)[:reduced_size]
-                policy_batch = jax.tree.map(lambda x: x[indices], policy_batch)
-            policy_batch = jax.device_put(policy_batch, self._data_sharding)
-
+            policy_batch = jax.device_put(batch, self._data_sharding)
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
@@ -193,7 +168,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
-                    None,  # mc_return — GRPO uses Q-V advantages, not MC returns
+                    None,
                 )
             self._train_state = policy_state
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
