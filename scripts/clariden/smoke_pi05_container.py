@@ -64,7 +64,10 @@ def main() -> int:
         debug_cfg = get_openpi_config("debug_pi05")
         debug_model = debug_cfg.model.create(jax.random.key(0))
         debug_obs = debug_cfg.model.fake_obs(batch_size=1)
-        debug_actions = nnx_utils.module_jit(debug_model.sample_actions)(
+        debug_actions = nnx_utils.module_jit(
+            debug_model.sample_actions,
+            static_argnames=("num_steps",),
+        )(
             jax.random.key(1),
             debug_obs,
             num_steps=1,

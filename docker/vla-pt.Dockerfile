@@ -91,6 +91,7 @@ RUN PIP_CONSTRAINT= python -m pip install -e ".[smolvla,libero,uncertainty]" \
 RUN PIP_CONSTRAINT= python -m pip install \
       "augmax==0.4.1" \
       "beartype==0.19.0" \
+      "chex==0.1.89" \
       "compress-json==1.1.1" \
       "dm-tree==0.1.8" \
       "einops==0.8.1" \
