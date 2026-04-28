@@ -65,6 +65,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       zsh \
     && rm -rf /var/lib/apt/lists/*
 
+# The NGC base image ships a Python-package cmake launcher in /usr/local/bin.
+# PEP 517 build isolation later resolves that launcher without the matching
+# Python module, so wheel builds that probe `cmake --version` fail.
+RUN ln -sf /usr/bin/cmake /usr/local/bin/cmake \
+    && ln -sf /usr/bin/ctest /usr/local/bin/ctest
+
 RUN PIP_CONSTRAINT= python -m pip install --upgrade pip setuptools wheel "packaging==24.2"
 
 WORKDIR /opt/active_learning_vlas
