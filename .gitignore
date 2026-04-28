@@ -12,6 +12,7 @@ checkpoints/
 wandb/
 assets/
 logs/
+uv.lock
 
 # Cluster-specific files
 core_*
