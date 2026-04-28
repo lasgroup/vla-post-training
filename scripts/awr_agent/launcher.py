@@ -27,7 +27,7 @@ from launcher_util import (
 SCRIPT = "scripts/awr_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_aw_sft"
 PROJECT_NAME = "awr_agent_sweep"
-DEFAULT_LOG_INTERVAL = 50
+DEFAULT_LOG_INTERVAL = 25
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
@@ -40,53 +40,41 @@ DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 300
+DEFAULT_EVAL_INTERVAL = 2000
 DEFAULT_NUM_EVAL_ROLLOUTS = 8
-NUM_TRAIN_STEPS = 5_000
+NUM_TRAIN_STEPS = 10_000
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0, 1, 2, 3, 4],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [
-        10
-    ],
-    "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
     "rl.policy_training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.reset_policy_params_to_ema_period": [500],
-    "rl.use_mc_returns": [True],
+    "rl.use_mc_returns": [False],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
-    "rl.td_weight_schedule.switch_step": [1_000_000],
-    "rl.store_success_episodes_only": [True],
-    ("collect.tasks", "collect.eval_tasks"): [
-        # "libero_90_2",
-        # "libero_90_7",
-        # "libero_90_9",
-        # "libero_90_11",
-        ("libero_90_32-63", "libero_90_32-63"),
-        # "libero_90_26",
-        # "libero_90_28",
-        # "libero_90_30",
-        # "libero_90_31",
-        # "libero_90_35",
-        # ("libero_90_38", "libero_90_38"),
-        # "libero_90_41",
-        # "libero_90_53",
-        # ("libero_90_59", "libero_90_59"),
-        # "libero_90_60",
-        # "libero_90_61",
-        # "libero_90_62",
-        # ("libero_90_64", "libero_90_64"),
-        # "libero_90_74",
-        # "libero_90_77",
-        # "libero_90_79",
-        # ("libero_90_82", "libero_90_82"),
-    ],
+    "rl.store_success_episodes_only": [False],
+    "rl.normalizer_config.ema_weight": [0.99],
+    "rl.beta": [0.2],
+    # Ralf settings:
+    "collect.num_rollouts": [8],
+    "collect.use_time_to_success_as_reward": [True],
+    "rl.num_critic_updates_per_batch": [10],
+    "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
+    "rl.td_weight_schedule.end_value": [0.5],
+    "rl.td_weight_schedule.switch_step": [500_000],
+    # Single-task
+        ("collect.tasks", "collect.eval_tasks"): [
+            ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
+            ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
+            ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
+            ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
+            ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
+        ],
 }
 
 
@@ -174,6 +162,18 @@ def main() -> None:
         elif flags["rl.td_weight_schedule.switch_step"] >= NUM_TRAIN_STEPS:
             flags["rl.use_ema_critic"] = False
 
+        num_rollouts = flags['collect.num_rollouts']
+        num_train_envs = flags['collect.env_num']
+        num_train_envs = min(num_train_envs, num_rollouts)
+
+        # enforce even env count if desired
+        if num_train_envs % 2 != 0:
+            num_train_envs -= 1
+        num_train_envs = max(1, num_train_envs)
+        # make rollouts divisible
+        num_rollouts = math.ceil(num_rollouts / num_train_envs) * num_train_envs
+        flags['collect.num_rollouts'] = num_rollouts
+        flags['collect.env_num'] = num_train_envs
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)
 
