@@ -207,6 +207,30 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class FlowAWRSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
+    """AWR with flow-policy log-prob loss, computed against *buffer-stored*
+    noise trajectories (not on-policy samples).
+
+    Identical to AWR for the critic (V/Q on buffer actions, AWR exp(A/β/scale)
+    advantage weighting). The actor loss is replaced with a per-flow-step PPO
+    surrogate against the rollout the policy executed at collection time --
+    which is why each transition in the buffer must carry the noise sequence
+    (`x`, `x_next`, `time`, `log_prob`) that produced its action.
+
+    Inherits AWR's beta / weight_clip / advantage_scale / normalizer_config /
+    EMA settings; sampling-related knobs match flow_mpo / flow_pg / flow_grpo.
+
+    NOTE: Requires online_ratio == 1.0; offline data has no rollout_info.
+    """
+    num_steps: int = 10
+    noise_level: float = 0.3
+    clip_epsilon: float = 0.2
+    # Standard PPO `min(r·w, clip(r)·w)` surrogate (matches awr_logprob default
+    # after the use_pessimistic_clip flip).
+    use_pessimistic_clip: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
 class FlowMPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 1
     num_steps: int = 10
@@ -502,6 +526,15 @@ _CONFIGS.extend(
             name="pi05_libero_online_flow_pg_sft",
             rl_config=FlowPGSFTLearnerConfig(
                 store_buffer_actions_in_batch=False,
+                policy_update_interval=20,
+                policy_training_start_step=100,
+            ),
+        ),
+        # 6b. Flow-AWR (AWR critic + log-prob actor loss against buffer-stored
+        # noise trajectories). Critic config identical to AWR.
+        make_base_online_config(
+            name="pi05_libero_online_flow_awr",
+            rl_config=FlowAWRSFTLearnerConfig(
                 policy_update_interval=20,
                 policy_training_start_step=100,
             ),
