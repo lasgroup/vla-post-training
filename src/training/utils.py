@@ -57,6 +57,7 @@ def init_wandb(
             config=dataclasses.asdict(config),
             project=config.project_name,
             group=algorithm,
+            tags=getattr(config, "tags", []) or None,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 

@@ -320,6 +320,7 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     algorithm: str = ""
+    tags: list[str] = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
         if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
