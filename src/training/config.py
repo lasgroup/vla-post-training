@@ -105,6 +105,15 @@ class NormalizerConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class PARLConfig:
+    sft_update_every: int = 10
+    policy_update_interval: int = 1
+    policy_training_start_step: int = 0
+    online_ratio: float = 0.5
+    store_success_data_only: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
     discount: float = 0.99
     buffer_capacity: int = 1024
@@ -299,6 +308,7 @@ class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    parl: PARLConfig = PARLConfig()
     default_prompt: str | None = None
     requeue: bool = False
 
