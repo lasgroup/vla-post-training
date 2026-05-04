@@ -165,6 +165,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
+    aux_sft_weight: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

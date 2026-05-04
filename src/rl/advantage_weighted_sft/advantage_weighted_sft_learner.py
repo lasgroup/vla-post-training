@@ -98,9 +98,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_update_functions()
 
-    def _policy_mc_return_sharding(self):
-        return self._data_sharding
-
     def _refresh_update_functions(self):
         self._train_state_sharding = sharding.fsdp_sharding(
             self._train_state, self._mesh, log=False
@@ -115,13 +112,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, scale):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, is_success, mc_return, scale):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
                 q_state=q_state,
                 value_state=value_state,
                 rng=rng,
+                is_success=is_success,
                 mc_return=mc_return,
                 scale=scale,
             )
@@ -152,7 +150,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,
                 self._value_state_sharding,
                 self._replicated_sharding,
-                self._policy_mc_return_sharding(),
+                self._data_sharding, # is_success
+                self._data_sharding, # mc_returns
                 self._replicated_sharding,
             ),
             out_shardings=(
@@ -319,9 +318,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         assert isinstance(rl_config, AdvantageWeightedSFTLearnerConfig)
         if rl_config.store_success_episodes_only:
             if is_success:
-                self._save_episode_in_buffer(episode_data, task_description)
+                self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
         else:
-            self._save_episode_in_buffer(episode_data, task_description)
+            self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
     def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(
@@ -382,6 +381,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         q_state: training_utils.TrainState,
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
+        is_success: at.Array,
         mc_return: at.Array | None = None,
         scale: at.Array | float = 1.0,
     ):
@@ -397,6 +397,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             q_state,
             value_state,
             batch,
+            is_success=is_success,
             mc_return=mc_return,
             scale=scale,
         )
@@ -498,6 +499,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     "use_mc_returns requires online_ratio >= 1.0 "
                     "(MC returns are not available for offline data)"
                 )
+            is_success = online_batch["is_success"]
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
@@ -518,6 +520,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     batch,
                     online_batch,
                 )
+                is_success = jnp.concatenate([jnp.ones(n_offline), is_success], axis=0)
                 # The online batch may be replicated (PartitionSpec()) while
                 # the SFT batch is sharded. Re-shard the mixed result to
                 # match the data sharding expected by _train_step.
@@ -526,8 +529,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 gc.collect()
             else:
                 batch = next(self._data_iter)
+                first_leaf = jax.tree.leaves(batch)[0]
+                batch_size = first_leaf.shape[0]
+                is_success = jnp.ones(batch_size)
         else:
             batch = next(self._data_iter)
+            first_leaf = jax.tree.leaves(batch)[0]
+            batch_size = first_leaf.shape[0]
+            is_success = jnp.ones(batch_size)
         if update_policy:
             if self.debug:
                 log_memory_debug("before_update_policy")
@@ -540,6 +549,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
+                    is_success,
                     mc_return,
                     scale,
                 )

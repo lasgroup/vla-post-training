@@ -33,6 +33,7 @@ def train_step(
     state_action_critic_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
+    is_success: at.Array,
     mc_return: at.Array | None = None,
     scale: at.Array | float = 1.0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
@@ -66,6 +67,7 @@ def train_step(
     score = advantage / scale
     score = score / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    aux_sft_weight = config.rl.aux_sft_weight
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
 
     score = jnp.exp(score)
@@ -84,14 +86,20 @@ def train_step(
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # We up-weight terms that have high advantage
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
+        filtered_loss = chunked_loss * is_success
         # TODO: Replce nasty while loop with assert on the dimension of the arrays
         # assert chunked_loss.shape == (B, 1)
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]
+        awr_loss = jnp.mean(score * chunked_loss)
         aux_data = {
             "chunked_loss": jnp.mean(chunked_loss),
+            "awr_loss": awr_loss,
+            "filtered_loss": filtered_loss,
         }
-        return jnp.mean(score * chunked_loss), aux_data
+
+        total_loss = (awr_loss + aux_sft_weight * filtered_loss)/(1.0 + aux_sft_weight)
+        return total_loss, aux_data
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
 

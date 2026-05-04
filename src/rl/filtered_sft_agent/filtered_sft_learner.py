@@ -472,6 +472,7 @@ class FilteredSFTLearner(Agent):
             "reward": np.zeros((1,), dtype=np.float32),
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
+            "is_success": np.zeros((1,), dtype=np.float32),
         }
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
@@ -656,9 +657,9 @@ class FilteredSFTLearner(Agent):
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
         if is_success:
-            self._save_episode_in_buffer(episode_data, task_description)
+            self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
-    def _save_episode_in_buffer(self, episode_data, task_description):
+    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False):
 
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
             "Only Filtered SFT config should be passed " "to the filtered SFT agent"
@@ -691,6 +692,7 @@ class FilteredSFTLearner(Agent):
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
         _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
+        _is_success = np.ones_like(_mc_return) * is_success
 
         def transform(input):
             obs = self._policy_transforms(input)
@@ -709,6 +711,7 @@ class FilteredSFTLearner(Agent):
                 "reward": _reward.astype(np.float32),
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),
+                "is_success": is_success.astype(np.float32)
             }
         )
         self._collection_success_episodes += 1
