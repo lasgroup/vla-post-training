@@ -52,14 +52,14 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    "tags": [["utd_sweep_04_29"]],
+    # "tags": [["utd_sweep_04_29"]],
     "seed": [0, 1, 2, 3, 4],  # [0, 1, 2, 3, 4]
     # Data collection/eval
     "collect.num_rollouts": [16],        # [256]
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
-    "lr_schedule.value": [5e-5],
-    "rl.num_critic_updates_per_batch": [1, 5, 10, 20],
+    # "lr_schedule.value": [5e-5],
+    "rl.num_critic_updates_per_batch": [10],
     "rl.num_offline_pretraining_steps": [0],
     "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
     "rl.td_weight_schedule.end_value": [0.5],
