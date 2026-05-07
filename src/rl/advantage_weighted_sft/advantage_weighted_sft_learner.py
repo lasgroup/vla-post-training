@@ -527,6 +527,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             else:
                 batch = next(self._data_iter)
         else:
+            if self._data_iter is None:
+                return {
+                    "online_buffer_size": jnp.asarray(
+                        float(self._online_data_buffer.size), dtype=jnp.float32
+                    )
+                }
             batch = next(self._data_iter)
         if update_policy:
             if self.debug:
