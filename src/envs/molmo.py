@@ -189,6 +189,8 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             self._rng = np.random.default_rng(seed)
         self._close_active_episode()
 
+        task_id = options["task_id"] if (options is not None and "task_id" in options) else "molmo_0"
+        self._episode_id = int(task_id.split("_")[-1])
         episode = self._choose_episode()
         exp_config = self._make_eval_config()
         # Json benchmarks are authoritative; align config scene source with the selected episode.
@@ -292,9 +294,8 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
             )
 
     def env_fn(rank: int):
-        task_index = rank % len(task_ids)
         env = MolmoSpacesBenchmarkGymEnv(
-            episode_id=task_ids[task_index],
+            episode_id=task_ids[0],
             render_device=rank % num_devices,
             config=env_config,
         )
