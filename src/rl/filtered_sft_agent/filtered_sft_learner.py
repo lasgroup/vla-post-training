@@ -674,11 +674,10 @@ class FilteredSFTLearner(Agent):
             lambda *xs: np.concatenate(xs, axis=0), *episode_data
         )
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
+        terminate = episode_data["terminate"] 
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
-        last_gamma = float(self._config.rl.discount**act_h)
         all_gammas = np.array([self._config.rl.discount**i for i in range(n_steps)])
-        w_gammas = all_gammas[:act_h]
         n_windows = n_steps - act_h + 1
         if n_windows <= 0:
             return
@@ -688,8 +687,8 @@ class FilteredSFTLearner(Agent):
         _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
-        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        _reward = np.asarray([episode_data["reward"][start : start + act_h] for start in range(n_windows)])
+        _discount = np.asarray([0.0 if np.any(terminate[start : start + act_h]) else self._config.rl.discount for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         def transform(input):
