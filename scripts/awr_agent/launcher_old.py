@@ -159,7 +159,7 @@ def main() -> None:
         mode=args.mode,
         duration=args.duration,
         partition=args.partition,
-        # dryt=args.dry,
+        dry=args.dry,
         log_dir=args.log_dir,
     )
 
