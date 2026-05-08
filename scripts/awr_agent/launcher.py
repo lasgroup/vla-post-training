@@ -49,7 +49,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [
-        1
+        10
     ],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
@@ -60,12 +60,12 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
     "rl.td_weight_schedule.switch_step": [-1],
-    "rl.store_success_episodes_only": [False],
+    "rl.store_success_episodes_only": [True],
     ("collect.tasks", "collect.eval_tasks"): [
-        (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
-        # (["libero_90_59"], ["libero_90_59"]),
+        # (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
+        (["libero_90_59"], ["libero_90_59"]),
     ],
-    "rl.use_simba_critic": [True, False],
+    "rl.use_simba_critic": [False],
 }
 
 
