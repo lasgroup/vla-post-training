@@ -1,4 +1,5 @@
 import dataclasses
+import copy
 import functools
 import gc
 import logging
@@ -66,7 +67,6 @@ def filtered_sft_wrap_env(
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
-                molmo_config=getattr(config, "molmo", None),
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -197,12 +197,17 @@ def _get_post_step_action_filter(domain: str):
     return lambda x: x
 
 
+def _get_obs_key_process_fn(domain: str):
+    if domain == "libero":
+        return lambda k: k.replace("observation/", "")
+    return lambda k: k
+
+
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self.post_step_action_filter = _get_post_step_action_filter(
-            self._config.collect.domain
-        )
+        self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
+        self.obs_key_process_fn = _get_obs_key_process_fn(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
             raise ValueError(
@@ -258,20 +263,29 @@ class FilteredSFTLearner(Agent):
                 )
 
         # initialize data loader
-        assert (
-            0.0 <= self._config.rl.online_ratio <= 1.0
-        ), "Online ratio must be between 0 and 1."
-        self._offline_batch_size = max(
-            len(jax.devices()),
-            int(self._config.batch_size * (1 - self._config.rl.online_ratio)),
+        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        self._data_config = self._config.data.create(
+            self._config.assets_dirs,
+            self._config.model,
         )
-        self._data_loader = create_data_loader(
-            config,
-            batch_size=self._offline_batch_size,
-            sharding=self._data_sharding,
-            shuffle=True,
-        )
-        self._data_iter = iter(self._data_loader)
+        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+
+        if self._config.rl.online_ratio < 1.0:
+            self._data_loader = create_data_loader(
+                config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+            )
+            self._data_iter = iter(self._data_loader)
+        else:
+            class DummyDataLoader:
+                def __init__(self, data_config):
+                    self._data_config = data_config
+
+                def data_config(self):
+                    return self._data_config
+
+            self._data_loader = DummyDataLoader(self._data_config)
+            self._data_iter = None
+
         self._online_data_buffer = self._get_online_replay_buffer()
         if self._resume_state is not None:
             restored_replay = self._online_data_buffer.restore_shards(
@@ -368,6 +382,29 @@ class FilteredSFTLearner(Agent):
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
 
+        # prepare transforms for preprocessing episode data into model input format
+        self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
+
+    def _get_policy_transforms(self, domain: str):
+        if domain == "libero":
+            return _transforms.compose([*self._data_config.repack_transforms.inputs, *self._policy._input_transform.transforms])
+        if domain == "molmo":
+            # TODO: extract these transforms from the policy config instead of hardcoding the order here.
+            # Unfortunately, the policy input transforms do not match what was used for training:
+            # padding should occur before normalization, and delta actions should be considered.
+            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            input_transforms = [
+                copy.deepcopy(self._policy._input_transform.transforms[1]),  # droid inputs
+                _transforms.DeltaActions(delta_action_mask),                 # delta actions
+                copy.deepcopy(self._policy._input_transform.transforms[6]),  # padding
+                copy.deepcopy(self._policy._input_transform.transforms[2]),  # normalize
+                copy.deepcopy(self._policy._input_transform.transforms[4]),  # resizeimages
+                copy.deepcopy(self._policy._input_transform.transforms[0]),  # inject prompt
+                copy.deepcopy(self._policy._input_transform.transforms[5]),  # tokenizer
+            ]
+            return _transforms.compose([*self._data_config.repack_transforms.inputs, *input_transforms])
+        raise NotImplementedError(f"Unknown domain: {domain}")
+
     def _drop_policy_model(self):
         # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
         # so we cannot safely drop the internal model there.
@@ -416,33 +453,6 @@ class FilteredSFTLearner(Agent):
         self,
     ) -> ShardedReplayBuffer:
 
-        # prepare transforms for preprocessing episode data into model input format
-        data_config = self._data_loader.data_config()
-        tt_types = (_transforms.TokenizePrompt, _transforms.TokenizeFASTInputs)
-        token_transforms = [
-            t for t in data_config.model_transforms.inputs if isinstance(t, tt_types)
-        ]
-        non_token_transforms = [
-            t
-            for t in data_config.model_transforms.inputs
-            if not isinstance(t, tt_types)
-        ]
-        assert (
-            len(token_transforms) == 1
-        ), f"Expected exactly one token transform in the model transforms, but found {len(token_transforms)}."
-        self._token_transform = token_transforms[0]
-        self._pre_token_transform = _transforms.compose(
-            [
-                *data_config.repack_transforms.inputs,
-                *data_config.data_transforms.inputs,
-                _transforms.Normalize(
-                    data_config.norm_stats, use_quantiles=data_config.use_quantile_norm
-                ),
-                *non_token_transforms,
-            ]
-        )
-        self._token_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-
         # prepare dummy data for initializing the replay buffer
         # TODO: this might need to be updated to store prefixes
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
@@ -486,10 +496,8 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
-        size = int(self._config.collect.resize_image)
-        resize_fn = lambda x: image_tools.convert_to_uint8(
-            image_tools.resize_with_pad(x, size, size)
-        )
+        h, w = int(self._config.collect.resize_image_h), int(self._config.collect.resize_image_w)
+        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, h, w))
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs
@@ -676,69 +684,22 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        _obs = {
-            k[len("observation/") :]: v[:n_windows]
-            for k, v in episode_data["observation"].items()
-        }
-        _next_obs = {
-            k[len("observation/") :]: v[act_h - 1 : act_h - 1 + n_windows]
-            for k, v in episode_data["next_observation"].items()
-        }
-        _actions = np.stack(
-            [
-                episode_data["action"][start : start + act_h]
-                for start in range(n_windows)
-            ]
-        )
+        _obs = {self.obs_key_process_fn(k): v[:n_windows] for k, v in episode_data["observation"].items()}
+        _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
+        _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
-        _reward = np.asarray(
-            [
-                (episode_data["reward"][start : start + act_h] * w_gammas).sum()
-                for start in range(n_windows)
-            ]
-        )
-        _discount = np.asarray(
-            [
-                0.0 if np.any(done[start : start + act_h]) else last_gamma
-                for start in range(n_windows)
-            ]
-        )
-        _mc_return = (
-            (all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1]
-            / all_gammas
-        )[:n_windows]
+        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
+        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
-        def transform(obs, act, prompt):
-            obs.update({"actions": act, "prompt": prompt})
-            obs = self._pre_token_transform(obs)
-            obs["image_mask"] = {
-                k: np.full((n_windows,), bool(v)) for k, v in obs["image_mask"].items()
-            }
-            if isinstance(self._token_transform, _transforms.TokenizePrompt):
-                if prompt not in self._token_cache:
-                    tok = self._token_transform({"prompt": prompt})
-                    self._token_cache[prompt] = (
-                        tok["tokenized_prompt"],
-                        tok["tokenized_prompt_mask"],
-                    )
-                tokens, token_masks = self._token_cache[prompt]
-                obs["tokenized_prompt"] = np.broadcast_to(
-                    tokens, (n_windows,) + tokens.shape
-                ).copy()
-                obs["tokenized_prompt_mask"] = np.broadcast_to(
-                    token_masks, (n_windows,) + token_masks.shape
-                ).copy()
-            else:
-                raise TypeError(
-                    f"Unsupported token transform: {type(self._token_transform)}"
-                )
+        def transform(input):
+            obs = self._policy_transforms(input)
             actions = obs.pop("actions")
-            prompt = obs.pop("prompt")
             return obs, actions
 
         # process observations and actions according to pi0 preprocessing
-        _next_obs, _ = transform(_next_obs, _actions, str(task_description))
-        _obs, _actions = transform(_obs, _actions, str(task_description))
+        _next_obs, _ = transform({**_next_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
+        _obs, _actions = transform({**_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
 
         self._online_data_buffer.insert(
             {

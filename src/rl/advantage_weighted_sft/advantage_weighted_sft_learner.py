@@ -38,7 +38,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
 )
 from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
+from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
@@ -91,6 +91,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         del self._train_step
         gc.collect()
 
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
+        self._normalizer = Normalizer(
+            ema_weight=self._config.rl.normalizer_config.ema_weight,
+        )
+        self._normalizer_state = self._normalizer.init()
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
         assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
         if config.rl.use_simba_critic:
@@ -120,7 +125,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, scale):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -128,6 +133,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 value_state=value_state,
                 rng=rng,
                 mc_return=mc_return,
+                scale=scale,
             )
 
         self._update_critics_jitted = jax.jit(
@@ -157,6 +163,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._value_state_sharding,
                 self._replicated_sharding,
                 self._policy_mc_return_sharding(),
+                self._replicated_sharding,
             ),
             out_shardings=(
                 self._train_state_sharding,
@@ -181,6 +188,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return {
             "state_action_critic_state": self._state_action_critic_state,
             "value_state": self._value_state,
+            "normalizer_state": self._normalizer_state
         }
 
     def _rl_checkpoint_dir(self) -> epath.Path:
@@ -203,6 +211,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
         self._state_action_critic_state = restored["state_action_critic_state"]
         self._value_state = restored["value_state"]
+        self._normalizer_state = restored["normalizer_state"]
 
     def save_checkpoint(self, step: int | None = None):
         if step is None:
@@ -324,6 +333,17 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         else:
             self._save_episode_in_buffer(episode_data, task_description)
 
+    def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
+        normalizer_state = self._normalizer.update(
+            normalizer_state=normalizer_state,
+            bias=bias,
+            scale=scale,
+        )
+        return normalizer_state, {
+            'normalizer_bias': jnp.mean(normalizer_state.bias),
+            'normalizer_scale': jnp.mean(normalizer_state.scale),
+        }
+
     @at.typecheck
     def _update_critics(
         self,
@@ -373,6 +393,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
         mc_return: at.Array | None = None,
+        scale: at.Array | float = 1.0,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -387,6 +408,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             value_state,
             batch,
             mc_return=mc_return,
+            scale=scale,
         )
 
         return policy_state, info
@@ -397,6 +419,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             "Only Advantage SFT config should " "be passed to the filtered SFT agent"
         )
         rl_config = self._config.rl
+        normalizer_config = rl_config.normalizer_config
         if self.debug:
             log_memory_debug("step_start", training_steps=self.training_steps)
 
@@ -514,11 +537,18 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             else:
                 batch = next(self._data_iter)
         else:
+            if self._data_iter is None:
+                return {
+                    "online_buffer_size": jnp.asarray(
+                        float(self._online_data_buffer.size), dtype=jnp.float32
+                    )
+                }
             batch = next(self._data_iter)
         if update_policy:
             if self.debug:
                 log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
+            scale = self._normalizer_state.scale
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,
@@ -527,10 +557,32 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     self._value_state,
                     policy_rng,
                     mc_return,
+                    scale,
                 )
 
             self._train_state = policy_state
             self._maybe_restore_policy_ema_after_resume()
+            scale, bias = 1.0, 0.0
+            if normalizer_config.method is not None:
+                if normalizer_config.method == 'quantile':
+                    q_up, q_low = actor_info['advantage_q_up'], actor_info['advantage_q_low']
+                    scale = q_up - q_low
+                    bias = q_low
+                elif normalizer_config.method == 'standard_normal':
+                    scale = actor_info['advantage_std']
+                    bias = actor_info['advantage_mean']
+                elif normalizer_config.method == 'min_max':
+                    q_max, q_min = actor_info['advantage_max'], actor_info['advantage_min']
+                    scale = q_max - q_min
+                    bias = q_min
+                else:
+                    raise NotImplementedError
+                scale = jnp.clip(scale, min=normalizer_config.min_scale)
+            self._normalizer_state, normalizer_info = self._update_normalizer(
+                normalizer_state=self._normalizer_state,
+                bias=bias,
+                scale=scale)
+            actor_info = actor_info | normalizer_info
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
         info = (

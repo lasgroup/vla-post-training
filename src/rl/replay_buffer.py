@@ -179,19 +179,6 @@ class ReplayBuffer(Dataset):
         actions = self.data["actions"][: self.size]
         return {"mean": actions.mean(axis=0), "std": actions.std(axis=0)}
 
-    def normalize_actions(self, action_stats):
-        # do not normalize gripper dimension (last dimension)
-        # Avoid mutating the caller's dict.
-        action_stats = copy.deepcopy(action_stats)
-        action_stats["mean"][-1] = 0
-        action_stats["std"][-1] = 1
-        self.data["actions"] = (
-            self.data["actions"] - action_stats["mean"]
-        ) / action_stats["std"]
-        self.data["next_actions"] = (
-            self.data["next_actions"] - action_stats["mean"]
-        ) / action_stats["std"]
-
     def sample(
         self,
         batch_size: int,
