@@ -157,6 +157,7 @@ def _build_pi0_backbone_critic_defs(
             action=action,
             hidden_dims=critic_decoder_hidden_dims,
             num_qs=critic_num_qs,
+            num_bins=config.rl.num_value_bins,
             rngs=rngs,
         )
 
@@ -167,6 +168,7 @@ def _build_pi0_backbone_critic_defs(
             observation=embedding,
             hidden_dims=critic_decoder_hidden_dims,
             num_vs=critic_num_vs,
+            num_bins=config.rl.num_value_bins,
             rngs=rngs,
         )
 
@@ -194,6 +196,7 @@ def _build_pi0_backbone_critic_defs(
 
 def main(config: _config.OnlineTrainConfig):
     init_logging()
+    config = _config.resolve_best_of_n_value_bounds(config)
     logging.info(f"Running on: {platform.node()}")
     if config.collect.store_prefix_rep:
         logging.info(
@@ -237,6 +240,8 @@ def main(config: _config.OnlineTrainConfig):
         state_action_critic_def=state_action_critic_def,
         state_value_def=state_value_def,
     )
+    if not hasattr(config, "group"):
+        object.__setattr__(config, "group", None)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     start_step = int(agent.training_steps)

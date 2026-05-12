@@ -16,6 +16,7 @@ import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
+import openpi.transforms as _transforms
 from src.rl.best_of_n.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
@@ -24,6 +25,7 @@ from src.rl.best_of_n.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
+from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
@@ -47,6 +49,15 @@ class BestofNLearner(FilteredSFTLearner):
         self.debug = debug
 
         super().__init__(config)
+
+        data_config = self._data_loader.data_config()
+        normalizer = _transforms.Normalize(
+            data_config.norm_stats,
+            use_quantiles=data_config.use_quantile_norm,
+        )
+        self._state_normalize = normalizer
+        self._action_normalize = normalizer
+        self._transition_state_dim = int(dummy_obs["state"].shape[-1])
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -281,49 +292,20 @@ class BestofNLearner(FilteredSFTLearner):
         n_samples = self._config.rl.n_samples
         rng, self._rng = jax.random.split(self._rng)
         task_description = kwargs.get("task_description")
-        processed_obs = self._process_obs_for_pi0(
-            observations, task_description=task_description
-        )
-        env_num = self._infer_policy_batch_size(processed_obs)
 
-        # 1. Tile obs along batch dim and sample all candidates in one pass
-        # "prompt" is a string/scalar and must not be tiled.
-        tiled_obs = {
-            k: (v if k == "prompt" else np.repeat(np.asarray(v), n_samples, axis=0))
-            for k, v in processed_obs.items()
-        }
-        all_actions = self._sample_action(
-            tiled_obs, rng, self._train_state, batch_actions=False
-        )
-        # all_actions: [env_num * n_samples, horizon, dim]
+        # Group envs by task so each _sample_action call gets a single string prompt.
+        if task_description is None or isinstance(task_description, str):
+            task_description = [task_description] * next(
+                np.asarray(v).shape[0] for v in observations.values()
+            )
+        task_to_indices: dict[str, list[int]] = {}
+        for i, task in enumerate(task_description):
+            task_to_indices.setdefault(str(task), []).append(i)
 
-        # 2. Compute prefix embedding (on non-tiled obs, then tile)
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        model = nnx.merge(self._train_state.model_def, params)
-        model.eval()
-        prefix = self._compute_prefix_rep_with_model(model=model, observations=processed_obs)
-        # Pool from [env_num, tokens, embed_dim] -> [env_num, embed_dim]
-        prefix = np.asarray(prefix)
-        if prefix.ndim == 3:
-            prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
-        # prefix: [env_num, embed_dim]
+        env_num = len(task_description)
+        all_best_actions = None
 
-        # 3. Build critic observation (normalize + pad state to match buffer preprocessing)
-        raw_state = np.asarray(processed_obs["observation/state"])
-        state = np.asarray(self._state_normalize({"state": raw_state})["state"])
-        if state.shape[-1] < self._transition_state_dim:
-            pad_width = [(0, 0)] * state.ndim
-            pad_width[-1] = (0, self._transition_state_dim - state.shape[-1])
-            state = np.pad(state, pad_width, mode="constant", constant_values=0.0)
-        state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
-        prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
-        critic_obs = {"state": state, PREFIX_EMBEDDING_NAME: prefix_tiled}
-
-        # 4. Score all candidates with Q-critic
+        # Build q-model once, shared across task groups.
         q_params = (
             self._state_action_critic_state.ema_params
             if self._state_action_critic_state.ema_params is not None
@@ -331,28 +313,135 @@ class BestofNLearner(FilteredSFTLearner):
         )
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
-        # Normalize and pad actions to match buffer preprocessing (policy outputs are unnormalized, 7-dim)
-        actions_norm = np.asarray(
-            self._action_normalize({"actions": np.asarray(all_actions)})["actions"]
-        )
-        actions_norm = np.pad(
-            actions_norm,
-            [(0, 0)] * (actions_norm.ndim - 1) + [(0, max(0, self._act_dim - actions_norm.shape[-1]))],
-            mode="constant",
-        )
-        flat_actions = jnp.asarray(actions_norm).reshape(env_num * n_samples, -1)
-        q_values = np.asarray(q_model(critic_obs, flat_actions))
-        # q_values: [num_qs, env_num * n_samples]
 
-        # 5. Reduce ensemble, select best per env
-        if q_values.ndim > 1:
-            q_values = q_values.min(axis=0)          # [env_num * n_samples]
-        q_values = q_values.reshape(env_num, n_samples)
-        best_idx = q_values.argmax(axis=1)            # [env_num]
+        # Build policy model once for prefix embedding.
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        policy_model = nnx.merge(self._train_state.model_def, params)
+        policy_model.eval()
 
-        all_actions = np.asarray(all_actions).reshape(env_num, n_samples, *all_actions.shape[1:])
-        best_actions = all_actions[np.arange(env_num), best_idx]  # [env_num, horizon, dim]
-        return np.asarray(best_actions, dtype=np.float32)
+        for task, indices in task_to_indices.items():
+            group_obs = jax.tree.map(lambda x: np.asarray(x)[indices], observations)
+            processed_obs = self._process_obs_for_pi0(group_obs, task_description=task)
+            group_env_num = len(indices)
+
+            # 1. Tile obs along batch dim and sample all candidates in one pass
+            tiled_obs = {
+                k: (v if k == "prompt" else np.repeat(np.asarray(v), n_samples, axis=0))
+                for k, v in processed_obs.items()
+            }
+            group_actions = self._sample_action(tiled_obs, rng, self._train_state)
+            # group_actions: [group_env_num * n_samples, horizon, dim]
+
+            # 2. Build critic observation (normalize + pad state to match buffer preprocessing)
+            raw_state = np.asarray(processed_obs["observation/state"])
+            state = np.asarray(self._state_normalize({"state": raw_state})["state"])
+            if state.shape[-1] < self._transition_state_dim:
+                pad_width = [(0, 0)] * state.ndim
+                pad_width[-1] = (0, self._transition_state_dim - state.shape[-1])
+                state = np.pad(state, pad_width, mode="constant", constant_values=0.0)
+            state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
+            critic_obs: dict = {"state": state}
+
+            # Compute prefix embedding on the non-tiled group, then repeat it
+            # across candidates. This matches ralf/value_learning's expensive
+            # model work. We transform per env before stacking to avoid LiberoInputs
+            # misreading a 3-env HWC image batch as one CHW image.
+            per_env_inputs = [
+                self._policy._input_transform(
+                    {
+                        k: (v if k == "prompt" else np.asarray(v)[i])
+                        for k, v in processed_obs.items()
+                    }
+                )
+                for i in range(group_env_num)
+            ]
+
+            def _stack_prefix_inputs(*values):
+                first = values[0]
+                if first is None:
+                    return None
+                return jnp.stack([jnp.asarray(v) for v in values], axis=0)
+
+            inputs = jax.tree.map(_stack_prefix_inputs, *per_env_inputs)
+            batch_size = group_env_num
+
+            def _as_batched_array(value):
+                if value is None:
+                    return None
+                value = jnp.asarray(value)
+                if value.ndim > 0 and value.shape[0] == batch_size:
+                    return value
+                return jnp.broadcast_to(
+                    value[jnp.newaxis, ...], (batch_size,) + value.shape
+                )
+
+            inputs = {
+                k: (
+                    jax.tree.map(lambda x: None if x is None else jnp.asarray(x), v)
+                    if k in ("image", "state")
+                    else jax.tree.map(_as_batched_array, v)
+                )
+                for k, v in inputs.items()
+            }
+            obs_for_prefix = _model.Observation.from_dict(inputs)
+            prefix = self._get_prefix_rep_with_model(
+                m=policy_model, observation=obs_for_prefix
+            )
+            prefix = np.asarray(prefix)
+            if prefix.ndim == 3:
+                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+            critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
+                jnp.asarray(prefix), n_samples, axis=0
+            )
+
+            # 3. Score all candidates with Q-critic
+            # Normalize robot-space actions (7-dim for LIBERO), then zero-pad to model_act_dim.
+            # This matches the buffer format: _pre_token_transform normalizes first, then
+            # LiberoInputs (in non_token_transforms) pads 7 -> model_act_dim with zeros.
+            actions_norm = np.asarray(
+                self._action_normalize({"actions": np.asarray(group_actions)})["actions"]
+            )
+            model_act_dim = self._config.model.action_dim
+            if actions_norm.shape[-1] < model_act_dim:
+                pad_width = [(0, 0)] * actions_norm.ndim
+                pad_width[-1] = (0, model_act_dim - actions_norm.shape[-1])
+                actions_norm = np.pad(
+                    actions_norm, pad_width, mode="constant", constant_values=0.0
+                )
+            flat_actions = jnp.asarray(
+                actions_norm.reshape(group_env_num * n_samples, -1)
+            )
+            q_logits = q_model(critic_obs, flat_actions)
+            # q_logits: [num_qs, batch] for Gaussian or [num_qs, batch, K] for Categorical
+
+            # 4. Reduce ensemble, select best per env
+            rl_config = self._config.rl
+            _lower, _upper = get_value_bounds(self._config)
+            q_dist = make_value_distribution(
+                q_logits, rl_config.num_value_bins, _lower, _upper
+            )
+            scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
+            if scores.ndim > 1:
+                scores = scores.min(axis=0)
+            scores = scores.reshape(group_env_num, n_samples)
+            best_idx = scores.argmax(axis=1)
+
+            group_actions = np.asarray(group_actions).reshape(
+                group_env_num, n_samples, *np.asarray(group_actions).shape[1:]
+            )
+            best = group_actions[np.arange(group_env_num), best_idx]
+
+            if all_best_actions is None:
+                all_best_actions = np.zeros(
+                    (env_num, *best.shape[1:]), dtype=np.float32
+                )
+            all_best_actions[indices] = np.asarray(best, dtype=np.float32)
+
+        return all_best_actions
 
     @at.typecheck
     def _get_on_policy_action(

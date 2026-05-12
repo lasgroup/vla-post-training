@@ -112,9 +112,17 @@ class RLAlgorithmConfig:
 
 # Define hyperparameter structures for your algorithms
 @dataclasses.dataclass(frozen=True)
-class BestofNLearnerConfig(RLAlgorithmConfig):
+class FilteredSFTLearnerConfig(RLAlgorithmConfig):
+    policy_update_interval: int = 1
+    policy_training_start_step: int = 0
+    online_ratio: float = 0.5
+    reset_policy_params_to_ema_period: int | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     n_samples: int = 8
-    online_ratio: float = 0.0
+    online_ratio: float = 1.0
     critic_update_interval: int = 1
     critic_training_start_step: int = 0
     use_ema_critic: bool = True
@@ -131,14 +139,10 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
     train_on_policy_value_function: bool = False
     critic_pre_training_steps: int = 1_000
-
-
-@dataclasses.dataclass(frozen=True)
-class FilteredSFTLearnerConfig(RLAlgorithmConfig):
-    policy_update_interval: int = 1
-    policy_training_start_step: int = 0
-    online_ratio: float = 0.5
-    reset_policy_params_to_ema_period: int | None = None
+    num_value_bins: int = 1                 # 1: Gaussian (MSE-equivalent), >1 = Categorical over bins
+    value_lower_bound: float | None = None  # If None:auto-computed from reward type and discount
+    value_upper_bound: float | None = None
+    value_target_type: str = "one_hot"      # "one_hot" | "two_hot"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -247,6 +251,7 @@ class CollectionConfig:
     eval_env_num: int = 4
     eval_interval: int = 300
     num_eval_rollouts: int = 32
+    max_episode_steps: int = 400  # used to auto-compute value bounds
 
     def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers
@@ -300,6 +305,35 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
+
+
+def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    if config.rl.value_lower_bound is not None and config.rl.value_upper_bound is not None:
+        return config
+
+    discount = float(config.rl.discount)
+    T = int(config.collect.max_episode_steps)
+    if config.collect.use_time_to_success_as_reward:
+        lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+        upper = 0.0
+    else:
+        lower = 0.0
+        upper = 1.0
+    num_bins = config.rl.num_value_bins
+    if num_bins > 1:
+        half_bw = (upper - lower) / (2 * (num_bins - 1))
+        lower -= half_bw
+        upper += half_bw
+
+    return dataclasses.replace(
+        config,
+        rl=dataclasses.replace(
+            config.rl,
+            value_lower_bound=lower,
+            value_upper_bound=upper,
+        ),
+    )
 
 
 def make_base_libero_config(
