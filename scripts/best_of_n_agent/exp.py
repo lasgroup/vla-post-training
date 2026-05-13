@@ -66,6 +66,7 @@ from src.rl.networks.decoders.values.state_action_value import (
 )
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.rl_networks import ObsType, StateActionCritic, StateValue
+from src.rl.networks.simba_critic import SimbaV2StateActionCritic, SimbaV2StateValue
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
@@ -194,6 +195,56 @@ def _build_pi0_backbone_critic_defs(
     return state_action_critic_def, state_value_def
 
 
+def _build_simba_critic_defs(
+    config: _config.OnlineTrainConfig,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    assert isinstance(config.rl, _config.BestofNLearnerConfig)
+    rl = config.rl
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> SimbaV2StateActionCritic:
+        return SimbaV2StateActionCritic(
+            observation=observation,
+            action=action,
+            hidden_dim=rl.simba_hidden_dim,
+            num_blocks=rl.simba_num_blocks,
+            num_bins=rl.simba_num_bins,
+            min_v=rl.simba_min_v,
+            max_v=rl.simba_max_v,
+            scaler_init=rl.simba_scaler_init,
+            scaler_scale=rl.simba_scaler_scale,
+            alpha_init=rl.simba_alpha_init,
+            alpha_scale=rl.simba_alpha_scale,
+            c_shift=rl.simba_c_shift,
+            num_qs=rl.critic_num_qs,
+            expansion=rl.simba_expansion_factor,
+            rngs=rngs,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> SimbaV2StateValue:
+        return SimbaV2StateValue(
+            observation=observation,
+            hidden_dim=rl.simba_hidden_dim,
+            num_blocks=rl.simba_num_blocks,
+            num_bins=rl.simba_num_bins,
+            min_v=rl.simba_min_v,
+            max_v=rl.simba_max_v,
+            scaler_init=rl.simba_scaler_init,
+            scaler_scale=rl.simba_scaler_scale,
+            alpha_init=rl.simba_alpha_init,
+            alpha_scale=rl.simba_alpha_scale,
+            c_shift=rl.simba_c_shift,
+            num_vs=rl.critic_num_vs,
+            expansion=rl.simba_expansion_factor,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     config = _config.resolve_best_of_n_value_bounds(config)
@@ -230,9 +281,14 @@ def main(config: _config.OnlineTrainConfig):
         config, prefix_embedding_shape=prefix_embedding_shape
     )
     dummy_act = config.model.fake_act(batch_size=1)
-    state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
-        config, prefix_embedding_shape=prefix_embedding_shape
-    )
+    if config.rl.use_simba_critic:
+        state_action_critic_def, state_value_def = _build_simba_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
+    else:
+        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
     agent = BestofNLearner(
         config=config,
         dummy_obs=dummy_obs,

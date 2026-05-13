@@ -1,12 +1,10 @@
 # ruff: noqa: F722
-"""Categorical TD update logic for SimbaV2 critics in AWR.
+"""Categorical TD update logic for SimbaV2 critics in best-of-N.
 
-Ported from the SimbaV2 reference implementation with the following adaptations:
-  - No actor / entropy term  (AWR is not entropy-regularised)
-  - Pre-computed `discount` replaces explicit gamma * (1 - terminated)
-  - Q bootstraps from EMA-V; V bootstraps from EMA-Q  (AWR cross-bootstrap)
-  - Mixed TD + MC loss for both Q and V via td_weight schedule
-  - L2 weight normalisation applied after gradient step, before EMA update
+Mirrors the AWR SimbaV2 update with the following adaptations:
+  - Asserts BestofNLearnerConfig (not AdvantageWeightedSFTLearnerConfig)
+  - Imports helpers from src.rl.best_of_n.update_critic
+  - Reads simba_* fields from BestofNLearnerConfig
 """
 import jax
 import jax.numpy as jnp
@@ -16,8 +14,8 @@ import optax
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
 
-from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
-from src.rl.advantage_weighted_sft.update_critic import (
+from src.training.config import OnlineTrainConfig, BestofNLearnerConfig
+from src.rl.best_of_n.update_critic import (
     CriticBatch,
     flatten_action_horizon,
     _as_scalar_batch,
@@ -51,7 +49,7 @@ def train_simba_q_step(
     MC target: two-hot encoding of the pre-computed MC return.
     """
     del rng
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    assert isinstance(config.rl, BestofNLearnerConfig)
     step = q_state.step // config.rl.num_critic_updates_per_batch
     td_weight_schedule = config.rl.td_weight_schedule
     num_bins = config.rl.simba_num_bins
@@ -72,7 +70,7 @@ def train_simba_q_step(
     # EMA-V distribution at next_observation — computed once outside loss_fn
     next_v_values, next_v_log_probs = value_model(next_observation)
     # (num_vs, B), (num_vs, B, num_bins)
-    target_v_log_probs = select_min_member_log_probs(next_v_values, next_v_log_probs)
+    target_v_log_probs = select_min_member_log_probs(next_v_values, next_v_log_probs) # TODO: add option to reduce by min/mean
     # (B, num_bins) — pessimistic (min) V member
 
     mc_target_probs = scalar_to_two_hot(mc_return, num_bins, min_v, max_v)  # (B, num_bins)
@@ -153,7 +151,7 @@ def train_simba_value_step(
     MC target: two-hot encoding of the pre-computed MC return.
     """
     del rng
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
+    assert isinstance(config.rl, BestofNLearnerConfig)
     step = value_state.step // config.rl.num_critic_updates_per_batch
     td_weight_schedule = config.rl.td_weight_schedule
     num_bins = config.rl.simba_num_bins

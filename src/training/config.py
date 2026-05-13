@@ -143,6 +143,21 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     value_lower_bound: float | None = None  # If None:auto-computed from reward type and discount
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"      # "one_hot" | "two_hot"
+    # SimbaV2 critic (use_simba_critic=False → baseline critic, all fields above apply)
+    use_simba_critic: bool = False
+    simba_hidden_dim: int = 256
+    simba_num_blocks: int = 2
+    simba_expansion_factor: int = 4
+    simba_num_bins: int = 1000
+    simba_min_v: float = -110.0
+    simba_max_v: float = 0.0
+    # Values below follow SimbaV2 reference scaling for hidden_dim=1024, num_blocks=2.
+    # If hidden_dim changes: scaler_init/scale = sqrt(2/hidden_dim), alpha_scale = 1/sqrt(hidden_dim).
+    simba_scaler_init: float = 0.0441   # sqrt(2 / hidden_dim) #TODO: MOVE TO LAUNCHER
+    simba_scaler_scale: float = 0.0441  # sqrt(2 / hidden_dim)
+    simba_alpha_init: float = 0.3333    # 1 / (num_blocks + 1)
+    simba_alpha_scale: float = 0.03125   # 1 / sqrt(hidden_dim)
+    simba_c_shift: float = 3.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -176,11 +191,13 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     simba_num_bins: int = 1000
     simba_min_v: float = -110.0
     simba_max_v: float = 0.0
-    simba_scaler_init: float = 1.0
-    simba_scaler_scale: float = 1.0
-    simba_alpha_init: float = 0.0
-    simba_alpha_scale: float = 1.0
-    simba_c_shift: float = 1.0
+    # Values below follow SimbaV2 reference scaling for hidden_dim=256, num_blocks=2.
+    # If hidden_dim changes: scaler_init/scale = sqrt(2/hidden_dim), alpha_scale = 1/sqrt(hidden_dim).
+    simba_scaler_init: float = 0.0884   # sqrt(2 / 256)
+    simba_scaler_scale: float = 0.0884  # sqrt(2 / 256)
+    simba_alpha_init: float = 0.3333    # 1 / (num_blocks + 1)
+    simba_alpha_scale: float = 0.0625   # 1 / sqrt(256)
+    simba_c_shift: float = 3.0
 
 
 @dataclasses.dataclass(frozen=True)

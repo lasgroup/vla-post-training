@@ -96,8 +96,16 @@ class BestofNLearner(FilteredSFTLearner):
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
-        self._q_train_step = functools.partial(train_q_step, self._config)
-        self._value_train_step = functools.partial(train_value_step, self._config)
+        if config.rl.use_simba_critic:
+            from src.rl.best_of_n.update_simba_critic import (
+                train_simba_q_step,
+                train_simba_value_step,
+            )
+            self._q_train_step = functools.partial(train_simba_q_step, self._config)
+            self._value_train_step = functools.partial(train_simba_value_step, self._config)
+        else:
+            self._q_train_step = functools.partial(train_q_step, self._config)
+            self._value_train_step = functools.partial(train_value_step, self._config)
         # self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_critic_update_function()
 
@@ -415,18 +423,24 @@ class BestofNLearner(FilteredSFTLearner):
             flat_actions = jnp.asarray(
                 actions_norm.reshape(group_env_num * n_samples, -1)
             )
-            q_logits = q_model(critic_obs, flat_actions)
-            # q_logits: [num_qs, batch] for Gaussian or [num_qs, batch, K] for Categorical
+            q_output = q_model(critic_obs, flat_actions)
+            # baseline: q_output is logits [num_qs, batch] or [num_qs, batch, K]
+            # simba:    q_output is (values, log_probs) — (num_qs, B), (num_qs, B, num_bins)
 
             # 4. Reduce ensemble, select best per env
-            rl_config = self._config.rl
-            _lower, _upper = get_value_bounds(self._config)
-            q_dist = make_value_distribution(
-                q_logits, rl_config.num_value_bins, _lower, _upper
-            )
-            scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
-            if scores.ndim > 1:
-                scores = scores.min(axis=0)
+            if isinstance(q_output, tuple):
+                # SimbaV2: expected values are already computed by the network
+                scores = np.asarray(q_output[0])  # (num_qs, B)
+                scores = scores.min(axis=0) #TODO: mean vs min in config
+            else:
+                rl_config = self._config.rl
+                _lower, _upper = get_value_bounds(self._config)
+                q_dist = make_value_distribution(
+                    q_output, rl_config.num_value_bins, _lower, _upper
+                )
+                scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
+                if scores.ndim > 1:
+                    scores = scores.min(axis=0)
             scores = scores.reshape(group_env_num, n_samples)
             best_idx = scores.argmax(axis=1)
 
@@ -485,33 +499,27 @@ class BestofNLearner(FilteredSFTLearner):
             )
         else:
             value_actions = batch["actions"]
-        # Add prefix representation to the batch for the critic
-        batch = self._online_batch_to_critic_batch(
-            batch,
-            policy_state,
-        )
-        
-        # Update the state action critic state
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
 
-        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
+        # Compute prefix embeddings once for the full batch (utd * mini_batch_size).
+        critic_batch = self._online_batch_to_critic_batch(batch, policy_state)
 
-        for _ in range(num_updates):
+        utd = max(self._config.rl.num_critic_updates_per_batch, 1)
+        mini_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+
+        for i in range(utd):
+            s, e = i * mini_size, (i + 1) * mini_size
+            mini_batch = jax.tree.map(lambda x, s=s, e=e: x[s:e], critic_batch)
+            value_mini_batch = (
+                mini_batch[0],
+                value_actions[s:e],
+                mini_batch[2],
+                mini_batch[3],
+                mini_batch[4],
+                mini_batch[5],
+            )
             q_rng, v_rng, rng = jax.random.split(rng, 3)
-            # Update the state action critic state
-            q_state, q_info = self._q_train_step(
-                q_rng,
-                q_state,
-                value_state,
-                batch,
-            )
-            # Update the value state
-            value_state, value_info = self._value_train_step(
-                v_rng,
-                value_state,
-                q_state,
-                value_batch,
-            )
+            q_state, q_info = self._q_train_step(q_rng, q_state, value_state, mini_batch)
+            value_state, value_info = self._value_train_step(v_rng, value_state, q_state, value_mini_batch)
 
         return q_state, value_state, q_info, value_info
 
@@ -561,13 +569,14 @@ class BestofNLearner(FilteredSFTLearner):
             }
 
         online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+        utd = max(rl_config.num_critic_updates_per_batch, 1)
         use_online = (
                 self._online_data_buffer.size >= online_batch_size
         )
 
         critic_info = {}
         if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size * utd)
             if update_critic:
                 if self.debug:
                     log_memory_debug(

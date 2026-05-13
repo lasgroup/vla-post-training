@@ -103,11 +103,11 @@ class SimbaV2StateActionCritic(nnx.Module):
         num_bins: int,
         min_v: float,
         max_v: float,
-        scaler_init: float = 1.0,
-        scaler_scale: float = 1.0,
-        alpha_init: float = 0.0,
-        alpha_scale: float = 1.0,
-        c_shift: float = 1.0,
+        scaler_init: float = 0.0884,   # sqrt(2 / hidden_dim) for hidden_dim=256
+        scaler_scale: float = 0.0884,  # sqrt(2 / hidden_dim) for hidden_dim=256
+        alpha_init: float = 0.3333,    # 1 / (num_blocks + 1) for num_blocks=2
+        alpha_scale: float = 0.0625,   # 1 / sqrt(hidden_dim) for hidden_dim=256
+        c_shift: float = 3.0,
         num_qs: int = 2,
         expansion: int = 4,
         *,
@@ -168,11 +168,11 @@ class SimbaV2StateValue(nnx.Module):
         num_bins: int,
         min_v: float,
         max_v: float,
-        scaler_init: float = 1.0,
-        scaler_scale: float = 1.0,
-        alpha_init: float = 0.0,
-        alpha_scale: float = 1.0,
-        c_shift: float = 1.0,
+        scaler_init: float = 0.0884,   # sqrt(2 / hidden_dim) for hidden_dim=256
+        scaler_scale: float = 0.0884,  # sqrt(2 / hidden_dim) for hidden_dim=256
+        alpha_init: float = 0.3333,    # 1 / (num_blocks + 1) for num_blocks=2
+        alpha_scale: float = 0.0625,   # 1 / sqrt(hidden_dim) for hidden_dim=256
+        c_shift: float = 3.0,
         num_vs: int = 2,
         expansion: int = 4,
         *,

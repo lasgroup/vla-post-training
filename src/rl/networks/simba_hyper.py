@@ -23,8 +23,10 @@ class Scaler(nnx.Module):
     """Learned per-element scale with a fixed forward multiplier for init control."""
 
     def __init__(self, dim: int, init: float = 1.0, scale: float = 1.0):
-        self.scaler = nnx.Param(jnp.ones(dim) * scale)
-        self.forward_scaler = init / scale
+        # param holds init/scale so that param * forward_scaler = init at construction.
+        # Keeping forward_scaler=scale (non-zero) ensures gradients flow through the param.
+        self.scaler = nnx.Param(jnp.ones(dim) * (init / scale))
+        self.forward_scaler = scale
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         return self.scaler.value * self.forward_scaler * x

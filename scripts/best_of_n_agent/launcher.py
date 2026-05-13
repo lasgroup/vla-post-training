@@ -8,6 +8,7 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import sys
 from typing import Any, Dict, List, Union
@@ -44,10 +45,19 @@ DEFAULT_EVAL_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
-NUM_TRAIN_STEPS = 5_000
+NUM_TRAIN_STEPS = 9_000
 DEFAULT_CRITIC_TRAINING_START_STEP = 0
 DEFAULT_CRITIC_INFERENCE_START_STEP = 900
 DEFAULT_NUM_CPUS = 16
+
+# ---------- SimbaV2 critic defaults ----------
+DEFAULT_USE_SIMBA_CRITIC = False
+DEFAULT_SIMBA_HIDDEN_DIM = 256
+DEFAULT_SIMBA_NUM_BLOCKS = 2
+DEFAULT_SIMBA_EXPANSION_FACTOR = 4
+DEFAULT_SIMBA_NUM_BINS = 1000
+DEFAULT_SIMBA_MIN_V = -110.0
+DEFAULT_SIMBA_MAX_V = 0.0
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -59,7 +69,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_rollouts": [12],
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
-    "rl.num_critic_updates_per_batch": [10],
+    "rl.num_critic_updates_per_batch": [1],
     "rl.td_weight_schedule.init_value": [0.5],
     "rl.td_weight_schedule.end_value": [0.5],
     "rl.td_weight_schedule.switch_step": [500_000],
@@ -68,12 +78,24 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.train_on_policy_value_function": [False],
     "rl.critic_inference_start_step": [0],
     "rl.n_samples": [32],
+    # SimbaV2 critic (set use_simba_critic=True to enable; other fields ignored when False)
+    "rl.use_simba_critic": [True],
+    "rl.simba_hidden_dim": [1024],
+    "rl.simba_num_blocks": [2],
+    "rl.simba_expansion_factor": [4],
+    "rl.simba_num_bins": [1024],
+    "rl.simba_min_v": [-110.0],
+    "rl.simba_max_v": [0.0],
+
+    "rl.num_critic_updates_per_batch": [1, 2],
+    # simba_scaler_init/scale = sqrt(2/hidden_dim), alpha_init = 1/(num_blocks+1),
+    # alpha_scale = 1/sqrt(hidden_dim) — auto-computed below unless set explicitly here.
     # Single-task tasks from ralf/value_learning.
     ("collect.tasks", "collect.eval_tasks"): [
         # ("libero_90_43", "libero_90_43"),  # Put the white bowl on top of the cabinet
-        ("libero_90_44", "libero_90_44"),  # Turn on the stove
+        # ("libero_90_44", "libero_90_44"),  # Turn on the stove
         # ("libero_90_47", "libero_90_47"),  # Put the cream cheese box in the basket
-        # ("libero_90_59", "libero_90_59"),  # Put the tomato sauce in the tray
+        ("libero_90_59", "libero_90_59"),  # Put the tomato sauce in the tray
         # ("libero_90_60", "libero_90_60"),  # Put the black bowl on the left in the tray
     ],
 }
@@ -154,6 +176,16 @@ def main() -> None:
             "save_interval": DEFAULT_SAVE_INTERVAL,
         }
         flags.update(combo)
+
+        # Auto-compute SimbaV2 scaling params from hidden_dim / num_blocks unless
+        # the caller already set them explicitly in applicable_configs.
+        _hidden_dim = flags.get("rl.simba_hidden_dim", DEFAULT_SIMBA_HIDDEN_DIM)
+        _num_blocks = flags.get("rl.simba_num_blocks", DEFAULT_SIMBA_NUM_BLOCKS)
+        flags.setdefault("rl.simba_scaler_init", math.sqrt(2.0 / _hidden_dim))
+        flags.setdefault("rl.simba_scaler_scale", math.sqrt(2.0 / _hidden_dim))
+        flags.setdefault("rl.simba_alpha_init", 1.0 / (_num_blocks + 1))
+        flags.setdefault("rl.simba_alpha_scale", 1.0 / math.sqrt(_hidden_dim))
+
         flags = apply_requeue_flags(flags, enabled=args.requeue)
 
         # Keep these in sync with policy_training_start_step
