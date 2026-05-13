@@ -61,9 +61,14 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # "lr_schedule.value": [5e-5],
     "rl.num_critic_updates_per_batch": [10],
     "rl.num_offline_pretraining_steps": [0],
-    "rl.td_weight_schedule.init_value": [0.5],    # Constant 0.5 * td + 0.5 * mc
-    "rl.td_weight_schedule.end_value": [0.5],
-    "rl.td_weight_schedule.switch_step": [500_000],      # If -1, will be set to match critic_inference_start_step
+    # TD only:
+    "rl.td_weight_schedule.init_value": [1.0],
+    "rl.td_weight_schedule.end_value": [1.0],
+    "rl.td_weight_schedule.switch_step": [999_999],
+    # # MC-then-TD:
+    # "rl.td_weight_schedule.init_value": [0.0],
+    # "rl.td_weight_schedule.end_value": [1.0],
+    # "rl.td_weight_schedule.switch_step": [-1],     
     "rl.num_value_bins": [1],                       # Loss-specific
     # "rl.value_target_type": ["two_hot"],
     # Ablation: frozen pi0 prefix embeddings vs. trainable ResNet encoder
@@ -73,10 +78,10 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # "rl.critic_action_compress_dim": [32],          # Compresses 320-dim flat action chunk to 32 before concatenation with obs embedding
     # Best-of-N specific
     "rl.train_on_policy_value_function": [False],
-    "rl.critic_inference_start_step": [0],
+    "rl.critic_inference_start_step": [900],
     "rl.n_samples": [32],
     # Single-task
-    # ("collect.tasks", "collect.eval_tasks"): [
+    ("collect.tasks", "collect.eval_tasks"): [
         # ("libero_90_35", "libero_90_35"),
         # ("libero_90_38", "libero_90_38"),
         # ("libero_90_41", "libero_90_41"),
@@ -84,23 +89,23 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
         # ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
         # ("libero_90_53", "libero_90_53"),   
-        # ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
+        ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
         # ("libero_90_60", "libero_90_60"),     # ? "Pick up the black bowl on the left and put it in the tray"
         # ("libero_90_63", "libero_90_63"),
-    # ],
-    # Multi-task
-    ("collect.tasks", "collect.eval_tasks"): [
-    (
-        [
-            #"libero_90_35", "libero_90_38", "libero_90_41", "libero_90_53", "libero_90_63", "libero_90_47", 
-            "libero_90_43", "libero_90_44", "libero_90_59", "libero_90_60"
-        ],
-        [
-            #"libero_90_35", "libero_90_38", "libero_90_41", "libero_90_53", "libero_90_63", "libero_90_47", 
-            "libero_90_43", "libero_90_44", "libero_90_59", "libero_90_60"
-        ],
-    ),
     ],
+    # Multi-task
+    # ("collect.tasks", "collect.eval_tasks"): [
+    # (
+    #     [
+    #         #"libero_90_35", "libero_90_38", "libero_90_41", "libero_90_53", "libero_90_63", "libero_90_47", 
+    #         "libero_90_43", "libero_90_44", "libero_90_59", "libero_90_60"
+    #     ],
+    #     [
+    #         #"libero_90_35", "libero_90_38", "libero_90_41", "libero_90_53", "libero_90_63", "libero_90_47", 
+    #         "libero_90_43", "libero_90_44", "libero_90_59", "libero_90_60"
+    #     ],
+    # ),
+    # ],
 }
 
 
