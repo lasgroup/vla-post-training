@@ -40,7 +40,7 @@ DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 300         # 2000
+DEFAULT_EVAL_INTERVAL = 1000         # 2000
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
 NUM_TRAIN_STEPS = 5_000              # 20_000
 DEFAULT_CRITIC_TRAINING_START_STEP = 0
@@ -52,24 +52,35 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    # "tags": [["utd_sweep_04_29"]],
-    "seed": [0, 1, 2, 3, 4],  # [0, 1, 2, 3, 4]
+    "tags": [["bigger_gamma_05_13"]],
+    "seed": [0, 1, 2],  # [0, 1, 2, 3, 4]
     # Data collection/eval
-    "collect.num_rollouts": [16],        # [256]
+    "collect.num_rollouts": [10],        # [256]
     # Critic training
+    "rl.discount": [0.99, 0.999, 0.9999],
     "collect.use_time_to_success_as_reward": [True],
     # "lr_schedule.value": [5e-5],
     "rl.num_critic_updates_per_batch": [10],
     "rl.num_offline_pretraining_steps": [0],
-    # TD only:
-    "rl.td_weight_schedule.init_value": [1.0],
-    "rl.td_weight_schedule.end_value": [1.0],
-    "rl.td_weight_schedule.switch_step": [999_999],
+    ("rl.td_weight_schedule.init_value", "rl.td_weight_schedule.end_value", "rl.td_weight_schedule.switch_step"): [
+        (1.0, 1.0, 999_999),  # TD only
+        (0.0, 1.0, -1),       # MC-then-TD
+        (0.5, 0.5, 500_000),  # 0.5*(MC+TD)
+    ],
+    # # TD only:
+    # "rl.td_weight_schedule.init_value": [1.0],
+    # "rl.td_weight_schedule.end_value": [1.0],
+    # "rl.td_weight_schedule.switch_step": [999_999],
     # # MC-then-TD:
     # "rl.td_weight_schedule.init_value": [0.0],
     # "rl.td_weight_schedule.end_value": [1.0],
     # "rl.td_weight_schedule.switch_step": [-1],     
+    # # MC + TD:
+    # "rl.td_weight_schedule.init_value": [0.5],
+    # "rl.td_weight_schedule.end_value": [0.5],
+    # "rl.td_weight_schedule.switch_step": [500_000],
     "rl.num_value_bins": [1],                       # Loss-specific
+    # "rl.q_bootstrap_target": ["next_action"],       # Default is "value": r + gamma * V(s')
     # "rl.value_target_type": ["two_hot"],
     # Ablation: frozen pi0 prefix embeddings vs. trainable ResNet encoder
     "rl.critic_encoder_type": ["pi0_prefix"],       # ["pi0_prefix", "resnet", "pi0_prefix_resnet"],
@@ -86,7 +97,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_38", "libero_90_38"),
         # ("libero_90_41", "libero_90_41"),
         # ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
-        # ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
+        ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
         # ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
         # ("libero_90_53", "libero_90_53"),   
         ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
@@ -146,6 +157,7 @@ def main() -> None:
     parser.add_argument("--critic_inference_start_step", type=int, default=DEFAULT_CRITIC_INFERENCE_START_STEP)
     parser.add_argument("--num_value_bins", type=int, default=1, help="1=regression, >1=categorical over return bins")
     parser.add_argument("--value_target_type", default="one_hot", choices=["one_hot", "two_hot"])
+    parser.add_argument("--q_bootstrap_target", default="value", choices=["value", "next_action"])
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
@@ -179,6 +191,7 @@ def main() -> None:
             "num_train_steps": args.num_train_steps,
             "rl.num_value_bins": args.num_value_bins,
             "rl.value_target_type": args.value_target_type,
+            "rl.q_bootstrap_target": args.q_bootstrap_target,
             "save_interval": DEFAULT_SAVE_INTERVAL,
         }
         flags.update(combo)
