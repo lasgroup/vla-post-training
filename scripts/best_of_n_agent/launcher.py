@@ -26,11 +26,11 @@ SCRIPT = "scripts/best_of_n_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_best_of_n"
 PROJECT_NAME = "value_learning"
 DEFAULT_LOG_INTERVAL = 25
-DEFAULT_SAVE_INTERVAL = 5_000      # 20_000
+DEFAULT_SAVE_INTERVAL = 100_000
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_NUM_ROLLOUTS = 1
-DEFAULT_COLLECT_INTERVAL = 300     # 100_000
+DEFAULT_COLLECT_INTERVAL = 6_000     # 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
@@ -40,9 +40,9 @@ DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 1000         # 2000
+DEFAULT_EVAL_INTERVAL = 10_000         # 1_000
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
-NUM_TRAIN_STEPS = 5_000              # 20_000
+NUM_TRAIN_STEPS = 100_010              # 5_000
 DEFAULT_CRITIC_TRAINING_START_STEP = 0
 DEFAULT_CRITIC_INFERENCE_START_STEP = 900
 DEFAULT_NUM_CPUS = 16
@@ -52,15 +52,15 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    "tags": [["bigger_gamma_05_13"]],
+    "tags": [["100k_steps_store_prefix_multitask_05_14"]],
     "seed": [0, 1, 2],  # [0, 1, 2, 3, 4]
     # Data collection/eval
-    "collect.num_rollouts": [10],        # [256]
+    "collect.num_rollouts": [16],        # [256]
     # Critic training
-    "rl.discount": [0.99, 0.999, 0.9999],
+    "rl.discount": [0.99],
     "collect.use_time_to_success_as_reward": [True],
     # "lr_schedule.value": [5e-5],
-    "rl.num_critic_updates_per_batch": [10],
+    "rl.num_critic_updates_per_batch": [1],
     "rl.num_offline_pretraining_steps": [0],
     ("rl.td_weight_schedule.init_value", "rl.td_weight_schedule.end_value", "rl.td_weight_schedule.switch_step"): [
         (1.0, 1.0, 999_999),  # TD only
@@ -80,7 +80,6 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # "rl.td_weight_schedule.end_value": [0.5],
     # "rl.td_weight_schedule.switch_step": [500_000],
     "rl.num_value_bins": [1],                       # Loss-specific
-    # "rl.q_bootstrap_target": ["next_action"],       # Default is "value": r + gamma * V(s')
     # "rl.value_target_type": ["two_hot"],
     # Ablation: frozen pi0 prefix embeddings vs. trainable ResNet encoder
     "rl.critic_encoder_type": ["pi0_prefix"],       # ["pi0_prefix", "resnet", "pi0_prefix_resnet"],
@@ -89,7 +88,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # "rl.critic_action_compress_dim": [32],          # Compresses 320-dim flat action chunk to 32 before concatenation with obs embedding
     # Best-of-N specific
     "rl.train_on_policy_value_function": [False],
-    "rl.critic_inference_start_step": [900],
+    "rl.critic_inference_start_step": [9_000],
     "rl.n_samples": [32],
     # Single-task
     ("collect.tasks", "collect.eval_tasks"): [
@@ -157,7 +156,6 @@ def main() -> None:
     parser.add_argument("--critic_inference_start_step", type=int, default=DEFAULT_CRITIC_INFERENCE_START_STEP)
     parser.add_argument("--num_value_bins", type=int, default=1, help="1=regression, >1=categorical over return bins")
     parser.add_argument("--value_target_type", default="one_hot", choices=["one_hot", "two_hot"])
-    parser.add_argument("--q_bootstrap_target", default="value", choices=["value", "next_action"])
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
 
@@ -191,7 +189,7 @@ def main() -> None:
             "num_train_steps": args.num_train_steps,
             "rl.num_value_bins": args.num_value_bins,
             "rl.value_target_type": args.value_target_type,
-            "rl.q_bootstrap_target": args.q_bootstrap_target,
+            "collect.store_prefix_rep": True,
             "save_interval": DEFAULT_SAVE_INTERVAL,
         }
         flags.update(combo)

@@ -40,7 +40,8 @@ def evaluate_policy(
                 obs,
                 task_description=task_description,
             )
-            next_obs, _, terminate, truncate, _ = env.step(action_chunk)
+            env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
+            next_obs, _, terminate, truncate, _ = env.step(env_action_chunk)
 
             done_per_step = np.logical_or(terminate, truncate)
             any_done = done_per_step[:, -1]  # True if episode ended this chunk
@@ -114,13 +115,21 @@ def collect_data(
                 obs,
                 task_description=task_description,
             )
-            next_obs, reward, terminate, truncate, _ = env.step(action_chunk)
+            env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
+            next_obs, reward, terminate, truncate, _ = env.step(env_action_chunk)
             aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
+            if isinstance(action_chunk, tuple):
+                action_payload = (
+                    env_action_chunk[:, : config.collect.replan_steps],
+                    action_chunk[1],
+                )
+            else:
+                action_payload = env_action_chunk[:, : config.collect.replan_steps]
 
             step_data = {
                 "observation": aligned_obs,
                 "next_observation": next_obs,
-                "action": action_chunk[:, :config.collect.replan_steps],
+                "action": action_payload,
                 "reward": reward,
                 "terminate": terminate,
                 "truncate": truncate,

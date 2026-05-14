@@ -293,12 +293,6 @@ def _build_pi0_backbone_critic_defs(
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
-    if config.collect.store_prefix_rep:
-        logging.info(
-            "return_prefix_rep is enabled, but best-of-N critics recompute prefix embeddings "
-            "from observations every update."
-        )
-
     env_fn, task_description = make_env(config, config.collect.tasks)
     env = filtered_sft_wrap_env(
         env_fn=env_fn,

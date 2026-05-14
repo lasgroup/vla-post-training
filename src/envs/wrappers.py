@@ -242,7 +242,7 @@ class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
     """Query wrapper that ignores prefix payload when stepping the underlying env."""
 
     def step(self, action):
-        env_action, _ = action
+        env_action = action[0] if isinstance(action, tuple) else action
         return super().step(env_action)
 
 

@@ -438,6 +438,24 @@ class FilteredSFTLearner(Agent):
         obs["prompt"] = task_description
         return obs
 
+    @staticmethod
+    def _batch_transform_inputs(inputs: dict, batch_size: int) -> dict:
+        """Fix shapes produced by _input_transform before constructing Observation.
+
+        _input_transform yields scalar image masks and 1-D token arrays when given
+        a single-task batch.  Observation requires every field to carry a leading
+        batch dimension, so broadcast them here.
+        """
+        for key in ("image_mask", "image_masks"):
+            if key in inputs:
+                inputs[key] = {k: np.full((batch_size,), bool(v), dtype=bool) for k, v in inputs[key].items()}
+        for key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
+            if key in inputs and inputs[key] is not None:
+                arr = np.asarray(inputs[key])
+                if arr.ndim == 1:
+                    inputs[key] = np.repeat(arr[np.newaxis], batch_size, axis=0)
+        return inputs
+
     def _sample_action(
         self,
         observations: Dict,
@@ -466,19 +484,44 @@ class FilteredSFTLearner(Agent):
         sharding_spec = (
             self._policy_sharding_spec if batch_size % num_devices == 0 else None
         )
-        actions = self._policy.infer_with_model(
-            model=model,
-            obs=observations,
-            noise=noise,
-            return_prefix_rep=return_prefix_rep,
-            sharding_spec=sharding_spec,
-        )["actions"]
-
         if return_prefix_rep:
-            actions, prefix = actions
+            inputs = jax.tree.map(lambda x: x, observations)
+            inputs = self._policy._input_transform(inputs)
+            inputs = self._batch_transform_inputs(inputs, batch_size)
+            if sharding_spec is not None:
+                # PartitionSpec('batch',) is invalid for rank-0 leaves; use replicated sharding for scalars.
+                inputs = jax.tree.map(
+                    lambda x: jax.device_put(
+                        x, sharding_spec if np.asarray(x).ndim >= 1 else self._replicated_sharding
+                    ),
+                    inputs,
+                )
+            observation = _model.Observation.from_dict(inputs)
+            actions, prefix = self._policy._sample_actions_with_model(
+                m=model,
+                observation=observation,
+                rng=rng,
+                noise=noise,
+                return_prefix_rep=True,
+                **self._policy._sample_kwargs,
+            )
+            outputs = self._policy._output_transform(
+                {"state": inputs["state"], "actions": actions}
+            )
+            actions = outputs["actions"]
+        else:
+            actions = self._policy.infer_with_model(
+                model=model,
+                obs=observations,
+                noise=noise,
+                return_prefix_rep=False,
+                sharding_spec=sharding_spec,
+            )["actions"]
 
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
+            if return_prefix_rep and prefix.ndim == 2:
+                prefix = prefix[np.newaxis, ...]
 
         return (actions, prefix) if return_prefix_rep else actions
 
@@ -494,26 +537,39 @@ class FilteredSFTLearner(Agent):
         for i, task in enumerate(task_description):
             task_to_indices.setdefault(task, []).append(i)
 
+        return_prefix_rep = self._config.collect.store_prefix_rep
         all_actions = None
+        all_prefix = None
         for task, indices in task_to_indices.items():
             processed_obs = self._process_obs_for_pi0(
                 jax.tree.map(lambda x: x[indices], observations),
                 task_description=task,
             )
-            group_actions = self._sample_action(
+            group_result = self._sample_action(
                 observations=processed_obs,
                 rng=rng,
                 train_state=self._train_state,
-                return_prefix_rep=False,
+                return_prefix_rep=return_prefix_rep,
             )
+            if return_prefix_rep:
+                group_actions, group_prefix = group_result
+                group_prefix = np.asarray(group_prefix, dtype=np.float32)
+            else:
+                group_actions = group_result
             group_actions = np.asarray(group_actions, dtype=np.float32)
             if all_actions is None:
                 all_actions = np.zeros(
                     (len(task_description), *group_actions.shape[1:]), dtype=np.float32
                 )
+                if return_prefix_rep:
+                    all_prefix = np.zeros(
+                        (len(task_description), *group_prefix.shape[1:]), dtype=np.float32
+                    )
             all_actions[indices] = group_actions
+            if return_prefix_rep:
+                all_prefix[indices] = group_prefix
 
-        return all_actions
+        return (all_actions, all_prefix) if return_prefix_rep else all_actions
 
     def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
         return self._generate_actions(observations, **kwargs)
@@ -568,10 +624,9 @@ class FilteredSFTLearner(Agent):
         - Computes the final next-observation prefix with the current model.
         """
 
-        # TODO: this function is untested
-        # TODO: check if last observation needs to be taken
         next_observation = jax.tree.map(
-            lambda x: x[[-1]], episode_data[-1]["next_observation"]
+            lambda x: x[np.newaxis],  # (replan_steps, ...) -> (1, replan_steps, ...) for _process_obs_for_pi0
+            episode_data[-1]["next_observation"]
         )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
         params = (
@@ -582,22 +637,26 @@ class FilteredSFTLearner(Agent):
         model = nnx.merge(self._train_state.model_def, params)
         model.eval()
         inputs = self._policy._input_transform(processed_obs)
-        # TODO: check if batch dim needs to be added
+        inputs = self._batch_transform_inputs(inputs, batch_size=1)
         observation = _model.Observation.from_dict(inputs)
         next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
-        # TODO: check if this check and cast is necessary
         if next_prefix.ndim >= 3 and next_prefix.shape[0] == 1:
             next_prefix = next_prefix[0]
         next_prefix = np.asarray(next_prefix, dtype=np.float32)
+        if next_prefix.ndim >= 2:
+            next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
-            horizon = ep["observation"]["state"].shape[0]
-            ep["observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+            prefix = np.asarray(prefix, dtype=np.float32)
+            if prefix.ndim >= 2:
+                prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
+            horizon = ep["observation"]["observation/state"].shape[0]
+            ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0
             )
-            ep["next_observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+            ep["next_observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 next_prefix[None, ...], horizon, axis=0
             )
             next_prefix = prefix
@@ -649,6 +708,8 @@ class FilteredSFTLearner(Agent):
             k[len("observation/") :]: v[act_h - 1 : act_h - 1 + n_windows]
             for k, v in episode_data["next_observation"].items()
         }
+        _prefix = _obs.pop(PREFIX_EMBEDDING_NAME, None)
+        _next_prefix = _next_obs.pop(PREFIX_EMBEDDING_NAME, None)
         _actions = np.stack(
             [
                 episode_data["action"][start : start + act_h]
@@ -704,6 +765,10 @@ class FilteredSFTLearner(Agent):
         # process observations and actions according to pi0 preprocessing
         _next_obs, _ = transform(_next_obs, _actions, str(task_description))
         _obs, _actions = transform(_obs, _actions, str(task_description))
+        if _prefix is not None:
+            _obs[PREFIX_EMBEDDING_NAME] = _prefix.astype(np.float32)
+        if _next_prefix is not None:
+            _next_obs[PREFIX_EMBEDDING_NAME] = _next_prefix.astype(np.float32)
 
         self._online_data_buffer.insert(
             {

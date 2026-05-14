@@ -47,6 +47,15 @@ class BestofNLearner(FilteredSFTLearner):
         self.task_description = task_description
         self.debug = debug
 
+        # Must be set before super().__init__() because _make_buffer_dummy_data is called there.
+        self._prefix_embed_dim = None
+        if (
+            config.collect.store_prefix_rep
+            and config.rl.critic_encoder_type in ("pi0_prefix", "pi0_prefix_resnet")
+            and PREFIX_EMBEDDING_NAME in dummy_obs
+        ):
+            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+
         super().__init__(config)
 
         # Initialize normalization and dimension attributes for critic inference
@@ -185,6 +194,14 @@ class BestofNLearner(FilteredSFTLearner):
                 donate_argnums=(1, 2),  # q_state, value_state only (pi0 shares buffers with policy_state)
             )
 
+    def _make_buffer_dummy_data(self):
+        dummy = super()._make_buffer_dummy_data()
+        if self._prefix_embed_dim is not None:
+            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
+            dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
+            dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
+        return dummy
+
     def _recompute_prefix_embedding(
             self,
             *,
@@ -236,16 +253,27 @@ class BestofNLearner(FilteredSFTLearner):
 
         encoder_type = self._config.rl.critic_encoder_type
         if encoder_type in ("pi0_prefix", "pi0_prefix_resnet"):
-            curr_prefix_embedding = self._recompute_prefix_embedding(
-                observation=online_observation,
-                policy_state=policy_state,
-            )
-            observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
+            if (
+                PREFIX_EMBEDDING_NAME in online_observation
+                and PREFIX_EMBEDDING_NAME in next_observation
+            ):
+                observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[
+                    PREFIX_EMBEDDING_NAME
+                ]
+                next_observation_dict[PREFIX_EMBEDDING_NAME] = next_observation[
+                    PREFIX_EMBEDDING_NAME
+                ]
+            else:
+                curr_prefix_embedding = self._recompute_prefix_embedding(
+                    observation=online_observation,
+                    policy_state=policy_state,
+                )
+                observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
 
-            next_prefix_embedding = self._recompute_prefix_embedding(
-                observation=next_observation, policy_state=policy_state
-            )
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
+                next_prefix_embedding = self._recompute_prefix_embedding(
+                    observation=next_observation, policy_state=policy_state
+                )
+                next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
         if encoder_type in ("resnet", "pi0_prefix_resnet"):
             # Buffer stores images under observation["image"]["base_0_rgb"] / ["left_wrist_0_rgb"]
             # after the pi0 LiberoInputs transform (uint8, HWC).
@@ -310,6 +338,7 @@ class BestofNLearner(FilteredSFTLearner):
         n_samples = self._config.rl.n_samples
         rng, self._rng = jax.random.split(self._rng)
         task_description = kwargs.get("task_description")
+        return_prefix_rep = self._config.collect.store_prefix_rep
 
         # Group envs by task so each _sample_action call gets a single string prompt
         task_to_indices: dict[str, list[int]] = {}
@@ -318,6 +347,7 @@ class BestofNLearner(FilteredSFTLearner):
 
         env_num = len(task_description)
         all_best_actions = None
+        all_best_prefix = None
 
         # Build q-model once, shared across task groups
         q_params = (
@@ -347,7 +377,17 @@ class BestofNLearner(FilteredSFTLearner):
                 k: (v if k == "prompt" else np.repeat(np.asarray(v), n_samples, axis=0))
                 for k, v in processed_obs.items()
             }
-            group_actions = self._sample_action(tiled_obs, rng, self._train_state)
+            group_result = self._sample_action(
+                tiled_obs,
+                rng,
+                self._train_state,
+                return_prefix_rep=return_prefix_rep,
+            )
+            if return_prefix_rep:
+                group_actions, group_prefix = group_result
+                group_prefix = np.asarray(group_prefix, dtype=np.float32)
+            else:
+                group_actions = group_result
             # group_actions: [group_env_num * n_samples, horizon, dim]
 
             # 2. Build critic observation (normalize + pad state to match buffer preprocessing)
@@ -362,24 +402,25 @@ class BestofNLearner(FilteredSFTLearner):
             encoder_type = self._config.rl.critic_encoder_type
             critic_obs: dict = {"state": state}
             if encoder_type in ("pi0_prefix", "pi0_prefix_resnet"):
-                # Compute prefix embedding (on non-tiled obs, then tile)
-                inputs = self._policy._input_transform(processed_obs)
-                for _mask_key in ("image_mask", "image_masks"):
-                    if _mask_key in inputs:
-                        inputs[_mask_key] = {k: np.full((group_env_num,), bool(v), dtype=bool) for k, v in inputs[_mask_key].items()}
-                for _tok_key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
-                    if _tok_key in inputs and inputs[_tok_key] is not None:
-                        arr = np.asarray(inputs[_tok_key])
-                        if arr.ndim == 1:
-                            inputs[_tok_key] = np.repeat(arr[np.newaxis], group_env_num, axis=0)
-                obs_for_prefix = _model.Observation.from_dict(inputs)
-                prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
-                prefix = np.asarray(prefix)
-                if prefix.ndim == 3:
-                    prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
-                # prefix: [group_env_num, embed_dim]
-                prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
-                critic_obs[PREFIX_EMBEDDING_NAME] = prefix_tiled
+                if return_prefix_rep:
+                    prefix_tiled = group_prefix
+                    if prefix_tiled.ndim >= 3:
+                        prefix_tiled = prefix_tiled.reshape(
+                            (prefix_tiled.shape[0], -1, prefix_tiled.shape[-1])
+                        ).mean(axis=1)
+                    critic_obs[PREFIX_EMBEDDING_NAME] = jnp.asarray(prefix_tiled)
+                else:
+                    # Compute prefix embedding (on non-tiled obs, then tile)
+                    inputs = self._policy._input_transform(processed_obs)
+                    inputs = self._batch_transform_inputs(inputs, group_env_num)
+                    obs_for_prefix = _model.Observation.from_dict(inputs)
+                    prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
+                    prefix = np.asarray(prefix)
+                    if prefix.ndim == 3:
+                        prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+                    # prefix: [group_env_num, embed_dim]
+                    prefix_tiled = jnp.repeat(jnp.asarray(prefix), n_samples, axis=0)
+                    critic_obs[PREFIX_EMBEDDING_NAME] = prefix_tiled
             if encoder_type in ("resnet", "pi0_prefix_resnet"):
                 image = np.repeat(np.asarray(processed_obs["observation/image"], dtype=np.uint8), n_samples, axis=0)
                 wrist_image = np.repeat(np.asarray(processed_obs["observation/wrist_image"], dtype=np.uint8), n_samples, axis=0)
@@ -414,12 +455,21 @@ class BestofNLearner(FilteredSFTLearner):
 
             group_actions = np.asarray(group_actions).reshape(group_env_num, n_samples, *np.asarray(group_actions).shape[1:])
             best = group_actions[np.arange(group_env_num), best_idx]
+            if return_prefix_rep:
+                # All n_samples prefixes per env are identical (prefix depends on obs, not action).
+                best_prefix = group_prefix.reshape(group_env_num, n_samples, *group_prefix.shape[1:])[:, 0]
 
             if all_best_actions is None:
                 all_best_actions = np.zeros((env_num, *best.shape[1:]), dtype=np.float32)
+                if return_prefix_rep:
+                    all_best_prefix = np.zeros(
+                        (env_num, *best_prefix.shape[1:]), dtype=np.float32
+                    )
             all_best_actions[indices] = np.asarray(best, dtype=np.float32)
+            if return_prefix_rep:
+                all_best_prefix[indices] = np.asarray(best_prefix, dtype=np.float32)
 
-        return all_best_actions
+        return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
 
     @at.typecheck
     def _get_on_policy_action(
