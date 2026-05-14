@@ -538,7 +538,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             if self.debug:
                 log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
-            scale = self._normalizer_state.scale
+            scale = self._normalizer_state.scale if rl_config.normalize_advantages else 1.0
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,

@@ -36,10 +36,6 @@ mp.set_start_method("spawn", force=True)
 if mp.current_process().name != "MainProcess":
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
-# Give JAX enough headroom for full pi0.5 fine-tuning while still leaving some
-# VRAM available for environment rendering.
-os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
-
 import platform
 
 from flax.training import common_utils
@@ -82,66 +78,61 @@ def main(config: _config.OnlineTrainConfig):
     )
 
     infos = []
-    try:
-        for step in pbar:
-            info = agent.update()
-            infos.append(info)
+    for step in pbar:
+        info = agent.update()
+        infos.append(info)
 
-            if step % config.log_interval == 0:
-                # Infos may have different keys (actor-only, critic-only, or both),
-                # so we normalize them before stacking.
-                all_keys = set().union(*(d.keys() for d in infos))
-                nan = jnp.array(float("nan"))
-                normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
-                stacked_infos = common_utils.stack_forest(normalized)
-                reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
-                info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-                pbar.write(f"Step {step}: {info_str}")
-                wandb.log(reduced_info, step=step)
-                infos = []
+        if step % config.log_interval == 0:
+            # Infos may have different keys (actor-only, critic-only, or both),
+            # so we normalize them before stacking.
+            all_keys = set().union(*(d.keys() for d in infos))
+            nan = jnp.array(float("nan"))
+            normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
+            stacked_infos = common_utils.stack_forest(normalized)
+            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
+            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            pbar.write(f"Step {step}: {info_str}")
+            wandb.log(reduced_info, step=step)
+            infos = []
 
-            if step % config.collect.collect_interval == 0:
-                collect_info, n_collected_episodes = collect_data(
-                    agent=agent,
-                    env=env,
-                    config=config,
-                    step=step,
-                )
-                wandb.log(collect_info, step=step)
-                if n_collected_episodes > 0:
-                    logging.info(
-                        f"Collected {n_collected_episodes} successful episodes at step {step}."
-                    )
-                save_epoch_state(agent, config)
-
-            if step % config.collect.eval_interval == 0:
-                # Molmo envs can hold onto GPU render memory, so keep eval envs
-                # short-lived instead of reserving that memory for the whole run.
-                eval_env_fn = make_env(
-                    config,
-                    config.collect.eval_tasks,
-                    num_devices=num_devices,
-                )
-                eval_env = filtered_sft_wrap_env(
-                    eval_env_fn,
-                    config=config,
-                    env_num=config.collect.eval_env_num,
-                )
-                try:
-                    eval_info = evaluate_policy(
-                        agent=agent,
-                        env=eval_env,
-                        config=config,
-                        step=step,
-                    )
-                finally:
-                    eval_env.close()
-                wandb.log(eval_info, step=step)
+        if step % config.collect.collect_interval == 0:
+            collect_info, n_collected_episodes = collect_data(
+                agent=agent,
+                env=env,
+                config=config,
+                step=step,
+            )
+            wandb.log(collect_info, step=step)
+            if n_collected_episodes > 0:
                 logging.info(
-                    f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
+                    f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
-    finally:
-        env.close()
+            save_epoch_state(agent, config)
+
+        if step % config.collect.eval_interval == 0:
+            # Molmo envs can hold onto GPU render memory, so keep eval envs
+            # short-lived instead of reserving that memory for the whole run.
+            eval_env_fn = make_env(
+                config,
+                config.collect.eval_tasks,
+                num_devices=num_devices,
+            )
+            eval_env = filtered_sft_wrap_env(
+                eval_env_fn,
+                config=config,
+                env_num=config.collect.eval_env_num,
+            )
+            eval_info = evaluate_policy(
+                agent=agent,
+                env=eval_env,
+                config=config,
+                step=step,
+            )
+            eval_env.close()
+            wandb.log(eval_info, step=step)
+            logging.info(
+                f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
+            )
 
     logging.info("Waiting for checkpoint manager to finish")
     agent._checkpoint_manager.wait_until_finished()
