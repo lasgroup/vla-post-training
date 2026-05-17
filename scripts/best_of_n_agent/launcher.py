@@ -25,12 +25,12 @@ from launcher_util import (
 SCRIPT = "scripts/best_of_n_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_best_of_n"
 PROJECT_NAME = "value_learning"
-DEFAULT_LOG_INTERVAL = 25
+DEFAULT_LOG_INTERVAL = 300
 DEFAULT_SAVE_INTERVAL = 100_000
 DEFAULT_SEED = 0
-DEFAULT_BUFFER_CAPACITY = 250000
+DEFAULT_BUFFER_CAPACITY = 250_000
 DEFAULT_NUM_ROLLOUTS = 1
-DEFAULT_COLLECT_INTERVAL = 6_000     # 300
+DEFAULT_COLLECT_INTERVAL = 300     # 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 DEFAULT_BATCH_SIZE = 256
@@ -42,7 +42,7 @@ DEFAULT_EVAL_TASKS = ["libero_90_59-62"]
 DEFAULT_EVAL_ENV_NUM = 4
 DEFAULT_EVAL_INTERVAL = 10_000         # 1_000
 DEFAULT_NUM_EVAL_ROLLOUTS = 32
-NUM_TRAIN_STEPS = 100_010              # 5_000
+NUM_TRAIN_STEPS = 2_000_000              # 5_000
 DEFAULT_CRITIC_TRAINING_START_STEP = 0
 DEFAULT_CRITIC_INFERENCE_START_STEP = 900
 DEFAULT_NUM_CPUS = 16
@@ -55,17 +55,21 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "tags": [["100k_steps_store_prefix_multitask_05_14"]],
     "seed": [0, 1, 2],  # [0, 1, 2, 3, 4]
     # Data collection/eval
-    "collect.num_rollouts": [16],        # [256]
+    "collect.num_rollouts": [4],        # [256]
     # Critic training
-    "rl.discount": [0.99],
+    "rl.discount": [0.995],
     "collect.use_time_to_success_as_reward": [True],
     # "lr_schedule.value": [5e-5],
     "rl.num_critic_updates_per_batch": [1],
+    "batch_size": [1024],
+    ("rl.critic_encoder_hidden_dims", "rl.critic_decoder_hidden_dims"): [
+        ((1024, 1024), (512, 512)), # larger
+    ],
     "rl.num_offline_pretraining_steps": [0],
     ("rl.td_weight_schedule.init_value", "rl.td_weight_schedule.end_value", "rl.td_weight_schedule.switch_step"): [
-        (1.0, 1.0, 999_999),  # TD only
-        (0.0, 1.0, -1),       # MC-then-TD
-        (0.5, 0.5, 500_000),  # 0.5*(MC+TD)
+        (1.0, 1.0, 9_999_999),  # TD only
+        # (0.0, 1.0, -1),       # MC-then-TD
+        # (0.5, 0.5, 500_000),  # 0.5*(MC+TD)
     ],
     # # TD only:
     # "rl.td_weight_schedule.init_value": [1.0],
@@ -96,7 +100,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_38", "libero_90_38"),
         # ("libero_90_41", "libero_90_41"),
         # ("libero_90_43", "libero_90_43"),     # "Put the white bowl on top of the cabinet"
-        ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
+        # ("libero_90_44", "libero_90_44"),     # "Turn on the stove"
         # ("libero_90_47", "libero_90_47"),     # "Pick up the cream cheese box and put it in the basket"
         # ("libero_90_53", "libero_90_53"),   
         ("libero_90_59", "libero_90_59"),     # "Pick up the tomato sauce and put it in the tray"
@@ -158,6 +162,7 @@ def main() -> None:
     parser.add_argument("--value_target_type", default="one_hot", choices=["one_hot", "two_hot"])
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
+    parser.add_argument("--group", default=None, help="W&B group name")
 
     args = parser.parse_args()
 
@@ -191,6 +196,7 @@ def main() -> None:
             "rl.value_target_type": args.value_target_type,
             "collect.store_prefix_rep": True,
             "save_interval": DEFAULT_SAVE_INTERVAL,
+            "group": args.group,
         }
         flags.update(combo)
 

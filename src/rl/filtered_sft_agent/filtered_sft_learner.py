@@ -725,7 +725,7 @@ class FilteredSFTLearner(Agent):
         )
         _discount = np.asarray(
             [
-                0.0 if np.any(done[start : start + act_h]) else last_gamma
+                0.0 if np.any(episode_data["terminate"][start : start + act_h]) else last_gamma
                 for start in range(n_windows)
             ]
         )

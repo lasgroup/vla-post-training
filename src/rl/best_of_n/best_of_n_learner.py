@@ -523,26 +523,10 @@ class BestofNLearner(FilteredSFTLearner):
         )
 
         value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
-        
-        # Update the state action critic state
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
 
-        for _ in range(num_updates):
-            q_rng, v_rng, rng = jax.random.split(rng, 3)
-            # Update the state action critic state
-            q_state, q_info = self._q_train_step(
-                q_rng,
-                q_state,
-                value_state,
-                batch,
-            )
-            # Update the value state
-            value_state, value_info = self._value_train_step(
-                v_rng,
-                value_state,
-                q_state,
-                value_batch,
-            )
+        q_rng, v_rng, rng = jax.random.split(rng, 3)
+        q_state, q_info = self._q_train_step(q_rng, q_state, value_state, batch)
+        value_state, value_info = self._value_train_step(v_rng, value_state, q_state, value_batch)
 
         return q_state, value_state, q_info, value_info
 
@@ -589,15 +573,13 @@ class BestofNLearner(FilteredSFTLearner):
             batch["reward"], batch["discount"], batch["mc_return"],
         )
 
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
-        for _ in range(num_updates):
-            q_rng, v_rng, rng = jax.random.split(rng, 3)
-            q_state, pi0_encoder_state, q_info = self._q_train_step_with_encoder(
-                q_rng, q_state, value_state, pi0_encoder_state, raw_q_batch,
-            )
-            value_state, pi0_encoder_state, value_info = self._value_train_step_with_encoder(
-                v_rng, value_state, q_state, pi0_encoder_state, raw_v_batch,
-            )
+        q_rng, v_rng, rng = jax.random.split(rng, 3)
+        q_state, pi0_encoder_state, q_info = self._q_train_step_with_encoder(
+            q_rng, q_state, value_state, pi0_encoder_state, raw_q_batch,
+        )
+        value_state, pi0_encoder_state, value_info = self._value_train_step_with_encoder(
+            v_rng, value_state, q_state, pi0_encoder_state, raw_v_batch,
+        )
 
         return q_state, value_state, pi0_encoder_state, q_info, value_info
 
@@ -735,89 +717,82 @@ class BestofNLearner(FilteredSFTLearner):
         has_offline = self._offline_data_buffer is not None and self._offline_data_buffer.size > 0
 
         critic_info = {}
+        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
 
-        # --- Determine the critic batch (replay-buffer format) ---
-        offline_batch = None
-        if has_offline:
-            offline_batch = self._offline_data_buffer.sample(
-                batch_size=batch_size,
-            )
-        if use_online:
-            critic_source_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+        for _ in range(num_updates):
+            # --- Sample a fresh batch each update ---
+            offline_batch = None
+            if has_offline:
+                offline_batch = self._offline_data_buffer.sample(batch_size=batch_size)
+            if use_online:
+                critic_source_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
 
-            if offline_batch is not None and rl_config.online_ratio < 1.0:
-                n_online = min(
-                    int(batch_size * rl_config.online_ratio),
-                    jax.tree.leaves(critic_source_batch)[0].shape[0],
-                )
-                n_offline = batch_size - n_online
-                critic_source_batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
-                    offline_batch,
-                    critic_source_batch,
-                )
-                # The online batch may be replicated (PartitionSpec()) while
-                # the offline batch is sharded. Re-shard the mixed result to
-                # match the data sharding expected by _train_step.
-                critic_source_batch = jax.device_put(critic_source_batch, self._data_sharding)
-                del offline_batch
-                gc.collect()
-        else:
-            critic_source_batch = None
-            if offline_batch is not None:
-                critic_source_batch = offline_batch
-                del offline_batch
-                gc.collect()
-            
-        if critic_source_batch is None:
-            return {
-                "online_buffer_size": jnp.asarray(
-                    float(self._online_data_buffer.size), dtype=jnp.float32
-                )
-            }
+                if offline_batch is not None and rl_config.online_ratio < 1.0:
+                    n_online = min(
+                        int(batch_size * rl_config.online_ratio),
+                        jax.tree.leaves(critic_source_batch)[0].shape[0],
+                    )
+                    n_offline = batch_size - n_online
+                    critic_source_batch = jax.tree.map(
+                        lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
+                        offline_batch,
+                        critic_source_batch,
+                    )
+                    critic_source_batch = jax.device_put(critic_source_batch, self._data_sharding)
+                    del offline_batch
+                    gc.collect()
+            else:
+                critic_source_batch = None
+                if offline_batch is not None:
+                    critic_source_batch = offline_batch
+                    del offline_batch
+                    gc.collect()
 
-        if update_critic:
-            if self.debug:
-                log_memory_debug(
-                    "before_critics", train_state=self._train_state, batch=critic_source_batch
-                )
-            critic_rng, self._rng = jax.random.split(self._rng, 2)
-            with sharding.set_mesh(self._mesh):
-                if rl_config.train_pi0_prefix_encoder:
-                    q_state, value_state, pi0_encoder_state, q_info, value_info = (
-                        self._update_critics_with_encoder_jitted(
-                            critic_source_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            self._pi0_encoder_state,
-                            critic_rng,
+            if critic_source_batch is None:
+                break
+
+            if update_critic:
+                if self.debug:
+                    log_memory_debug(
+                        "before_critics", train_state=self._train_state, batch=critic_source_batch
+                    )
+                critic_rng, self._rng = jax.random.split(self._rng, 2)
+                with sharding.set_mesh(self._mesh):
+                    if rl_config.train_pi0_prefix_encoder:
+                        q_state, value_state, pi0_encoder_state, q_info, value_info = (
+                            self._update_critics_with_encoder_jitted(
+                                critic_source_batch,
+                                self._state_action_critic_state,
+                                self._value_state,
+                                self._train_state,
+                                self._pi0_encoder_state,
+                                critic_rng,
+                            )
                         )
-                    )
-                    self._pi0_encoder_state = pi0_encoder_state
-                    self._train_state = dataclasses.replace(
-                        self._train_state,
-                        params=self._pi0_encoder_state.params,
-                        ema_params=self._pi0_encoder_state.params,
-                    )
-                else:
-                    q_state, value_state, q_info, value_info = (
-                        self._update_critics_jitted(
-                            critic_source_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
+                        self._pi0_encoder_state = pi0_encoder_state
+                        self._train_state = dataclasses.replace(
                             self._train_state,
-                            critic_rng,
+                            params=self._pi0_encoder_state.params,
+                            ema_params=self._pi0_encoder_state.params,
                         )
-                    )
-            self._state_action_critic_state = q_state
-            self._value_state = value_state
+                    else:
+                        q_state, value_state, q_info, value_info = (
+                            self._update_critics_jitted(
+                                critic_source_batch,
+                                self._state_action_critic_state,
+                                self._value_state,
+                                self._train_state,
+                                critic_rng,
+                            )
+                        )
+                self._state_action_critic_state = q_state
+                self._value_state = value_state
 
-            critic_info = {
-                                f"critic/q_{key}": value for key, value in q_info.items()
-                            } | {f"critic/value_{key}": value for key, value in value_info.items()}
-            if self.debug:
-                log_memory_debug("after_update_critics")
+                critic_info = {
+                    f"critic/q_{key}": value for key, value in q_info.items()
+                } | {f"critic/value_{key}": value for key, value in value_info.items()}
+                if self.debug:
+                    log_memory_debug("after_update_critics")
         info = (
                 critic_info
                 | {
