@@ -14,7 +14,6 @@ import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
-from src.rl.value_distribution import get_value_bounds, make_value_distribution
 import openpi.training.optimizer as _optimizer
 from src.rl.best_of_n.update_critic import (
     init_state_action_critic_train_state,
@@ -23,29 +22,39 @@ from src.rl.best_of_n.update_critic import (
     train_value_step,
     train_q_step_with_encoder,
     train_value_step_with_encoder,
-    StateActionCriticDef,
-    StateValueDef,
+    _build_pi0_backbone_critic_defs,
 )
-from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
-from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
+from src.rl.networks.rl_networks import ObsType
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import BestofNLearnerConfig, OnlineTrainConfig
+from src.rl.value_distribution import get_value_bounds, make_value_distribution
+from src.training.config import OnlineTrainConfig
 
 
 class BestofNLearner(FilteredSFTLearner):
     def __init__(
             self,
             config: OnlineTrainConfig,
-            dummy_obs: ObsType,
-            dummy_act: ActionType,
-            state_action_critic_def: StateActionCriticDef,
-            state_value_def: StateValueDef,
-            task_description: str,
-            debug: bool = False,
     ):
-        self.task_description = task_description
-        self.debug = debug
+
+        model = config.model.create(jax.random.key(config.seed))
+        fake_obs = config.model.fake_obs(batch_size=1)
+        prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        del model
+        assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
+        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        dummy_obs = {"state": fake_obs.state}
+        if config.rl.critic_encoder_type in ("pi0_prefix", "pi0_prefix_resnet") and prefix_embedding_shape is not None:
+            dummy_obs[PREFIX_EMBEDDING_NAME] = jnp.zeros(
+                (1, *prefix_embedding_shape), dtype=jnp.float32
+            )
+        if config.rl.critic_encoder_type in ("resnet", "pi0_prefix_resnet"):
+            dummy_obs["image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
+            dummy_obs["wrist_image"] = jnp.zeros((1, 224, 224, 3), dtype=jnp.uint8)
+        dummy_act = config.model.fake_act(batch_size=1)
+        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
 
         # Must be set before super().__init__() because _make_buffer_dummy_data is called there.
         self._prefix_embed_dim = None
@@ -87,14 +96,6 @@ class BestofNLearner(FilteredSFTLearner):
         )
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
-
-        if self.debug:
-            log_memory_debug(
-                "init",
-                train_state=self._train_state,
-                state_action_critic_state=self._state_action_critic_state,
-                value_state=self._value_state,
-            )
 
         del self._train_step
         gc.collect()
@@ -320,12 +321,12 @@ class BestofNLearner(FilteredSFTLearner):
         return policy_observation, critic_observation, actions
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
-        assert env_index in range(len(self._episode_storage)), \
-            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        assert env_index in range(
+            len(self._episode_storage)
+        ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
         self._save_episode_in_buffer(episode_data, task_description)
 
     def _infer_policy_batch_size(self, observations: Dict) -> int:
@@ -504,7 +505,6 @@ class BestofNLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
-        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
         if self._config.rl.train_on_policy_value_function:
             # We replace the action from the batch with the on policy action
             # This ensures that we train an on policy critic.
@@ -569,7 +569,6 @@ class BestofNLearner(FilteredSFTLearner):
         The raw buffer observations are passed directly — no pre-processing via
         _online_batch_to_critic_batch.
         """
-        assert isinstance(self._config.rl, BestofNLearnerConfig)
         if self._config.rl.train_on_policy_value_function:
             policy_sample_rng, rng = jax.random.split(rng, 2)
             value_actions = self._get_on_policy_action(
@@ -603,9 +602,6 @@ class BestofNLearner(FilteredSFTLearner):
 
     def pretrain_with_offline_data(self):
         self.warm_start_training_steps += 1
-        assert isinstance(self._config.rl, BestofNLearnerConfig), (
-            "Only BestofN config should be passed to the best-of-N agent"
-        )
 
         if self._offline_data_buffer is None or self._offline_data_buffer.size == 0:
             raise ValueError(
@@ -650,7 +646,7 @@ class BestofNLearner(FilteredSFTLearner):
         self._state_action_critic_state = q_state
         self._value_state = value_state
         critic_info = {f"pretrain/q/{k}": v for k, v in q_info.items()
-                        } | {f"pretrain/value/{k}": v for k, v in value_info.items()}
+            } | {f"pretrain/value/{k}": v for k, v in value_info.items()}
         info = jax.tree.map(np.asarray, critic_info)
         return info
 
@@ -682,41 +678,14 @@ class BestofNLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, BestofNLearnerConfig), (
-            "Only BestofN config should be passed to the best-of-N agent"
-        )
-        rl_config = self._config.rl
 
-        if rl_config.critic_pre_training_steps == self.training_steps:
-            # Reset optimizer state of the value and q function
-            q_opt_state = self._state_action_critic_state.tx.init(
-                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
-            )
-            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
-            self._state_action_critic_state = dataclasses.replace(
-                self._state_action_critic_state,
-                opt_state=q_opt_state,
-                ema_params=new_ema_state_action_critic_params,
-            )
-            del new_ema_state_action_critic_params, q_opt_state
-
-            v_opt_state = self._value_state.tx.init(
-                nnx.filter_state(self._value_state.params, nnx.Param)
-            )
-            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
-            self._value_state = dataclasses.replace(
-                self._value_state,
-                opt_state=v_opt_state,
-                ema_params=new_ema_value_params,
-            )
-            del new_ema_value_params, v_opt_state
-        if self.debug:
-            log_memory_debug("step_start", training_steps=self.training_steps)
+        if self._config.rl.critic_pre_training_steps == self.training_steps:
+            self._prepare_critic_state_after_pretraining()
 
         self.training_steps += 1
         update_critic = (
-                self.training_steps >= rl_config.critic_training_start_step
-                and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= self._config.rl.critic_training_start_step
+            and self.training_steps % self._config.rl.critic_update_interval == 0
         )
 
         if not update_critic:
@@ -727,104 +696,90 @@ class BestofNLearner(FilteredSFTLearner):
             }
 
         batch_size = self._config.batch_size
-        online_batch_size = int(batch_size * min(1.0, self._config.rl.online_ratio))
-        use_online = (
-                online_batch_size > 0 and self._online_data_buffer.size >= online_batch_size
+        online_batch_size = int(
+            batch_size * min(1.0, self._config.rl.online_ratio)
         )
         use_online = self._online_data_buffer.size >= online_batch_size
         has_offline = self._offline_data_buffer is not None and self._offline_data_buffer.size > 0
 
-        critic_info = {}
-
-        # --- Determine the critic batch (replay-buffer format) ---
-        offline_batch = None
-        if has_offline:
-            offline_batch = self._offline_data_buffer.sample(
-                batch_size=batch_size,
-            )
-        if use_online:
-            critic_source_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
-
-            if offline_batch is not None and rl_config.online_ratio < 1.0:
-                n_online = min(
-                    int(batch_size * rl_config.online_ratio),
-                    jax.tree.leaves(critic_source_batch)[0].shape[0],
-                )
-                n_offline = batch_size - n_online
-                critic_source_batch = jax.tree.map(
-                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
-                    offline_batch,
-                    critic_source_batch,
-                )
-                # The online batch may be replicated (PartitionSpec()) while
-                # the offline batch is sharded. Re-shard the mixed result to
-                # match the data sharding expected by _train_step.
-                critic_source_batch = jax.device_put(critic_source_batch, self._data_sharding)
-                del offline_batch
-                gc.collect()
-        else:
-            critic_source_batch = None
-            if offline_batch is not None:
-                critic_source_batch = offline_batch
-                del offline_batch
-                gc.collect()
-            
-        if critic_source_batch is None:
+        if not use_online and not has_offline:
             return {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
                 )
             }
 
-        if update_critic:
-            if self.debug:
-                log_memory_debug(
-                    "before_critics", train_state=self._train_state, batch=critic_source_batch
-                )
-            critic_rng, self._rng = jax.random.split(self._rng, 2)
-            with sharding.set_mesh(self._mesh):
-                if rl_config.train_pi0_prefix_encoder:
-                    q_state, value_state, pi0_encoder_state, q_info, value_info = (
-                        self._update_critics_with_encoder_jitted(
-                            critic_source_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            self._pi0_encoder_state,
-                            critic_rng,
-                        )
-                    )
-                    self._pi0_encoder_state = pi0_encoder_state
-                    self._train_state = dataclasses.replace(
-                        self._train_state,
-                        params=self._pi0_encoder_state.params,
-                        ema_params=self._pi0_encoder_state.params,
-                    )
-                else:
-                    q_state, value_state, q_info, value_info = (
-                        self._update_critics_jitted(
-                            critic_source_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            critic_rng,
-                        )
-                    )
-            self._state_action_critic_state = q_state
-            self._value_state = value_state
+        critic_info = {}
 
-            critic_info = {
-                                f"critic/q_{key}": value for key, value in q_info.items()
-                            } | {f"critic/value_{key}": value for key, value in value_info.items()}
-            if self.debug:
-                log_memory_debug("after_update_critics")
-        info = (
-                critic_info
-                | {
-                    "online_buffer_size": jnp.asarray(
-                        float(self._online_data_buffer.size), dtype=jnp.float32
+        # --- Determine the critic batch (replay-buffer format) ---
+        if use_online:
+            online_batch = self._online_data_buffer.sample(
+                batch_size=online_batch_size
+            )
+        if has_offline:
+            batch = self._offline_data_buffer.sample(
+                batch_size=batch_size,
+            )
+            if use_online and self._config.rl.online_ratio < 1.0:
+                n_online = min(
+                    int(batch_size * self._config.rl.online_ratio),
+                    jax.tree.leaves(online_batch)[0].shape[0],
+                )
+                n_offline = batch_size - n_online
+                batch = jax.tree.map(
+                    lambda x, y: jnp.concatenate([x[:n_offline], y[:n_online]], axis=0),
+                    batch,
+                    online_batch,
+                )
+                # The online batch may be replicated (PartitionSpec()) while
+                # the offline batch is sharded. Re-shard the mixed result to
+                # match the data sharding expected by _train_step.
+                batch = jax.device_put(batch, self._data_sharding)
+        else:
+            batch = online_batch
+
+        critic_rng, self._rng = jax.random.split(self._rng, 2)
+        with sharding.set_mesh(self._mesh):
+            if self._config.rl.train_pi0_prefix_encoder:
+                q_state, value_state, pi0_encoder_state, q_info, value_info = (
+                    self._update_critics_with_encoder_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        self._pi0_encoder_state,
+                        critic_rng,
                     )
-                }
+                )
+                self._pi0_encoder_state = pi0_encoder_state
+                self._train_state = dataclasses.replace(
+                    self._train_state,
+                    params=self._pi0_encoder_state.params,
+                    ema_params=self._pi0_encoder_state.params,
+                )
+            else:
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+        self._state_action_critic_state = q_state
+        self._value_state = value_state
+
+        critic_info = {
+            f"critic/q_{key}": value for key, value in q_info.items()
+        } | {f"critic/value_{key}": value for key, value in value_info.items()}
+        info = (
+            critic_info
+            | {
+                "online_buffer_size": jnp.asarray(
+                    float(self._online_data_buffer.size), dtype=jnp.float32
+                )
+            }
         )
         info = jax.tree.map(np.asarray, info)
         return info

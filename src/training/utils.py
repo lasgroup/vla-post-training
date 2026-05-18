@@ -64,6 +64,8 @@ def init_wandb(
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
 
+    wandb.define_metric("pretrain/*", step_metric="pretrain_step")
+    wandb.define_metric("eval/*", step_metric="eval/total_collected_episodes")
 
 def log_images(batch):
     images_to_log = [

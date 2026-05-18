@@ -88,7 +88,7 @@ def train_loop(config: _config.OnlineTrainConfig,
                     f"Collected {n_collected_episodes} episodes at step {step}."
                 )
 
-        if step % config.collect.eval_interval == 0:
+        if step > 0 and step % config.collect.eval_interval == 0:
             eval_info = evaluate_policy(
                 agent=agent,
                 env=eval_env,

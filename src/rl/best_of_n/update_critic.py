@@ -16,6 +16,11 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig, BestofNLearnerConfig
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
+from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.encoders.resnet_encoderv1 import ResNetEncoder, ResNetBlock
+from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
+from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
+from src.rl.networks.mlp import MLP
 from src.rl.networks.rl_networks import (
     ObsType,
     ActionType,
@@ -35,6 +40,169 @@ CriticBatch = tuple[
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
+
+
+class ResNetStateEncoder(nnx.Module):
+    """Encodes images with ResNet (spatial softmax), concatenates with state, then passes through a shared MLP."""
+
+    def __init__(self, observation: ObsType, stage_sizes: tuple[int, ...], image_keys: list[str], hidden_dims: tuple[int, ...], *, rngs: nnx.Rngs):
+        self.resnet = ResNetEncoder(
+            input_example=observation,
+            stage_sizes=stage_sizes,
+            block_cls=ResNetBlock,
+            image_keys=image_keys,
+            use_spatial_softmax=True,
+            rngs=rngs,
+        )
+        dummy_img_features = self.resnet(observation, train=False)
+        dummy_state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        dummy_concat = jnp.concatenate([dummy_img_features, dummy_state], axis=-1)
+        self.mlp = MLP(input=dummy_concat, hidden_dims=hidden_dims, activate_final=True, rngs=rngs)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
+        img_features = self.resnet(observation, train=training)
+        state = observation["state"].astype(jnp.float32)
+        x = jnp.concatenate([img_features, state], axis=-1)
+        return self.mlp(x, training=training)
+
+
+class Pi0PrefixResNetEncoder(nnx.Module):
+    """Combines frozen pi0 prefix embedding with trainable ResNet image features.
+
+    Concatenates [ResNet(images), prefix_embedding, state] and passes through a shared MLP.
+    The ResNet is trainable; the prefix embedding is provided externally (computed from frozen Pi0).
+    """
+
+    def __init__(
+        self,
+        observation: ObsType,
+        stage_sizes: tuple[int, ...],
+        image_keys: list[str],
+        prefix_embedding_key: str,
+        hidden_dims: tuple[int, ...],
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.prefix_embedding_key = prefix_embedding_key
+        self.resnet = ResNetEncoder(
+            input_example=observation,
+            stage_sizes=stage_sizes,
+            block_cls=ResNetBlock,
+            image_keys=image_keys,
+            use_spatial_softmax=True,
+            rngs=rngs,
+        )
+        dummy_img_features = self.resnet(observation, train=False)
+        dummy_prefix = jnp.asarray(observation[prefix_embedding_key], dtype=jnp.float32)
+        dummy_state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        dummy_concat = jnp.concatenate([dummy_img_features, dummy_prefix, dummy_state], axis=-1)
+        self.mlp = MLP(input=dummy_concat, hidden_dims=hidden_dims, activate_final=True, rngs=rngs)
+
+    def __call__(self, observation: ObsType, training: bool = False) -> jax.Array:
+        img_features = self.resnet(observation, train=training)
+        prefix = jnp.asarray(observation[self.prefix_embedding_key], dtype=jnp.float32)
+        state = jnp.asarray(observation["state"], dtype=jnp.float32)
+        x = jnp.concatenate([img_features, prefix, state], axis=-1)
+        return self.mlp(x, training=training)
+
+
+def _build_pi0_backbone_critic_defs(
+    config: OnlineTrainConfig,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
+    critic_num_qs = config.rl.critic_num_qs
+    critic_num_vs = config.rl.critic_num_vs
+
+    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
+        if config.rl.critic_encoder_type == "resnet":
+            return ResNetStateEncoder(
+                observation=observation,
+                stage_sizes=(2, 2, 2, 2),  # ResNet-18
+                image_keys=["image", "wrist_image"],
+                hidden_dims=critic_encoder_hidden_dims,
+                rngs=rngs,
+            )
+        if config.rl.critic_encoder_type == "pi0_prefix_resnet":
+            return Pi0PrefixResNetEncoder(
+                observation=observation,
+                stage_sizes=(2, 2, 2, 2),  # ResNet-18
+                image_keys=["image", "wrist_image"],
+                prefix_embedding_key=PREFIX_EMBEDDING_NAME,
+                hidden_dims=critic_encoder_hidden_dims,
+                rngs=rngs,
+            )
+        # pi0_prefix: concatenate [prefix_embedding, state] through an MLP encoder
+        state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"] if prefix_embedding_shape is not None else ["state"]
+        return MLPEncoder(
+            dummy_obs=observation,
+            encoder_def=lambda o, rg: MLP(
+                input=o,
+                hidden_dims=critic_encoder_hidden_dims,
+                activate_final=True,
+                rngs=rg,
+            ),
+            state_vector_keys=state_vector_keys,
+            rngs=rngs,
+        )
+
+    def state_action_decoder_def(
+        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionEnsembleDecoder:
+        return StateActionEnsembleDecoder(
+            observation=embedding,
+            action=action,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_qs=critic_num_qs,
+            num_bins=config.rl.num_value_bins,
+            rngs=rngs,
+        )
+
+    def state_value_decoder_def(
+        embedding: jax.Array, rngs: nnx.Rngs
+    ) -> StateValueEnsembleDecoder:
+        return StateValueEnsembleDecoder(
+            observation=embedding,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_vs=critic_num_vs,
+            num_bins=config.rl.num_value_bins,
+            rngs=rngs,
+        )
+
+    action_compress_dim = config.rl.critic_action_compress_dim
+    action_encoder_def: Callable | None = None
+    if action_compress_dim is not None:
+        def action_encoder_def(action: jax.Array, rngs: nnx.Rngs) -> nnx.Module:
+            return MLP(
+                input=action,
+                hidden_dims=(128, action_compress_dim),
+                activate_final=True,
+                rngs=rngs,
+            )
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionCritic:
+        return StateActionCritic(
+            observation=observation,
+            action=action,
+            encoder_def=encoder_def,
+            decoder_def=state_action_decoder_def,
+            rngs=rngs,
+            action_encoder_def=action_encoder_def,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
+        return StateValue(
+            observation=observation,
+            encoder_def=encoder_def,
+            decoder_def=state_value_decoder_def,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
