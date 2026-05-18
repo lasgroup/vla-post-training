@@ -78,8 +78,8 @@ class BestofNLearnerConfig(RLAlgorithmConfig):
     use_ema_critic: bool = True
     critic_ema_decay: float = 0.995
     critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=3e-4)
-    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    critic_lr_schedule: _optimizer.LRScheduleConfig = ConstantSchedule(value=3e-4)
+    critic_optimizer: _optimizer.OptimizerConfig = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_type: str = "pi0_prefix"     # "pi0_prefix" | "resnet" | "pi0_prefix_resnet"
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_action_compress_dim: int | None = None  # None = no compression; e.g. 32 compresses flat action chunk via MLP
@@ -123,8 +123,8 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     weight_clip: float = 20.0
     advantage_scale: float = 10.0
     critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=1e-4)
-    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    critic_lr_schedule: _optimizer.LRScheduleConfig = ConstantSchedule(value=1e-4)
+    critic_optimizer: _optimizer.OptimizerConfig = _optimizer.AdamW(clip_gradient_norm=1.0)
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     td_weight_schedule: StepSchedule = StepSchedule(
