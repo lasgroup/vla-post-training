@@ -47,6 +47,9 @@ class BestofNLearner(FilteredSFTLearner):
             debug: bool = False,
     ):
         self.debug = debug
+        self._prefix_embed_dim = None
+        if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
+            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
 
         super().__init__(config)
 
@@ -185,6 +188,14 @@ class BestofNLearner(FilteredSFTLearner):
             self._rl_checkpoint_state(),
         )
 
+    def _make_buffer_dummy_data(self) -> dict:
+        dummy = super()._make_buffer_dummy_data()
+        if self._prefix_embed_dim is not None:
+            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
+            dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
+            dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
+        return dummy
+
     def _recompute_prefix_embedding(
             self,
             *,
@@ -231,21 +242,19 @@ class BestofNLearner(FilteredSFTLearner):
             "state": online_observation["state"],
         }
 
-        curr_prefix_embedding = self._recompute_prefix_embedding(
-            observation=online_observation,
-            policy_state=policy_state,
-        )
-
-        observation_dict[PREFIX_EMBEDDING_NAME] = curr_prefix_embedding
-
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
 
-        next_prefix_embedding = self._recompute_prefix_embedding(
-            observation=next_observation, policy_state=policy_state
-        )
-
-        next_observation_dict[PREFIX_EMBEDDING_NAME] = next_prefix_embedding
+        if PREFIX_EMBEDDING_NAME in online_observation and PREFIX_EMBEDDING_NAME in next_observation:
+            observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[PREFIX_EMBEDDING_NAME]
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_observation[PREFIX_EMBEDDING_NAME]
+        else:
+            observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
+                observation=online_observation, policy_state=policy_state,
+            )
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
+                observation=next_observation, policy_state=policy_state,
+            )
 
         return (
             observation_dict,
@@ -303,7 +312,9 @@ class BestofNLearner(FilteredSFTLearner):
             task_to_indices.setdefault(str(task), []).append(i)
 
         env_num = len(task_description)
+        return_prefix_rep = self._config.collect.store_prefix_rep
         all_best_actions = None
+        all_best_prefix = None
 
         # Build q-model once, shared across task groups.
         q_params = (
@@ -441,7 +452,12 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             all_best_actions[indices] = np.asarray(best, dtype=np.float32)
 
-        return all_best_actions
+            if return_prefix_rep:
+                if all_best_prefix is None:
+                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+                all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
+
+        return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
 
     @at.typecheck
     def _get_on_policy_action(
