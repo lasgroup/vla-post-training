@@ -22,6 +22,16 @@ from src.rl.networks.rl_networks import (
     StateValue,
 )
 
+from src.rl.networks.decoders.values.state_action_value import (
+    StateActionEnsembleDecoder,
+)
+from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
+from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.mlp import MLP
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.training.config import OnlineTrainConfig
+
+
 CriticBatch = tuple[
     ObsType,
     _model.Actions,
@@ -33,6 +43,74 @@ CriticBatch = tuple[
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
+
+
+def _build_pi0_backbone_critic_defs(
+    config: OnlineTrainConfig,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
+    critic_num_qs = config.rl.critic_num_qs
+    critic_num_vs = config.rl.critic_num_vs
+
+    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
+        network_def = lambda o, rg: MLP(
+            input=o,
+            hidden_dims=critic_encoder_hidden_dims,
+            activate_final=True,
+            rngs=rg,
+        )
+        state_vector_keys = ["state"]
+        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
+            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+        return MLPEncoder(
+            dummy_obs=observation,
+            encoder_def=network_def,
+            state_vector_keys=state_vector_keys,
+            rngs=rngs,
+        )
+
+    def state_action_decoder_def(
+        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionEnsembleDecoder:
+        return StateActionEnsembleDecoder(
+            observation=embedding,
+            action=action,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_qs=critic_num_qs,
+            rngs=rngs,
+        )
+
+    def state_value_decoder_def(
+        embedding: jax.Array, rngs: nnx.Rngs
+    ) -> StateValueEnsembleDecoder:
+        return StateValueEnsembleDecoder(
+            observation=embedding,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_vs=critic_num_vs,
+            rngs=rngs,
+        )
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionCritic:
+        return StateActionCritic(
+            observation=observation,
+            action=action,
+            encoder_def=encoder_def,
+            decoder_def=state_action_decoder_def,
+            rngs=rngs,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
+        return StateValue(
+            observation=observation,
+            encoder_def=encoder_def,
+            decoder_def=state_value_decoder_def,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
@@ -271,12 +349,9 @@ def train_q_step(
         mc_loss = jnp.mean(jnp.square(mc_errors))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
-            # "td_error_mean": jnp.mean(td_errors),
             "value_mean": jnp.mean(q_values),
             "mc_loss": mc_loss,
             "td_loss": td_loss,
-            # "td_target_mean": jnp.mean(td_targets),
-            # "mc_error_mean": jnp.mean(mc_errors),
             "td_weight": td_weight,
         }
 
