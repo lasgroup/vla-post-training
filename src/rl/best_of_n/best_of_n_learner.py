@@ -431,7 +431,11 @@ class BestofNLearner(FilteredSFTLearner):
             if isinstance(q_output, tuple):
                 # SimbaV2: expected values are already computed by the network
                 scores = np.asarray(q_output[0])  # (num_qs, B)
-                scores = scores.min(axis=0) #TODO: mean vs min in config
+                ensemble_reduction = self._config.rl.simba_ensemble_reduction
+                if ensemble_reduction == "min":
+                    scores = scores.min(axis=0)
+                else:
+                    scores = scores.mean(axis=0)
             else:
                 rl_config = self._config.rl
                 _lower, _upper = get_value_bounds(self._config)

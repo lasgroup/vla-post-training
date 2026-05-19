@@ -75,7 +75,7 @@ def scalar_to_two_hot(
     num_bins: int,
     min_v: float,
     max_v: float,
-    eps=1e-5,
+    eps=1e-8,
 ) -> jnp.ndarray:          # (B, num_bins)
     """Project scalar values onto the bin support via two-hot encoding."""
     scalars = jnp.clip(scalars, min_v, max_v)
@@ -94,6 +94,26 @@ def scalar_to_two_hot(
 
     return encoded
 
+def scalar_to_hl_gauss(
+    scalars: jnp.ndarray,  # (B,)
+    num_bins: int,
+    min_v: float,
+    max_v: float,
+) -> jnp.ndarray:          # (B, num_bins)
+    """Project scalar values onto the bin support via HL-Gauss encoding.
+
+    Integrates a Gaussian (sigma = bin_width) over each bin interval,
+    then normalises by the total mass within [min_v, max_v].
+    """
+    sigma = (max_v - min_v) / (num_bins - 1)
+    support = jnp.linspace(min_v, max_v, num_bins + 1, dtype=jnp.float32)  # (num_bins+1,)
+    cdf_evals = jax.scipy.special.erf(
+        (support[None, :] - scalars[:, None]) / (jnp.sqrt(2) * sigma)
+    )  # (B, num_bins+1)
+    z = cdf_evals[:, -1] - cdf_evals[:, 0]          # (B,)
+    bin_probs = cdf_evals[:, 1:] - cdf_evals[:, :-1]  # (B, num_bins)
+    return bin_probs / z[:, None]
+
 
 # ---------------------------------------------------------------------------
 # Ensemble helpers
@@ -107,6 +127,25 @@ def select_min_member_log_probs(
     min_indices = jnp.argmin(values, axis=0)  # (B,)
     # vmap over B: each lp is (num_members, num_bins), idx is scalar
     return jax.vmap(lambda lp, idx: lp[idx], in_axes=(1, 0))(log_probs, min_indices)
+
+
+def select_ensemble_log_probs(
+    values: jnp.ndarray,    # (num_members, B)
+    log_probs: jnp.ndarray, # (num_members, B, num_bins)
+    reduction: str = "min",
+) -> jnp.ndarray:           # (B, num_bins)
+    """Reduce ensemble distributions to a single (B, num_bins) log-prob tensor.
+
+    "min": pick the member with the lowest expected value per batch element (pessimistic).
+    "mean": mixture distribution — log(mean_k exp(log_probs_k)) via logsumexp.
+    """
+    if reduction == "min":
+        return select_min_member_log_probs(values, log_probs)
+    elif reduction == "mean":
+        K = log_probs.shape[0]
+        return jax.nn.logsumexp(log_probs, axis=0) - jnp.log(K)
+    else:
+        raise ValueError(f"Unknown simba ensemble reduction: {reduction!r}. Use 'min' or 'mean'.")
 
 
 # ---------------------------------------------------------------------------

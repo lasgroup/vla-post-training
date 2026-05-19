@@ -58,6 +58,7 @@ DEFAULT_SIMBA_EXPANSION_FACTOR = 4
 DEFAULT_SIMBA_NUM_BINS = 1000
 DEFAULT_SIMBA_MIN_V = -110.0
 DEFAULT_SIMBA_MAX_V = 0.0
+DEFAULT_SIMBA_ENSEMBLE_REDUCTION = "min"  # "min" (pessimistic) or "mean" (mixture)
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
@@ -86,8 +87,9 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.simba_num_bins": [1024],
     "rl.simba_min_v": [-110.0],
     "rl.simba_max_v": [0.0],
+    "rl.simba_ensemble_reduction": [DEFAULT_SIMBA_ENSEMBLE_REDUCTION],
 
-    "rl.num_critic_updates_per_batch": [1, 2],
+    "rl.num_critic_updates_per_batch": [2],
     # simba_scaler_init/scale = sqrt(2/hidden_dim), alpha_init = 1/(num_blocks+1),
     # alpha_scale = 1/sqrt(hidden_dim) — auto-computed below unless set explicitly here.
     # Single-task tasks from ralf/value_learning.

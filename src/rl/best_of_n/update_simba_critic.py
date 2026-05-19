@@ -25,8 +25,8 @@ from src.rl.best_of_n.update_critic import (
 from src.rl.simba_update_utils import (
     categorical_td_loss,
     categorical_cross_entropy,
-    scalar_to_two_hot,
-    select_min_member_log_probs,
+    scalar_to_hl_gauss,
+    select_ensemble_log_probs,
     update_simba_train_state,
 )
 
@@ -70,10 +70,11 @@ def train_simba_q_step(
     # EMA-V distribution at next_observation — computed once outside loss_fn
     next_v_values, next_v_log_probs = value_model(next_observation)
     # (num_vs, B), (num_vs, B, num_bins)
-    target_v_log_probs = select_min_member_log_probs(next_v_values, next_v_log_probs) # TODO: add option to reduce by min/mean
-    # (B, num_bins) — pessimistic (min) V member
+    target_v_log_probs = select_ensemble_log_probs(
+        next_v_values, next_v_log_probs, reduction=config.rl.simba_ensemble_reduction
+    )  # (B, num_bins)
 
-    mc_target_probs = scalar_to_two_hot(mc_return, num_bins, min_v, max_v)  # (B, num_bins)
+    mc_target_probs = scalar_to_hl_gauss(mc_return, num_bins, min_v, max_v)  # (B, num_bins)
 
     def loss_fn(
         q_model,
@@ -170,10 +171,12 @@ def train_simba_value_step(
     # EMA-Q distribution at (obs, buffer_actions) — computed once outside loss_fn
     q_values, q_log_probs = q_model(observation, actions)
     # (num_qs, B), (num_qs, B, num_bins)
-    target_q_log_probs = select_min_member_log_probs(q_values, q_log_probs)
+    target_q_log_probs = select_ensemble_log_probs(
+        q_values, q_log_probs, reduction=config.rl.simba_ensemble_reduction
+    )  # (B, num_bins)
     target_q_probs = jnp.exp(target_q_log_probs)  # (B, num_bins)
 
-    mc_target_probs = scalar_to_two_hot(mc_return, num_bins, min_v, max_v)  # (B, num_bins)
+    mc_target_probs = scalar_to_hl_gauss(mc_return, num_bins, min_v, max_v)  # (B, num_bins)
 
     def loss_fn(
         value_model,

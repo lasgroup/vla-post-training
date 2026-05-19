@@ -158,6 +158,7 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     simba_alpha_init: float = 0.3333    # 1 / (num_blocks + 1)
     simba_alpha_scale: float = 0.03125   # 1 / sqrt(hidden_dim)
     simba_c_shift: float = 3.0
+    simba_ensemble_reduction: str = "min"  # "min" (pessimistic) or "mean" (mixture distribution)
 
 
 @dataclasses.dataclass(frozen=True)
