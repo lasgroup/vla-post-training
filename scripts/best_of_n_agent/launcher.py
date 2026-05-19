@@ -22,7 +22,7 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/best_of_n_agent/exp.py"
+SCRIPT = "scripts/exp.py"
 CONFIG_NAME = "pi05_libero_online_best_of_n"
 PROJECT_NAME = "value_learning"
 DEFAULT_LOG_INTERVAL = 25

@@ -23,7 +23,7 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/filtered_sft_agent/exp.py"
+SCRIPT = "scripts/exp.py"
 CONFIG_NAME = "pi05_libero_online_filtered_sft"
 PROJECT_NAME = "filtered_sft_agent_sweep"
 DEFAULT_SEED = 0

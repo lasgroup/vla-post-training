@@ -22,7 +22,7 @@ from launcher_util import (
     generate_srun_command,
 )
 
-SCRIPT = "scripts/awr_agent/exp.py"
+SCRIPT = "scriptsgit diff/exp.py"
 CONFIG_NAME = "pi05_libero_online_aw_sft"
 PROJECT_NAME = "awr_agent_sweep"
 DEFAULT_LOG_INTERVAL = 50

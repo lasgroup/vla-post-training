@@ -32,17 +32,18 @@ import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 
 import platform
+import wandb
 
 
-from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
-from src.rl.filtered_sft_agent.filtered_sft_learner import (
-    FilteredSFTLearner,
-    filtered_sft_wrap_env,
-)
 from src.envs import make_env
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
+from src.rl.best_of_n.best_of_n_learner import BestofNLearner
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
+from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 import src.training.config as _config
-from src.training.train_loop import train_loop
+from src.training.collect import evaluate_policy
 from src.training.utils import init_logging, init_wandb
+from src.training.train_loop import train_loop
 
 
 def main(config: _config.OnlineTrainConfig):
@@ -63,8 +64,29 @@ def main(config: _config.OnlineTrainConfig):
         env_num=config.collect.eval_env_num,
     )
 
-    agent = AdvantageWeightedSFTLearner(config)
+    if isinstance(config.rl, _config.FilteredSFTLearnerConfig):
+        algo_class = FilteredSFTLearner
+    elif isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig):
+        algo_class = AdvantageWeightedSFTLearner
+    elif isinstance(config.rl, _config.BestofNLearnerConfig):
+        algo_class = BestofNLearner
+    else:
+        raise ValueError(f"Unsupported algorithm: {config.rl}")
+    agent = algo_class(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+
+    if not agent._resuming:
+        initial_eval_info = evaluate_policy(
+            agent=agent,
+            env=eval_env,
+            task_description=eval_task_description,
+            config=config,
+            step=0,
+        )
+        wandb.log(initial_eval_info, step=0)
+        logging.info(
+            f"Initial eval (step 0): {', '.join(f'{k}={v:.4f}' for k, v in initial_eval_info.items())}"
+        )
 
     train_loop(
         config=config,
