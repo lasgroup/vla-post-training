@@ -316,10 +316,10 @@ class OnlineDataConfig(DataConfig):
 @dataclasses.dataclass(frozen=True)
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
+    group_name: str = "online_training"
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
-    algorithm: str = ""
     tags: list[str] = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
@@ -355,6 +355,7 @@ def make_base_online_config(
     """
     return OnlineTrainConfig(
         name=name,
+        group_name="online_training",
         model=pi0_config.Pi0Config(
             pi05=True, action_horizon=10, discrete_state_input=False
         ),
