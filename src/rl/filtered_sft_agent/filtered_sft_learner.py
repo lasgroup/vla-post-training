@@ -449,12 +449,7 @@ class FilteredSFTLearner(Agent):
             donate_argnums=(1,),
         )
 
-    def _get_online_replay_buffer(
-        self,
-    ) -> ShardedReplayBuffer:
-
-        # prepare dummy data for initializing the replay buffer
-        # TODO: this might need to be updated to store prefixes
+    def _make_buffer_dummy_data(self) -> dict:
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
         obs_spec_dict = obs_spec.to_dict()
         dummy_obs_dict = jax.tree.map(
@@ -465,7 +460,7 @@ class FilteredSFTLearner(Agent):
             dummy_obs_dict["image"] = jax.tree.map(
                 lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
             )
-        dummy_data = {
+        return {
             "observation": dummy_obs_dict,
             "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
             "next_observation": dummy_obs_dict,
@@ -473,11 +468,15 @@ class FilteredSFTLearner(Agent):
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
         }
+
+    def _get_online_replay_buffer(
+        self,
+    ) -> ShardedReplayBuffer:
+        dummy_data = self._make_buffer_dummy_data()
         logging.info(
             "Initializing online replay buffer (capacity=%d)",
             self._config.rl.buffer_capacity,
         )
-
         return ShardedReplayBuffer(
             dummy_data=dummy_data,
             max_capacity=self._config.rl.buffer_capacity,
@@ -501,6 +500,18 @@ class FilteredSFTLearner(Agent):
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs
+
+    @staticmethod
+    def _batch_transform_inputs(inputs: dict, batch_size: int) -> dict:
+        for key in ("image_mask", "image_masks"):
+            if key in inputs:
+                inputs[key] = {k: np.full((batch_size,), bool(v), dtype=bool) for k, v in inputs[key].items()}
+        for key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
+            if key in inputs and inputs[key] is not None:
+                arr = np.asarray(inputs[key])
+                if arr.ndim == 1:
+                    inputs[key] = np.repeat(arr[np.newaxis], batch_size, axis=0)
+        return inputs
 
     def _sample_action(
         self,
@@ -530,21 +541,41 @@ class FilteredSFTLearner(Agent):
         sharding_spec = (
             self._policy_sharding_spec if batch_size % num_devices == 0 else None
         )
-        actions = self._policy.infer_with_model(
-            model=model,
-            obs=observations,
+        if not return_prefix_rep:
+            actions = self._policy.infer_with_model(
+                model=model,
+                obs=observations,
+                noise=noise,
+                return_prefix_rep=False,
+                sharding_spec=sharding_spec,
+            )["actions"]
+            if batch_size == 1 and actions.ndim == 2:
+                actions = actions[np.newaxis, ...]
+            return actions
+
+        # Bypass infer_with_model: _output_transform cannot handle the (actions, prefix) tuple
+        inputs = self._policy._input_transform(observations)
+        inputs = self._batch_transform_inputs(inputs, batch_size=batch_size)
+        if sharding_spec is not None:
+            inputs = jax.device_put(inputs, sharding_spec)
+        observation = _model.Observation.from_dict(inputs)
+        _, sample_rng = jax.random.split(rng)
+        raw_actions, prefix = self._policy._sample_actions_with_model(
+            m=model,
+            observation=observation,
             noise=noise,
-            return_prefix_rep=return_prefix_rep,
-            sharding_spec=sharding_spec,
-        )["actions"]
-
-        if return_prefix_rep:
-            actions, prefix = actions
-
+            rng=sample_rng,
+            return_prefix_rep=True,
+            **self._policy._sample_kwargs,
+        )
+        outputs = {"state": inputs["state"], "actions": raw_actions}
+        if batch_size == 1:
+            outputs = jax.tree.map(lambda x: np.asarray(x[0]), outputs)
+        outputs = self._policy._output_transform(outputs)
+        actions = outputs["actions"]
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
-
-        return (actions, prefix) if return_prefix_rep else actions
+        return actions, np.asarray(prefix, dtype=np.float32)
 
     def _generate_actions(
         self,
@@ -612,10 +643,8 @@ class FilteredSFTLearner(Agent):
         - Computes the final next-observation prefix with the current model.
         """
 
-        # TODO: this function is untested
-        # TODO: check if last observation needs to be taken
         next_observation = jax.tree.map(
-            lambda x: x[[-1]], episode_data[-1]["next_observation"]
+            lambda x: x[np.newaxis], episode_data[-1]["next_observation"]
         )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
         params = (
@@ -626,22 +655,24 @@ class FilteredSFTLearner(Agent):
         model = nnx.merge(self._train_state.model_def, params)
         model.eval()
         inputs = self._policy._input_transform(processed_obs)
-        # TODO: check if batch dim needs to be added
+        inputs = self._batch_transform_inputs(inputs, batch_size=1)
         observation = _model.Observation.from_dict(inputs)
         next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
-        # TODO: check if this check and cast is necessary
-        if next_prefix.ndim >= 3 and next_prefix.shape[0] == 1:
-            next_prefix = next_prefix[0]
         next_prefix = np.asarray(next_prefix, dtype=np.float32)
+        if next_prefix.ndim == 3:
+            next_prefix = next_prefix[0]
+        next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
-            horizon = ep["observation"]["state"].shape[0]
-            ep["observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+            prefix = np.asarray(prefix, dtype=np.float32)
+            prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
+            horizon = ep["observation"]["observation/state"].shape[0]
+            ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0
             )
-            ep["next_observation"][PREFIX_EMBEDDING_NAME] = np.repeat(
+            ep["next_observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 next_prefix[None, ...], horizon, axis=0
             )
             next_prefix = prefix
@@ -697,9 +728,15 @@ class FilteredSFTLearner(Agent):
             actions = obs.pop("actions")
             return obs, actions
 
+        # Pop prefix before pi0 transforms (which don't handle it); re-attach after
+        prefix_emb = _obs.pop(PREFIX_EMBEDDING_NAME, None)
+        next_prefix_emb = _next_obs.pop(PREFIX_EMBEDDING_NAME, None)
         # process observations and actions according to pi0 preprocessing
         _next_obs, _ = transform({**_next_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
         _obs, _actions = transform({**_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
+        if prefix_emb is not None:
+            _obs[PREFIX_EMBEDDING_NAME] = prefix_emb
+            _next_obs[PREFIX_EMBEDDING_NAME] = next_prefix_emb
 
         self._online_data_buffer.insert(
             {
