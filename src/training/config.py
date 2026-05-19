@@ -248,6 +248,7 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     use_time_to_success_as_reward: bool = False
+    fix_mc_returns: bool = False
     store_prefix_rep: bool = False
     eval_env_num: int = 4
     eval_interval: int = 300
