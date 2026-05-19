@@ -235,7 +235,7 @@ def main() -> None:
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
+        config = config = yaml.load(f, Loader=yaml.FullLoader)
 
     combos = dict_permutations(config["params"])
     generate_run_commands(

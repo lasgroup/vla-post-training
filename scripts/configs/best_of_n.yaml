@@ -18,7 +18,7 @@ params:
   collect.collect_interval: [6000]
   collect.use_time_to_success_as_reward: [True]
   collect.store_prefix_rep: [True]
-  [collect.tasks, collect.eval_tasks]: [
+  !!python/tuple [collect.tasks, collect.eval_tasks]: [
     [libero_90_44, libero_90_44],     # "Turn on the stove"
     [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
   ]
@@ -35,7 +35,7 @@ params:
   rl.train_on_policy_value_function: [False]
   rl.discount: [0.99]
   rl.offline_buffer_load_paths: [/capstor/store/cscs/swissai/a143/project-vla-pt/libero-hf/libero_online_buffer_time_to_success]
-  (rl.td_weight_schedule.init_value, rl.td_weight_schedule.end_value, rl.td_weight_schedule.switch_step, rl.critic_pre_training_steps): [
+  !!python/tuple [rl.td_weight_schedule.init_value, rl.td_weight_schedule.end_value, rl.td_weight_schedule.switch_step, rl.critic_pre_training_steps]: [
       [1.0, 1.0, 999999, 0],  # TD only
       [0.0, 1.0, 9000, 9000],       # MC-then-TD
       [0.5, 0.5, 500000, 0],  # 0.5*(MC+TD)

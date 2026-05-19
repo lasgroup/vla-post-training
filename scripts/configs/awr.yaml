@@ -17,7 +17,7 @@ params:
   collect.num_eval_rollouts: [32]
   collect.use_time_to_success_as_reward: [True]
   collect.num_initial_rollouts: [5]
-  [collect.tasks, collect.eval_tasks]: [
+  !!python/tuple [collect.tasks, collect.eval_tasks]: [
     [libero_90_14, libero_90_14],
     [libero_90_59, libero_90_59],
     [libero_90_64, libero_90_64],
@@ -34,3 +34,4 @@ params:
   rl.store_success_episodes_only: [False]
   rl.num_offline_pretraining_steps: [1_000]
   rl.warm_start_critic_update_interval: [1]
+  rl.critic_pre_training_steps: 900
