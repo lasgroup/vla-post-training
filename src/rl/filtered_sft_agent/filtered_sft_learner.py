@@ -385,6 +385,9 @@ class FilteredSFTLearner(Agent):
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
 
+        # prepare reward model
+        self.reward_model = lambda episode_data, is_success: is_success  # dummy reward model for now
+
     def _get_policy_transforms(self, domain: str):
         if domain == "libero":
             return _transforms.compose([*self._data_config.repack_transforms.inputs, *self._policy._input_transform.transforms])
@@ -686,7 +689,22 @@ class FilteredSFTLearner(Agent):
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
-        if is_success:
+        if self._config.rl.save_episodes_to_path is not None:
+            import pickle
+            if not hasattr(self, "n_saved_episodes"):
+                self.n_saved_episodes = 0
+            with open(os.path.join(self._config.rl.save_episodes_to_path, f'episode_{self.n_saved_episodes}.pkl'), 'wb') as f:
+                pickle.dump(episode_data, f)
+            self.n_saved_episodes += 1
+            # episode_data is a list of dicts with 
+            #   observation (dict contrianing visual/proprioception)
+            #   next_observation (as above)
+            #   action
+            #   reward - check reward of last item on the list for success vs failure
+            #   terminate
+            #   truncate
+
+        if self.reward_model(episode_data, is_success):
             self._save_episode_in_buffer(episode_data, task_description)
 
     def _save_episode_in_buffer(self, episode_data, task_description):

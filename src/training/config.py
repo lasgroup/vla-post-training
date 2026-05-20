@@ -117,6 +117,7 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy_training_start_step: int = 0
     online_ratio: float = 0.5
     reset_policy_params_to_ema_period: int | None = None
+    save_episodes_to_path: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
