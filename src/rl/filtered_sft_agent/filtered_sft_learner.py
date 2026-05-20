@@ -723,6 +723,10 @@ class FilteredSFTLearner(Agent):
         _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
+        # if the reward is constant, set the MC returns to reward/(1-gamma)
+        if self._config.collect.fix_mc_returns and np.all(episode_data["reward"] == episode_data["reward"][0]):
+            _mc_return = np.full_like(_mc_return, episode_data["reward"][0] / (1 - self._config.rl.discount))
+
         def transform(input):
             obs = self._policy_transforms(input)
             actions = obs.pop("actions")
