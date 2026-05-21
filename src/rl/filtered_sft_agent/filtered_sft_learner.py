@@ -24,6 +24,7 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
+import openpi.policies.policy as _policy
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
@@ -371,19 +372,51 @@ class FilteredSFTLearner(Agent):
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
         # Create policy for data collection
-        policy_checkpoint_dir = self._config.weight_loader.params_path[
-            : -len("/params")
-        ]
-        self._policy = policy_config.create_trained_policy(
-            self._config,
-            policy_checkpoint_dir,
-        )
+        self._policy = self._create_policy_for_data_collection()
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
 
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
+
+    def _create_policy_for_data_collection(self) -> _policy.Policy:
+        params_path = getattr(self._config.weight_loader, "params_path", None)
+        if params_path is not None:
+            policy_checkpoint_dir = params_path[: -len("/params")]
+            return policy_config.create_trained_policy(
+                self._config,
+                policy_checkpoint_dir,
+            )
+
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
+        return _policy.Policy(
+            model,
+            transforms=[
+                _transforms.InjectDefaultPrompt(self._config.default_prompt),
+                *self._data_config.data_transforms.inputs,
+                _transforms.Normalize(
+                    self._data_config.norm_stats,
+                    use_quantiles=self._data_config.use_quantile_norm,
+                ),
+                *self._data_config.model_transforms.inputs,
+            ],
+            output_transforms=[
+                *self._data_config.model_transforms.outputs,
+                _transforms.Unnormalize(
+                    self._data_config.norm_stats,
+                    use_quantiles=self._data_config.use_quantile_norm,
+                ),
+                *self._data_config.data_transforms.outputs,
+            ],
+            metadata=self._config.policy_metadata,
+        )
 
     def _get_policy_transforms(self, domain: str):
         if domain == "libero":

@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 
 # Specifics
+.env
 checkpoints/
 wandb/
 assets/

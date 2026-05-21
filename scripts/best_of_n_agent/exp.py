@@ -38,10 +38,10 @@ if mp.current_process().name != "MainProcess":
 # os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 # os.environ["JAX_LOG_COMPILES"] = "1"
 # logging.getLogger("jax").setLevel(logging.WARNING)
-os.environ["JAX_LOG_COMPILES"] = "1"
+os.environ.setdefault("JAX_LOG_COMPILES", "1")
 # optional: also shows dispatch
-os.environ["JAX_LOG_COMPILATION_CACHE"] = "1"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
+os.environ.setdefault("JAX_LOG_COMPILATION_CACHE", "1")
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
 import gc
 import platform
@@ -297,6 +297,9 @@ def main(config: _config.OnlineTrainConfig):
 
     logging.info("Waiting for checkpoint manager to finish")
     agent._checkpoint_manager.wait_until_finished()
+
+    env.close()
+    eval_env.close()
 
 
 if __name__ == "__main__":

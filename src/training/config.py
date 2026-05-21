@@ -16,12 +16,13 @@ import re
 
 import openpi.training.optimizer as _optimizer
 import openpi.policies.droid_policy as _droid_policy
+import openpi.shared.nnx_utils as nnx_utils
 import openpi.transforms as _openpi_transforms
 import optax
 import openpi.training.weight_loaders as weight_loaders
 import jax
 import jax.numpy as jnp
-from flax import struct
+from flax import nnx, struct
 
 
 @struct.dataclass
@@ -377,6 +378,61 @@ def make_base_libero_config(
     )
 
 
+def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
+    return OnlineTrainConfig(
+        name="pi05_libero_online_best_of_n_debug",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+            image_variant="mu/56",
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets",
+            ),
+            base_config=OnlineDataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=1,
+        lr_schedule=ConstantSchedule(value=5e-5),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        freeze_filter=nnx.All(
+            nnx.Param,
+            nnx.Not(nnx_utils.PathRegex(r"action_out_proj/.*")),
+        ),
+        weight_loader=weight_loaders.NoOpWeightLoader(),
+        pytorch_weight_path=None,
+        num_train_steps=500,
+        num_workers=0,
+        wandb_enabled=False,
+        collect=CollectionConfig(
+            env_num=1,
+            eval_env_num=1,
+            env_resolution=64,
+            num_rollouts=1,
+            num_initial_rollouts=1,
+            num_eval_rollouts=2,
+            store_prefix_rep=False,
+        ),
+        rl=BestofNLearnerConfig(
+            n_samples=2,
+            buffer_capacity=64,
+            critic_encoder_hidden_dims=(32,),
+            critic_decoder_hidden_dims=(32,),
+            critic_num_qs=1,
+            critic_num_vs=1,
+            num_critic_updates_per_batch=1,
+            critic_inference_start_step=0,
+            critic_pre_training_steps=0,
+        ),
+    )
+
+
 def make_base_molmo_config(
     name: str, rl_config: RLAlgorithmConfig
 ) -> OnlineTrainConfig:
@@ -472,6 +528,7 @@ _CONFIGS.extend(
             name="pi05_libero_online_best_of_n",
             rl_config=BestofNLearnerConfig(),
         ),
+        make_debug_best_of_n_libero_config(),
         make_base_libero_config(
             name="pi05_libero_online_dsrl",
             rl_config=DSRLLearnerConfig(),

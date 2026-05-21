@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: best_of_n debug config",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/best_of_n_agent/exp.py",
+      "args": [
+        "pi05_libero_online_best_of_n_debug",
+        "--exp-name",
+        "test",
+        "--overwrite"
+      ],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "XLA_PYTHON_CLIENT_ALLOCATOR": "platform",
+        "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.25",
+        "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/openpi/packages/openpi-client/src:${workspaceFolder}/openpi/src:${workspaceFolder}/openpi/packages/openpi-client:${workspaceFolder}/molmospaces",
+        "MUJOCO_GL": "egl",
+        "PYOPENGL_PLATFORM": "egl",
+        "JAX_DISABLE_JIT": "1",
+        // "JAX_PLATFORMS": "cpu"
+      }
+    }
+  ]
+}
