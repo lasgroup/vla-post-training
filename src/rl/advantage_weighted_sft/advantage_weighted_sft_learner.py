@@ -24,32 +24,38 @@ from src.rl.advantage_weighted_sft.update_critic import (
     init_state_value_train_state,
     train_q_step,
     train_value_step,
-    StateActionCriticDef,
-    StateValueDef,
 )
-from src.rl.networks.rl_networks import ObsType, ActionType
+from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
+from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
-from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
+from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
-    def __init__(
-        self,
-        config: OnlineTrainConfig,
-        dummy_obs: ObsType,
-        dummy_act: ActionType,
-        state_action_critic_def: StateActionCriticDef,
-        state_value_def: StateValueDef,
-        debug: bool = False,
-    ):
-        self.debug = debug
+    def __init__(self, config):
 
         super().__init__(config)
+
+        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (
+            "Only AdvantageWeightedSFTLearnerConfig should be passed to the AWR agent"
+        )
+
+        model = config.model.create(jax.random.key(config.seed))
+        fake_obs = config.model.fake_obs(batch_size=1)
+        prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        del model
+        assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
+        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        dummy_obs = {
+            "state": fake_obs.state,
+            PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
+        }
+        dummy_act = config.model.fake_act(batch_size=1)
+        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -76,18 +82,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
-        if self.debug:
-            log_memory_debug(
-                "init",
-                train_state=self._train_state,
-                state_action_critic_state=self._state_action_critic_state,
-                value_state=self._value_state,
-            )
-
         del self._train_step
         gc.collect()
 
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
         self._normalizer = Normalizer(
             ema_weight=self._config.rl.normalizer_config.ema_weight,
         )
@@ -315,13 +312,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        rl_config = self._config.rl
-        assert isinstance(rl_config, AdvantageWeightedSFTLearnerConfig)
-        if rl_config.store_success_episodes_only:
-            if is_success:
-                self._save_episode_in_buffer(episode_data, task_description)
-        else:
-            self._save_episode_in_buffer(episode_data, task_description)
+        if self._config.rl.store_success_episodes_only and not is_success:
+            return
+        self._save_episode_in_buffer(episode_data, task_description)
 
     def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(
@@ -355,7 +348,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
 
         # Update the state action critic state
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
         num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
@@ -405,15 +397,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (
-            "Only Advantage SFT config should " "be passed to the filtered SFT agent"
-        )
-        rl_config = self._config.rl
-        normalizer_config = rl_config.normalizer_config
-        if self.debug:
-            log_memory_debug("step_start", training_steps=self.training_steps)
 
-        if rl_config.critic_pre_training_steps == self.training_steps:
+        if self._config.rl.critic_pre_training_steps == self.training_steps:
             # Reset optimizer state of the value and q function
             q_opt_state = self._state_action_critic_state.tx.init(
                 nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
@@ -441,12 +426,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
-            and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= self._config.rl.critic_training_start_step
+            and self.training_steps % self._config.rl.critic_update_interval == 0
         )
         update_policy = (
-            self.training_steps >= rl_config.policy_training_start_step
-            and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= self._config.rl.policy_training_start_step
+            and self.training_steps % self._config.rl.policy_update_interval == 0
         )
         if not update_critic and not update_policy:
             return {
@@ -459,7 +444,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._config.batch_size * min(1.0, self._config.rl.online_ratio)
         )
         use_online = self._online_data_buffer.size >= online_batch_size
-        if rl_config.use_mc_returns and not use_online:
+        if self._config.rl.use_mc_returns and not use_online:
             update_policy = False
 
         critic_info, actor_info = {}, {}
@@ -467,12 +452,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         if use_online:
             online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
-                if self.debug:
-                    log_memory_debug(
-                        "before_critics",
-                        train_state=self._train_state,
-                        batch=online_batch,
-                    )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
                     q_state, value_state, q_info, value_info = (
@@ -490,16 +469,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
-                if self.debug:
-                    log_memory_debug("after_update_critics")
-            if rl_config.use_mc_returns:
+            if self._config.rl.use_mc_returns:
                 mc_return = online_batch["mc_return"]
-                assert rl_config.online_ratio >= 1.0, (
+                assert self._config.rl.online_ratio >= 1.0, (
                     "use_mc_returns requires online_ratio >= 1.0 "
                     "(MC returns are not available for offline data)"
                 )
             online_batch = self._online_batch_to_sft_batch(online_batch)
-            online_ratio = rl_config.online_ratio
+            online_ratio = self._config.rl.online_ratio
             if online_ratio >= 1.0:
                 batch = online_batch
             elif online_ratio > 0:
@@ -535,10 +512,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 }
             batch = next(self._data_iter)
         if update_policy:
-            if self.debug:
-                log_memory_debug("before_update_policy")
             policy_rng, self._rng = jax.random.split(self._rng, 2)
-            scale = self._normalizer_state.scale if rl_config.normalize_advantages else 1.0
+            scale = self._normalizer_state.scale if self._config.rl.normalize_advantages else 1.0
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,
@@ -553,6 +528,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._train_state = policy_state
             self._maybe_restore_policy_ema_after_resume()
             scale, bias = 1.0, 0.0
+            normalizer_config = self._config.rl.normalizer_config
             if normalizer_config.method is not None:
                 if normalizer_config.method == 'quantile':
                     q_up, q_low = actor_info['advantage_q_up'], actor_info['advantage_q_low']
