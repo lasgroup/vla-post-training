@@ -131,6 +131,7 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     critic_reduction: str = "min"
     critic_lr_schedule = ConstantSchedule(value=3e-4)
     critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    critic_encoder_impl: Literal['mlp', 'transformer'] = 'mlp'
     critic_encoder_hidden_dims: Sequence[int] = (512, 512)
     critic_decoder_hidden_dims: Sequence[int] = (256, 256)
     critic_num_qs: int = 2
@@ -309,6 +310,15 @@ class OnlineTrainConfig(TrainConfig):
     default_prompt: str | None = None
     requeue: bool = False
 
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if isinstance(self.rl, BestofNLearnerConfig) and self.rl.critic_encoder_impl == "transformer":
+            assert not self.collect.store_prefix_rep, (
+                "critic_encoder_impl='transformer' requires collect.store_prefix_rep=False: "
+                "the prefix sequence is too large to retain in the replay buffer and must "
+                "be recomputed from the current policy each train batch."
+            )
+
 
 def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
     assert isinstance(config.rl, BestofNLearnerConfig)
@@ -397,7 +407,7 @@ def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
             base_config=OnlineDataConfig(prompt_from_task=True),
             extra_delta_transform=False,
         ),
-        batch_size=1,
+        batch_size=2,
         lr_schedule=ConstantSchedule(value=5e-5),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=None,
@@ -422,6 +432,7 @@ def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
         rl=BestofNLearnerConfig(
             n_samples=2,
             buffer_capacity=64,
+            critic_encoder_impl='transformer',
             critic_encoder_hidden_dims=(32,),
             critic_decoder_hidden_dims=(32,),
             critic_num_qs=1,

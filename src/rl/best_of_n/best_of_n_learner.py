@@ -201,7 +201,7 @@ class BestofNLearner(FilteredSFTLearner):
             *,
             observation: dict[str, Any],
             policy_state: training_utils.TrainState,
-    ) -> at.Float[at.Array, "batch embed"] | None:
+    ) -> jnp.ndarray | None:
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
@@ -209,7 +209,8 @@ class BestofNLearner(FilteredSFTLearner):
         obs = _model.Observation.from_dict(observation)
         prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        prefix = jnp.mean(prefix, axis=1)
+        if self._config.rl.critic_encoder_impl != "transformer":
+            prefix = jnp.mean(prefix, axis=1)
         return prefix
 
     @staticmethod
@@ -403,8 +404,10 @@ class BestofNLearner(FilteredSFTLearner):
                 m=policy_model, observation=obs_for_prefix
             )
             prefix = np.asarray(prefix)
-            if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+            assert prefix.ndim == 3
+            prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1])
+            if self._config.rl.critic_encoder_impl != "transformer":
+                prefix = prefix.mean(axis=1)
             critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
                 jnp.asarray(prefix), n_samples, axis=0
             )

@@ -3,7 +3,8 @@
 import warnings
 
 from src.rl.networks.mlp import MLP
-from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.transformer import Transformer
+from src.rl.networks.encoders.encoders import MLPEncoder, TransformerEncoder
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
 
@@ -45,7 +46,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
 import gc
 import platform
-from typing import Any
+from typing import Any, cast
 
 import flax.nnx as nnx
 from flax.training import common_utils
@@ -73,7 +74,6 @@ from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, init_wandb
 
 
-
 def _pool_prefix_embedding(prefix_rep: jax.Array) -> jax.Array:
     prefix_rep = jnp.asarray(prefix_rep, dtype=jnp.float32)
     if prefix_rep.ndim == 1:
@@ -97,7 +97,11 @@ def _infer_prefix_embedding_shape(
         prefix_rep = model.get_prefix_rep(fake_obs)
         if isinstance(prefix_rep, tuple):
             prefix_rep = prefix_rep[0]
-        prefix_rep = _pool_prefix_embedding(prefix_rep)
+        rl_config = cast(_config.BestofNLearnerConfig, config.rl)
+        if rl_config.critic_encoder_impl == "transformer":
+            assert prefix_rep.ndim == 3
+        else:
+            prefix_rep = _pool_prefix_embedding(prefix_rep)
         return tuple(int(x) for x in prefix_rep.shape[1:])
     except Exception as exc:  # pragma: no cover - startup fallback path
         logging.warning("Failed to infer Pi0 prefix embedding shape: %s", exc)
@@ -127,22 +131,27 @@ def _build_pi0_backbone_critic_defs(
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
     assert isinstance(config.rl, _config.BestofNLearnerConfig)
+    critic_encoder_impl = config.rl.critic_encoder_impl
     critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
     critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
     critic_num_qs = config.rl.critic_num_qs
     critic_num_vs = config.rl.critic_num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        network_def = lambda o, rg: MLP(
-            input=o,
-            hidden_dims=critic_encoder_hidden_dims,
-            activate_final=True,
-            rngs=rg,
-        )
+        def network_def(o, rg):
+            arch_cls = Transformer if critic_encoder_impl == "transformer" else MLP
+            return arch_cls(
+                input=o,
+                hidden_dims=critic_encoder_hidden_dims,
+                activate_final=True,
+                rngs=rg,
+            )
+
         state_vector_keys = ["state"]
         if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
             state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
-        return MLPEncoder(
+        encoder_cls = TransformerEncoder if critic_encoder_impl == "transformer" else MLPEncoder
+        return encoder_cls(
             dummy_obs=observation,
             encoder_def=network_def,
             state_vector_keys=state_vector_keys,

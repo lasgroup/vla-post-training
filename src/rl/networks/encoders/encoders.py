@@ -64,12 +64,52 @@ class MLPEncoder(nnx.Module):
 
     def _prepare_inputs(self, observations: Union[FrozenDict, Dict]):
         observations = FrozenDict(observations)
-        # 1. Stack the images
-        # Resulting Shape: (Batch, Num_images, H, W, C)
-        # We concatenate all vectors
         state_list = [extract_from_dict(observations, key) for key in self._state_vector_keys]
-        state = jnp.concatenate(state_list, axis=-1)
-        return state
+        return jnp.concatenate(state_list, axis=-1)
+
+    def __call__(self,
+                 observations: Union[FrozenDict, Dict],
+                 training: bool = False):
+        state = self._prepare_inputs(observations)
+        return self.encoder(state, training=training)
+
+
+class TransformerEncoder(nnx.Module):
+    """Extracts vector-valued obs keys and concatenates them along a token axis.
+
+    Each 3D source `(B, T, D)` contributes T tokens; each 2D source `(B, D)`
+    becomes a single token. All sources are zero-padded on the last axis to a
+    shared width before concatenation, so heterogeneous sources can coexist in
+    one `(B, T_total, D_token)` sequence.
+    """
+
+    def __init__(self,
+                 dummy_obs: Union[FrozenDict, Dict],
+                 encoder_def: MLPDef,
+                 state_vector_keys: List[str] | None = None,
+                 *,
+                 rngs: nnx.Rngs):
+        if state_vector_keys is None:
+            state_vector_keys = ['state']
+        self._state_vector_keys = state_vector_keys
+        dummy_state = self._prepare_inputs(dummy_obs)
+        self.encoder = encoder_def(dummy_state, rngs)
+
+    def _prepare_inputs(self, observations: Union[FrozenDict, Dict]):
+        observations = FrozenDict(observations)
+        state_list = [extract_from_dict(observations, key) for key in self._state_vector_keys]
+        d_token = max(s.shape[-1] for s in state_list)
+        tokens = []
+        for s in state_list:
+            if s.ndim == 2:
+                s = s[:, None, :]
+            pad = d_token - s.shape[-1]
+            if pad > 0:
+                pad_width = [(0, 0)] * s.ndim
+                pad_width[-1] = (0, pad)
+                s = jnp.pad(s, pad_width)
+            tokens.append(s)
+        return jnp.concatenate(tokens, axis=-2)
 
     def __call__(self,
                  observations: Union[FrozenDict, Dict],
