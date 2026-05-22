@@ -247,7 +247,7 @@ def generate_run_commands(
             script_path = os.path.join(combo["checkpoint_base_dir"], f"job_{i:04d}.sbatch.sh")
             if not dry:
                 _write_sbatch_script(script_path, command=cmd, requeue=requeue)
-            cluster_cmds.append(bsub_cmd + shlex.quote(script_path))
+            cluster_cmds.append(bsub_cmd + f"--output={combo['checkpoint_base_dir']}/slurm-%j.out " + shlex.quote(script_path))
         command_list = cluster_cmds
 
     if dry:
