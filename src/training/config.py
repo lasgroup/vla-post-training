@@ -185,6 +185,30 @@ class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     normalize_adv: bool = True
     use_mpo_advantage_weight: bool = True
 
+
+@dataclasses.dataclass(frozen=True)
+class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
+    # v1 is on-policy only — no LeRobot offline data, no success buffer.
+    online_ratio: float = 1.0
+    # PPO / IS-ratio
+    group_num_samples: int = 8
+    clip_epsilon: float = 0.01
+    entropy_coeff: float = 0.0
+    # Stochastic flow sampling
+    num_sde_steps: int = 10
+    noise_level: float = 0.3
+    # Advantage shaping ('vanilla' = group-mean baseline, 'max' = group-max
+    # baseline, 'subtract_v' = q - v with no group baseline).
+    adv_strategy: str = "vanilla"
+    adv_clip_min: float | None = None
+    # BC regularization on the on-policy actions in the same batch.
+    bc_coeff: float = 1.0
+    use_bc_regularization: bool = True
+    # Treat the EMA train state as the "old" policy (PPO denominator).
+    # When False, the current params are used (stop-gradient'd).
+    use_ema_as_old_policy: bool = True
+
+
 @dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
     actor_lr: float = 1e-4
@@ -339,14 +363,16 @@ def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConf
 
 
 def make_base_libero_config(
-    name: str, rl_config: RLAlgorithmConfig
+    name: str, rl_config: RLAlgorithmConfig, **kwargs
 ) -> OnlineTrainConfig:
     """
     Factory function to generate a base OnlineTrainConfig.
     Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+
+    Extra kwargs are forwarded to OnlineTrainConfig (e.g. freeze_filter,
+    ema_decay, num_train_steps overrides).
     """
-    return OnlineTrainConfig(
-        name=name,
+    defaults = dict(
         model=pi0_config.Pi0Config(
             pi05=True, action_horizon=10, discrete_state_input=False
         ),
@@ -355,10 +381,6 @@ def make_base_libero_config(
             assets=AssetsConfig(
                 # load norm_stats from pretrained checkpoint
                 assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets",
-                # or load offline computed norm_stats from compute_norm_stats.py
-                # assets_dir="assets/pi05_libero",
-                # to be passed explicitly to create_trained_policy() which loads
-                # norm_stats from pretrained checkpoint by default
             ),
             base_config=OnlineDataConfig(prompt_from_task=True),
             extra_delta_transform=False,
@@ -372,9 +394,10 @@ def make_base_libero_config(
         ),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=10_000,
-        num_workers=4,  # override default num_workers
-        rl=rl_config,
+        num_workers=4,
     )
+    defaults.update(kwargs)
+    return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
 def make_base_molmo_config(
@@ -423,6 +446,30 @@ def make_base_molmo_config(
             resize_image_h=224,
             resize_image_w=224,
         )
+    )
+
+
+def _make_ogpo_freeze_filter():
+    """Freeze PaliGemma LLM (except the action expert) and the SigLIP vision
+    tower. The action expert lives at LLM stack index 1 — matched by the
+    ``.*llm.*_1.*`` path regex, mirroring ``Pi0Config.get_freeze_filter``.
+
+    Trainable params after this filter:
+      * action expert transformer blocks (LLM stack index 1)
+      * the small action heads: state_proj, action_in_proj,
+        action_time_mlp_in/out, action_out_proj
+    Everything else (PaliGemma LLM stack index 0, SigLIP image tower) is
+    frozen and cast to bfloat16 by ``init_train_state``.
+    """
+    import flax.nnx as nnx
+    import openpi.shared.nnx_utils as nnx_utils
+
+    gemma_params  = nnx_utils.PathRegex(".*llm.*")
+    action_expert = nnx_utils.PathRegex(".*llm.*_1.*")
+    img_params    = nnx_utils.PathRegex(".*PaliGemma/img.*")
+    return nnx.Any(
+        nnx.All(gemma_params, nnx.Not(action_expert)),
+        img_params,
     )
 
 
@@ -475,7 +522,20 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_dsrl",
             rl_config=DSRLLearnerConfig(),
-        )
+        ),
+        # OGPO: PPO on flow policies with on-policy SDE log-probs and a BC
+        # anchor on the same on-policy batch. v1 freezes the PaliGemma
+        # backbone + SigLIP tower; only the action expert and the small
+        # action heads are trainable. See docs/ogpo_agent_plan.md.
+        make_base_libero_config(
+            name="pi05_libero_online_ogpo_sft",
+            rl_config=OGPOSFTLearnerConfig(
+                policy_update_interval=20,
+                policy_training_start_step=100,
+                group_num_samples=8,
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
     ]
 )
 
