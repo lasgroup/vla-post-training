@@ -36,9 +36,10 @@ DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
-# Note: with G=8, every policy update samples B*G chains through the action
-# expert. 64 keeps the per-update memory comparable to AWR at B=256.
-DEFAULT_BATCH_SIZE = 64
+# Matches AWR's per-GPU batch size. With PaliGemma frozen and only the
+# action expert receiving gradients, per-GPU activation memory is well
+# under AWR's even at G > 1.
+DEFAULT_BATCH_SIZE = 256
 DEFAULT_TRAIN_ENV_NUM = 4
 # v1 OGPO: single-task only on libero_90_59. The grid below does not sweep
 # over tasks; if you want multi-task later, add a (collect.tasks,
@@ -60,13 +61,15 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [DEFAULT_BATCH_SIZE],
     "rl.policy_training_start_step": [900],
-    # PPO defaults — match the OGPO/square.sh canonical values.
-    "rl.group_num_samples": [8],
+    # PPO defaults. v1 uses G=1 with a V-function baseline (advantage =
+    # Q - V), not OGPO's group-relative baseline — much cheaper per update.
+    # Switch to ``vanilla`` and bump G if you want OGPO-square parity.
+    "rl.group_num_samples": [1],
     "rl.clip_epsilon": [0.01],
     "rl.bc_coeff": [1.0],
     "rl.num_sde_steps": [10],
     "rl.noise_level": [0.3],
-    "rl.adv_strategy": ["vanilla"],
+    "rl.adv_strategy": ["subtract_v"],
     "collect.num_initial_rollouts": [5],
 }
 
