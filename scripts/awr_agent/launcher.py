@@ -48,7 +48,7 @@ NUM_TRAIN_STEPS = 5_000
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [1],
     "log_interval": [25],
     "rl.num_critic_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
