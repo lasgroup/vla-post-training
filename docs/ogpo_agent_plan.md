@@ -8,10 +8,12 @@ existing `awr_agent` and `flow_grpo_agent` (`scripts/awr_agent/`,
 `scripts/flow_grpo_agent/`).
 
 > Scope: the "policy extraction" half of OGPO only. The OGPO Q-learning
-> machinery (CalQL, ensembles with chi²-PO blending, MIP-Q, success buffer,
-> q_warmup phase) is **not** in scope for the first cut — we reuse VLA's
-> existing critic (`StateActionEnsembleDecoder` + `StateValueEnsembleDecoder`
-> from `src/rl/networks/decoders/values/`).
+> machinery (CalQL, chi²-PO blending, MIP-Q, q_warmup phase) is **not** in
+> scope for the first cut — we reuse VLA's existing critic
+> (`StateActionEnsembleDecoder` + `StateValueEnsembleDecoder` from
+> `src/rl/networks/decoders/values/`). The OGPO concept of a "success
+> buffer" is also explicitly out of scope and will not be re-introduced
+> via any config knob in v1.
 
 ---
 
@@ -135,6 +137,15 @@ mc_returns toggle, etc.):
 ```python
 @dataclasses.dataclass(frozen=True)
 class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
+    # Data mixing — OGPO is on-policy. The launcher pins online_ratio=1.0,
+    # which causes FilteredSFTLearner to install a DummyDataLoader (no
+    # LeRobot offline data). All actor-loss actions (PPO and BC) come from
+    # the online buffer.
+    online_ratio: float = 1.0
+    # We deliberately do NOT expose a success-buffer toggle. The inherited
+    # AdvantageWeightedSFTLearnerConfig.store_success_episodes_only is left
+    # at its default False; we should not set it elsewhere in this code path
+    # and the learner subclass below ignores it. See §4.4 / §4.6 / §4.8.
     # PPO / IS-ratio
     group_num_samples: int = 8          # G in OGPO; 32 in square.sh is too big for Pi05
     clip_epsilon: float = 0.01
@@ -147,7 +158,7 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     adv_strategy: str = "vanilla"       # 'vanilla' (group-mean) | 'max' | 'subtract_v'
     subsample_bon: bool = False         # OGPO's subsample_bon (group-relative bn)
     adv_clip_min: float | None = None
-    # BC regularization
+    # BC regularization (on the online batch — no separate demo dataset)
     bc_coeff: float = 1.0
     use_bc_regularization: bool = True
     # Bookkeeping
@@ -286,7 +297,10 @@ def loss_fn(model):
 
     bc_loss = jnp.float32(0.0)
     if config.rl.use_bc_regularization:
-        # Reuse pi0's own CFM loss on demo actions (no expansion).
+        # BC = pi0 CFM loss on the actions stored in the online buffer for
+        # this very batch (un-expanded, size B). With online_ratio=1.0 and
+        # no success filter, these are the on-policy rollout actions — not
+        # a separate static demo set, and not a curated success subset.
         bc_loss = model.compute_loss(bc_rng, policy_observation, actions_demo, train=True).mean()
 
     total = pg_loss + config.rl.bc_coeff * bc_loss
@@ -315,10 +329,12 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
     @at.typecheck
     def update(self) -> dict:
         # Identical structure to FlowGRPOLearner.update() (src/rl/flow_grpo/...).
-        # Only changes vs FlowGRPO:
-        #   - require online_ratio >= 1.0 (or implement offline-mix; OGPO is on-policy)
-        #   - sub-sample by group_num_samples instead of group_size
-        #   - pass mc_return only if config.rl.use_mc_returns
+        # Differences vs FlowGRPO:
+        #   - assert online_ratio == 1.0; bail loudly otherwise (OGPO is on-policy
+        #     and BC anchors to the online buffer — no offline path implemented).
+        #   - no group_size repeat in the runner; expansion to G happens inside
+        #     the train_step (so the runner passes a size-B batch through).
+        #   - pass mc_return only if config.rl.use_mc_returns.
         ...
 ```
 
@@ -395,23 +411,46 @@ equivalent — group-mean reduces variance per-state but loses an absolute scale
 
 ### 4.4 BC regularization: which actions?
 
-OGPO's BC term uses demo actions from the offline dataset (or from the
-success buffer when one is available). VLA already has SFT batches available
-(`batch = next(self._data_iter)` in the inherited update loop). We should use
-those — they are the source of demo actions. This means the OGPO actor update
-mixes:
-- B online states × G samples → PPO loss,
-- B offline (SFT) (state, action) pairs → BC loss.
+OGPO upstream uses demo actions from the offline dataset (or from the
+success buffer when one is available). **We deliberately do not replicate
+either side.** v1 has no concept of a success buffer at all — it does not
+exist as a config knob, does not exist as a data structure, and is not
+checked against anywhere. The implementation should not even thread the
+boolean through; treat success/failure as a logged metric only.
 
-This is exactly what FlowGRPO does for its policy update batch construction.
+v1 runs with `online_ratio=1.0`, so:
+
+- `FilteredSFTLearner.__init__` installs a `DummyDataLoader` and sets
+  `_data_iter = None` (`filtered_sft_learner.py:278-287`). No LeRobot Libero
+  demos enter the training loop.
+- The online replay buffer holds *all* collected rollouts (successful or not),
+  unfiltered.
+- The actor update samples a single online batch of size B; the PPO half
+  expands it to B×G via `jnp.repeat`, and the BC half uses the original size-B
+  slice with its **rollout actions** as the BC target.
+
+In other words, BC is run on the *recently collected on-policy actions
+themselves*. This is a softer, drifting anchor than static demos — it
+prevents catastrophic flow-distribution collapse but does not pin the policy
+to expert behavior. That is the intended v1 behavior; if we observe the
+policy degrading we can re-enable a fraction of LeRobot data by dropping
+`online_ratio` below 1.0 in a follow-up.
+
+**Implication for `update_actor.train_step`:** the batch passed to the loss
+function is `(policy_observation, critic_observation, actions)` where
+`actions` come from the online buffer. The PPO branch ignores `actions` (it
+re-samples G chains from the EMA policy), and the BC branch uses `actions`
+directly — same tensor, two different roles.
 
 ### 4.5 What to leave out of v1
 
 OGPO contains many variants (FPO, AWR-CFM, chi²-PO, KL-reg, denoiser head,
-one-step distillation, MIP-Q, q_warmup, success buffer, calql). All of those
-are gated by config flags and the square.sh launcher disables every single
-one. For v1, we implement exactly the **vanilla branch** (lines 778-792 of
-`ogpo.py`) plus BC regularization. Other modes can be added in follow-ups.
+one-step distillation, MIP-Q, q_warmup, calql). All of those are gated by
+config flags and the square.sh launcher disables every single one. For v1,
+we implement exactly the **vanilla branch** (lines 778-792 of `ogpo.py`)
+plus BC regularization. Other modes can be added in follow-ups. The
+success-buffer concept is *not* on this follow-up list — it is dropped
+permanently for the VLA port.
 
 We also leave out:
 - OGPO's `error_correct_sde_to_ode` (Theorem 17 score correction during SDE
@@ -425,14 +464,23 @@ We also leave out:
 ### 4.6 On-policy vs. mixed-batch
 
 OGPO is meant to be ~on-policy: it samples actions from the *current* (well,
-target) policy each update, so the replay buffer should mostly hold
-recent data. The square.sh launcher uses `offline_ratio=0.0` and
-`buffer_size=2M`.
+target) policy each update, so the replay buffer should mostly hold recent
+data. The `square.sh` launcher uses `offline_ratio=0.0` and `buffer_size=2M`.
 
-In VLA, the relevant lever is `rl.online_ratio`. The AWR agent runs with
-`online_ratio=1.0`. **Set OGPO default to `online_ratio=1.0`** so the PPO
-ratios stay valid. Mixed offline data is fine for the BC term (which doesn't
-use ratios), but the PPO half must come from on-policy rollouts.
+**Decision (v1):** pin `online_ratio=1.0`. There is no success buffer in v1
+— see §4.4. Consequences:
+
+- `_data_iter = None`; no LeRobot offline batches anywhere in the pipeline.
+- The online replay buffer holds *every* collected transition, success or
+  failure. Buffer mixing is a non-issue.
+- The PPO ratio numerator (current actor) and denominator (EMA actor) are
+  both evaluated on chains *re-sampled inside the train step*, not on the
+  buffer's stored actions, so on-policy-ness of the ratio is preserved
+  regardless of buffer contents.
+- The BC term consumes the buffer's stored actions directly (see §4.4).
+- A "stale buffer" risk remains: if `collect_interval` is large relative to
+  `policy_update_interval`, the BC anchor lags the current policy. That is
+  identical to FlowGRPO's situation, and we accept it.
 
 ### 4.7 Compile / memory sanity
 
@@ -446,6 +494,70 @@ Three things that will bite us if we are not careful:
 - **EMA evaluation:** the "old" model needs `nnx.merge` against EMA params.
   Doing this *inside* the jitted train_step is fine, but capture the
   graphdef once at `__init__` time — don't pass it through the function args.
+
+### 4.8 Freeze PaliGemma; train only the action expert (v1)
+
+OGPO's policy update is much heavier than AWR's: per state, we now do
+`num_sde_steps × G` suffix-token forward passes for sampling *plus*
+`num_sde_steps × G` for rescoring under current params, vs. AWR's single
+forward pass for `compute_loss`. Backprop through PaliGemma at this scale is
+not viable. **For v1 we freeze the PaliGemma backbone entirely (LLM + vision
+tower) and update only the action expert.**
+
+Mechanics — the openpi `TrainConfig.freeze_filter` is the lever (see
+`openpi/src/openpi/training/config.py:495`); `trainable_filter` is derived
+from it via `nnx.All(nnx.Param, nnx.Not(freeze_filter))`. The Pi0 model's
+existing helper covers the LoRA case only (`pi0_config.py:79-108`); for the
+"freeze everything except the action expert" case we need a custom filter.
+
+Recommended setup, inside the `OGPOSFTLearnerConfig` / config registration:
+
+```python
+import flax.nnx as nnx
+import openpi.shared.nnx_utils as nnx_utils
+
+# Match anything inside the LLM (the PaliGemma+expert stack) that is NOT
+# the action expert (stack index _1), plus the SigLIP vision tower.
+_gemma_params  = nnx_utils.PathRegex(".*llm.*")
+_action_expert = nnx_utils.PathRegex(".*llm.*_1.*")
+_img_params    = nnx_utils.PathRegex(".*PaliGemma/img.*")
+
+# Freeze the PaliGemma LLM (excluding the action expert) and the SigLIP
+# vision tower. Everything else — the action expert itself plus the small
+# action heads (state_proj / action_in_proj / action_time_mlp_in/out /
+# action_out_proj) — stays trainable.
+freeze_filter = nnx.Any(
+    nnx.All(_gemma_params, nnx.Not(_action_expert)),
+    _img_params,
+)
+```
+
+Then in the relevant config entry (`make_base_libero_config` call for the
+OGPO run), pass `freeze_filter=freeze_filter`. Verify with
+`array_tree_to_info(policy_state.params)` at startup that the trainable
+parameter count matches "action expert + small action heads" only.
+
+Caveats / verification:
+
+- The exact `PathRegex` patterns above need to be validated against the
+  actual nnx graphdef paths — `init_train_state` already calls
+  `nnx_utils.state_map(params, config.freeze_filter, ... astype(bfloat16))`
+  on frozen params (`filtered_sft_learner.py:154-158`), so a quick logged
+  pre-cast vs post-cast dtype check on a few representative leaves will
+  confirm the filter does what we expect.
+- The action expert path `.*llm.*_1.*` works only when the action expert
+  is in fact stack index 1 of the LLMWithExperts module. This is the case
+  for `gemma_300m` paired with `gemma_2b`, but we should confirm against the
+  current `pi05` config.
+- The EMA pathway (`policy_state.ema_params`) still keeps a full-shape copy
+  of every param including frozen ones. That's fine — EMA on frozen params
+  is a no-op, but the memory cost is real. If memory becomes tight, the
+  follow-up is to mask EMA to trainable params only.
+- The advantage of this freeze: rescoring chains under current params now
+  only needs gradients through the action expert (small), and prefix
+  computation can be reused across SDE steps because the PaliGemma half is
+  identity-equivalent across the update. This makes the §3.2 prefix-cache
+  optimization a much smaller engineering ask (or even unnecessary for v1).
 
 ---
 
@@ -468,8 +580,13 @@ Three things that will bite us if we are not careful:
    the awr_agent scripts with the three substitutions in §3.5.
 6. **Smoke test**: `./scripts/ogpo_agent/launcher.py --mode local --dry` and
    then a 200-step run.
-7. **Performance pass**: profile the sampling+rescoring portion; if it's >2×
-   FlowGRPO, implement the prefix-cache optimization for `get_dist_and_log_prob`
+7. **Verify freeze filter (§4.8).** At startup, log the trainable
+   parameter count and confirm it matches the action expert + action heads
+   only; spot-check a few PaliGemma LLM and SigLIP leaves to ensure they
+   were cast to bfloat16 and are excluded from `trainable_filter`.
+8. **Performance pass**: profile the sampling+rescoring portion; with the
+   backbone frozen, target ≤2× FlowGRPO update time. If we miss it,
+   implement the prefix-cache optimization for `get_dist_and_log_prob`
    referenced in §3.2.
 8. **Parity check vs. OGPO/square**: compare PPO ratio distribution, BC loss
    magnitudes, and Q-value progression against an OGPO run on a state-based
@@ -485,9 +602,22 @@ Three things that will bite us if we are not careful:
   want OGPO to start there too (advantage = MC − V), or only enable it once
   the critic is trained? OGPO traditionally uses `Q − baseline`, not
   `MC − V`, so the default in v1 should be `use_mc_returns=False`.
-- **Prefix-cache optimization.** Do we accept a 10× slower-than-FlowGRPO
-  first version, or block on adding a prefix-cached rescoring path inside
-  `Pi0`? The latter touches `openpi/`, which may or may not be in scope.
+- **Prefix-cache optimization.** With PaliGemma frozen (§4.8), this is much
+  less urgent — the prefix forward pass has no gradient anyway, so an XLA
+  CSE pass may already collapse repeated prefix evaluations. Still, if
+  profiling shows it does not, do we want to add an explicit cache path?
+
+**Resolved:**
+
+- *Data mixing.* `online_ratio=1.0`, no LeRobot offline data path.
+- *Success buffer.* Not implemented at all in v1. The replay buffer is a
+  single undifferentiated stream of every collected transition.
+- *BC source.* BC regularization runs directly on actions from the online
+  buffer (the size-B online batch used in the same update), not on a static
+  demo set.
+- *Trainable scope.* v1 freezes the PaliGemma backbone (LLM + vision tower)
+  and updates only the action expert plus the small action input/output
+  heads. See §4.8 for the `freeze_filter` recipe.
 
 ---
 
