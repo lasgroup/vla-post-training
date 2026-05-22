@@ -51,12 +51,12 @@ USE_SAME_EVAL_AND_TRAIN_TASK = True
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10],
+    "rl.critic.num_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
-    "rl.policy_training_start_step": [900],
+    "rl.policy.training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "rl.reset_policy_params_to_ema_period": [500],
+    "rl.policy.reset_params_to_ema_period": [500],
     "collect.num_initial_rollouts": [5],
     ("collect.tasks", "collect.eval_tasks"): [
         ("libero_90_2", "libero_90_2"),
@@ -143,10 +143,10 @@ def main() -> None:
             "checkpoint_base_dir": args.checkpoint_base_dir,
             "collect.num_rollouts": args.num_rollouts,
             "collect.collect_interval": args.collect_interval,
-            "rl.policy_training_start_step": args.policy_start_training,
-            "rl.policy_update_interval": args.policy_update_interval,
+            "rl.policy.training_start_step": args.policy_start_training,
+            "rl.policy.update_interval": args.policy_update_interval,
             "rl.buffer_capacity": args.buffer_capacity,
-            "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
+            "rl.critic.num_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
@@ -160,9 +160,9 @@ def main() -> None:
         flags = apply_requeue_flags(flags, enabled=args.requeue)
 
         # Keep these in sync with policy_training_start_step
-        policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
-        flags["rl.critic_pre_training_steps"] = policy_start
+        policy_start = flags["rl.policy.training_start_step"]
+        flags["rl.critic.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.critic.pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)

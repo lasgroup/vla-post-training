@@ -127,10 +127,10 @@ def _build_pi0_backbone_critic_defs(
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
     assert isinstance(config.rl, _config.BestofNLearnerConfig)
-    critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
-    critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
-    critic_num_qs = config.rl.critic_num_qs
-    critic_num_vs = config.rl.critic_num_vs
+    critic_encoder_hidden_dims = config.rl.critic.encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic.decoder_hidden_dims
+    critic_num_qs = config.rl.critic.num_qs
+    critic_num_vs = config.rl.critic.num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
         network_def = lambda o, rg: MLP(
@@ -157,7 +157,7 @@ def _build_pi0_backbone_critic_defs(
             action=action,
             hidden_dims=critic_decoder_hidden_dims,
             num_qs=critic_num_qs,
-            num_bins=config.rl.num_value_bins,
+            num_bins=config.rl.critic.num_value_bins,
             rngs=rngs,
         )
 
@@ -168,7 +168,7 @@ def _build_pi0_backbone_critic_defs(
             observation=embedding,
             hidden_dims=critic_decoder_hidden_dims,
             num_vs=critic_num_vs,
-            num_bins=config.rl.num_value_bins,
+            num_bins=config.rl.critic.num_value_bins,
             rngs=rngs,
         )
 

@@ -53,10 +53,10 @@ DEFAULT_NORMALIZE_ADV = 0
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
-    "rl.num_critic_updates_per_batch": [10],
+    "rl.critic.num_updates_per_batch": [10],
     "collect.use_time_to_success_as_reward": [True],
     "batch_size": [256],
-    "rl.policy_training_start_step": [900],
+    "rl.policy.training_start_step": [900],
     "rl.use_mpo_advantage_weight": [True, False],
 }
 
@@ -120,10 +120,10 @@ def main() -> None:
             "checkpoint_base_dir": args.checkpoint_base_dir,
             "collect.num_rollouts": args.num_rollouts,
             "collect.collect_interval": args.collect_interval,
-            "rl.policy_training_start_step": args.policy_start_training,
-            "rl.policy_update_interval": args.policy_update_interval,
+            "rl.policy.training_start_step": args.policy_start_training,
+            "rl.policy.update_interval": args.policy_update_interval,
             "rl.buffer_capacity": args.buffer_capacity,
-            "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
+            "rl.critic.num_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
@@ -139,9 +139,9 @@ def main() -> None:
         flags = apply_requeue_flags(flags, enabled=args.requeue)
 
         # Keep these in sync with policy_training_start_step
-        policy_start = flags["rl.policy_training_start_step"]
-        flags["rl.td_weight_schedule.switch_step"] = policy_start
-        flags["rl.critic_pre_training_steps"] = policy_start
+        policy_start = flags["rl.policy.training_start_step"]
+        flags["rl.critic.td_weight_schedule.switch_step"] = policy_start
+        flags["rl.critic.pre_training_steps"] = policy_start
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)

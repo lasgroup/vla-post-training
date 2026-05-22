@@ -59,11 +59,11 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_rollouts": [10],
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
-    "rl.num_critic_updates_per_batch": [1],
-    "rl.td_weight_schedule.init_value": [0.5],
-    "rl.td_weight_schedule.end_value": [0.5],
-    "rl.td_weight_schedule.switch_step": [500_000],
-    "rl.num_value_bins": [1],
+    "rl.critic.num_updates_per_batch": [1],
+    "rl.critic.td_weight_schedule.init_value": [0.5],
+    "rl.critic.td_weight_schedule.end_value": [0.5],
+    "rl.critic.td_weight_schedule.switch_step": [500_000],
+    "rl.critic.num_value_bins": [1],
     # Best-of-N specific
     "collect.store_prefix_rep": [True],
     "rl.train_on_policy_value_function": [False],
@@ -119,6 +119,8 @@ def main() -> None:
     parser.add_argument("--critic_inference_start_step", type=int, default=DEFAULT_CRITIC_INFERENCE_START_STEP)
     parser.add_argument("--num_value_bins", type=int, default=1, help="1=regression, >1=categorical over return bins")
     parser.add_argument("--value_target_type", default="one_hot", choices=["one_hot", "two_hot"])
+    parser.add_argument("--critic_batch_size", type=int, default=None,
+                        help="Batch size for critic updates (None = same as policy batch_size)")
     parser.add_argument("--num_cpus", type=int, default=DEFAULT_NUM_CPUS)
     parser.add_argument("--log_dir", default=DEFAULT_LOG_DIR, help="Directory for SLURM .out log files")
     parser.add_argument("--requeue", action="store_true", help="Submit requeue-safe resumable jobs")
@@ -138,9 +140,9 @@ def main() -> None:
             "collect.num_rollouts": args.num_rollouts,
             "collect.collect_interval": args.collect_interval,
             "rl.buffer_capacity": args.buffer_capacity,
-            "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
+            "rl.critic.num_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "rl.n_samples": args.n_samples,
-            "rl.critic_training_start_step": args.critic_training_start_step,
+            "rl.critic.training_start_step": args.critic_training_start_step,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "batch_size": DEFAULT_BATCH_SIZE,
@@ -151,21 +153,22 @@ def main() -> None:
             "collect.eval_interval": args.eval_interval,
             "collect.num_eval_rollouts": args.num_eval_rollouts,
             "num_train_steps": args.num_train_steps,
-            "rl.num_value_bins": args.num_value_bins,
-            "rl.value_target_type": args.value_target_type,
+            "rl.critic.num_value_bins": args.num_value_bins,
+            "rl.critic.value_target_type": args.value_target_type,
+            "rl.critic.batch_size": args.critic_batch_size,
             "save_interval": DEFAULT_SAVE_INTERVAL,
             "collect.store_prefix_rep": args.store_prefix_rep,
         }
         flags.update(combo)
         flags = apply_requeue_flags(flags, enabled=args.requeue)
 
-        # Keep these in sync with policy_training_start_step
+        # Keep these in sync with critic_inference_start_step
         policy_start = flags["rl.critic_inference_start_step"]
-        if flags["rl.td_weight_schedule.switch_step"] == -1:
-            flags["rl.td_weight_schedule.switch_step"] = policy_start
-            flags["rl.critic_pre_training_steps"] = policy_start
+        if flags["rl.critic.td_weight_schedule.switch_step"] == -1:
+            flags["rl.critic.td_weight_schedule.switch_step"] = policy_start
+            flags["rl.critic.pre_training_steps"] = policy_start
         else:
-            flags["rl.critic_pre_training_steps"] = 0
+            flags["rl.critic.pre_training_steps"] = 0
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)

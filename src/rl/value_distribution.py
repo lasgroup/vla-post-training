@@ -116,10 +116,10 @@ class CategoricalValueDistribution(ValueDistribution):
 def get_value_bounds(config) -> tuple[float, float]:
     """Return (lower_bound, upper_bound) for the value function output range.
 
-    Bounds are resolved once at OnlineTrainConfig construction time and stored
-    as concrete floats in config.rl. This function simply reads them.
+    Bounds are resolved once at startup (via resolve_critic_value_bounds) and
+    stored as concrete floats in config.rl.critic. This function simply reads them.
     """
-    return float(config.rl.value_lower_bound), float(config.rl.value_upper_bound)
+    return float(config.rl.critic.value_lower_bound), float(config.rl.critic.value_upper_bound)
 
 
 def make_value_distribution(

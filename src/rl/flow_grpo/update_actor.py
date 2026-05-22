@@ -40,7 +40,7 @@ def train_step(
     value_critic.eval()
 
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
-    reset_period = config.rl.reset_policy_params_to_ema_period
+    reset_period = config.rl.policy.reset_params_to_ema_period
     group_size = config.rl.group_size
     normalize_adv = config.rl.normalize_adv
     use_mpo_advantage_weight = config.rl.use_mpo_advantage_weight
@@ -95,11 +95,13 @@ def train_step(
         # 2. Compute the advantage weights
         value = summarize_critic_values(
             value_critic(expanded_critic_obs),
-            critic_reduction=config.rl.critic_reduction,
+            config,
+            critic_reduction=config.rl.critic.reduction,
         )
         q_value = summarize_critic_values(
             state_action_critic(expanded_critic_obs, flatten_action_horizon(actions)),
-            critic_reduction=config.rl.critic_reduction,
+            config,
+            critic_reduction=config.rl.critic.reduction,
         )
         advantage = q_value - value
         if use_mpo_advantage_weight:

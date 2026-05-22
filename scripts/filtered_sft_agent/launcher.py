@@ -49,9 +49,9 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0, 1, 2],
     "log_interval": [25],
     "batch_size": [256],
-    "rl.policy_training_start_step": [900],
+    "rl.policy.training_start_step": [900],
     "rl.online_ratio": [1.0],
-    "rl.reset_policy_params_to_ema_period": [500],
+    "rl.policy.reset_params_to_ema_period": [500],
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
     ("collect.tasks", "collect.eval_tasks"): [

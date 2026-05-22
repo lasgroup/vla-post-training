@@ -25,12 +25,12 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
-            and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic.training_start_step
+            and self.training_steps % rl_config.critic.update_interval == 0
         )
         update_policy = (
-            self.training_steps >= rl_config.policy_training_start_step
-            and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy.training_start_step
+            and self.training_steps % rl_config.policy.update_interval == 0
         )
         if not update_critic and not update_policy:
             return {
@@ -91,7 +91,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             # When group_size > 1, the flow GRPO train_step internally repeats
             # each sample group_size times. Randomly subsample the batch so that
             # reduced_batch_size * group_size == original_batch_size.
-            if rl_config.group_size > 1:
+            if rl_config.group_size > 1 and not rl_config.use_mpo_advantage_weight:
                 subsample_rng, self._rng = jax.random.split(self._rng, 2)
                 batch_size = self._config.batch_size
                 reduced_size = batch_size // rl_config.group_size

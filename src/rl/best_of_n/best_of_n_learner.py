@@ -292,8 +292,7 @@ class BestofNLearner(FilteredSFTLearner):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        self._save_episode_in_buffer(episode_data, task_description)
+        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
     def sample_actions(self, observations, **kwargs):
         if self.training_steps < self._config.rl.critic_inference_start_step:
@@ -433,7 +432,7 @@ class BestofNLearner(FilteredSFTLearner):
             rl_config = self._config.rl
             _lower, _upper = get_value_bounds(self._config)
             q_dist = make_value_distribution(
-                q_logits, rl_config.num_value_bins, _lower, _upper
+                q_logits, rl_config.critic.num_value_bins, _lower, _upper
             )
             scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
             if scores.ndim > 1:
@@ -508,7 +507,7 @@ class BestofNLearner(FilteredSFTLearner):
         )
         
         # Update the state action critic state
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
 
         value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
 
@@ -537,7 +536,7 @@ class BestofNLearner(FilteredSFTLearner):
                                                                                 "be passed to the best-of-N agent"
         rl_config = self._config.rl
 
-        if rl_config.critic_pre_training_steps == self.training_steps:
+        if rl_config.critic.pre_training_steps == self.training_steps:
             # Reset optimizer state of the value and q function
             q_opt_state = self._state_action_critic_state.tx.init(
                 nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
@@ -565,8 +564,8 @@ class BestofNLearner(FilteredSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-                self.training_steps >= rl_config.critic_training_start_step
-                and self.training_steps % rl_config.critic_update_interval == 0
+                self.training_steps >= rl_config.critic.training_start_step
+                and self.training_steps % rl_config.critic.update_interval == 0
         )
 
         if not update_critic:
@@ -575,25 +574,27 @@ class BestofNLearner(FilteredSFTLearner):
                     float(self._online_data_buffer.size), dtype=jnp.float32
                 )
             }
+        if self._config.rl.critic.batch_size:
+            critic_batch_size = self._config.rl.critic.batch_size
+        else:
 
-        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
-        use_online = (
-                self._online_data_buffer.size >= online_batch_size
-        )
+            critic_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+
+        use_online = self._online_data_buffer.size >= critic_batch_size
 
         critic_info = {}
         if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+            critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size)
             if update_critic:
                 if self.debug:
                     log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=online_batch
+                        "before_critics", train_state=self._train_state, batch=critic_online_batch
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
                     q_state, value_state, q_info, value_info = (
                         self._update_critics_jitted(
-                            online_batch,
+                            critic_online_batch,
                             self._state_action_critic_state,
                             self._value_state,
                             self._train_state,
