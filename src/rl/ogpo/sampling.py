@@ -102,21 +102,36 @@ def score_chain_under_model(
     data — only ``model`` carries gradients. This is the IS-ratio numerator
     in OGPO's PPO surrogate.
 
+    Implementation: compute the PaliGemma prefix **once** here and reuse the
+    resulting KV cache for all ``num_steps`` suffix-only forwards. This
+    keeps activation memory at ~1× the prefix forward instead of
+    ``num_steps``× — critical for OGPO's PPO update to fit in GPU memory
+    (the naive 10× unrolled-prefix path blows up to >100 GB on B=256).
+
     Returns ``[num_steps, B, H]``. Sum across the first axis to get the
     joint log-prob per (B, H) entry, then sum across H (or leave as-is and
     let the loss broadcast).
     """
     num_steps = x_chain.shape[0]
+
+    # ONE prefix forward; gradients still flow through the cache when the
+    # PaliGemma backbone is unfrozen.
+    kv_cache, prefix_mask = model.compute_prefix_cache(observation)
+
     # We unroll the loop in Python rather than ``jax.lax.scan`` because nnx
     # modules carry hidden mutable state that scan does not handle cleanly,
-    # and because ``num_steps`` is small (10 by default).
+    # and because ``num_steps`` is small (10 by default). XLA still
+    # de-duplicates the shared prefix-side activations because they all
+    # come from a single ``compute_prefix_cache`` call upstream.
     per_step = []
     for k in range(num_steps):
-        lp_k, _ = model.get_dist_and_log_prob(
+        lp_k, _ = model.get_dist_and_log_prob_with_cache(
             x_t=x_chain[k],
             sample=x_next_chain[k],
             time=times[k],
             observation=observation,
+            kv_cache=kv_cache,
+            prefix_mask=prefix_mask,
             dt=dt,
             noise_level=noise_level,
         )
