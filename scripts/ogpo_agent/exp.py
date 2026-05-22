@@ -200,12 +200,13 @@ def _log_trainable_param_summary(agent: OGPOAgentLearner) -> None:
             agent._train_state.params,
             nnx.All(nnx.Param, agent._config.freeze_filter),
         )
-        trainable_count = sum(
-            int(jnp.size(leaf.value)) for leaf in jax.tree.leaves(trainable)
-        )
-        frozen_count = sum(
-            int(jnp.size(leaf.value)) for leaf in jax.tree.leaves(frozen)
-        )
+
+        def _leaf_size(leaf):
+            arr = leaf.value if hasattr(leaf, "value") else leaf
+            return int(jnp.size(arr))
+
+        trainable_count = sum(_leaf_size(leaf) for leaf in jax.tree.leaves(trainable))
+        frozen_count = sum(_leaf_size(leaf) for leaf in jax.tree.leaves(frozen))
         total = trainable_count + frozen_count
         if total == 0:
             logging.warning("Trainable param summary: no parameters found.")
