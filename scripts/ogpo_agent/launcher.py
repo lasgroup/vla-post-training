@@ -40,13 +40,17 @@ DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
 # action expert receiving gradients, per-GPU activation memory is well
 # under AWR's even at G > 1.
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_TRAIN_ENV_NUM = 4
 # v1 OGPO: single-task only on libero_90_59. The grid below does not sweep
 # over tasks; if you want multi-task later, add a (collect.tasks,
 # collect.eval_tasks) entry to ``applicable_configs``.
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_TASKS = ["libero_90_59"]
-DEFAULT_EVAL_ENV_NUM = 4
+# Single env worker. Multi-worker env collection has been flaky on this
+# cluster (robosuite EGL contention in SubprocVectorEnv subprocesses). For
+# a single-task v1 setup, env_num=1 also has no throughput downside —
+# rollout collection is small relative to the policy update.
+DEFAULT_TRAIN_ENV_NUM = 1
+DEFAULT_EVAL_ENV_NUM = 1
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 8
 NUM_TRAIN_STEPS = 5_000
