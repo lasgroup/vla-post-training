@@ -79,6 +79,7 @@ def train_step(
     # Read weight outside loss_fn so the `if` becomes a Python-level branch that
     # JAX sees as a compile-time constant — zero overhead when the feature is off.
     filtered_sft_weight = config.rl.filtered_sft_weight
+    awr_loss_weight = config.rl.awr_loss_weight
 
     @at.typecheck
     def loss_fn(
@@ -91,7 +92,7 @@ def train_step(
         chunked_loss = model.compute_loss(rng, policy_observation, actions, train=True)
         while score.ndim < chunked_loss.ndim:
             score = score[..., jnp.newaxis]
-        awr_loss = jnp.mean(score * chunked_loss)
+        awr_loss = awr_loss_weight * jnp.mean(score * chunked_loss)
         aux_data = {"chunked_loss": jnp.mean(chunked_loss), "awr_loss": awr_loss}
 
         if filtered_sft_weight > 0.0 and is_success is not None:

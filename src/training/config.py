@@ -170,6 +170,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # Weight for an auxiliary BC loss on successful transitions only.
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
+    awr_loss_weight: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
