@@ -708,6 +708,7 @@ class FilteredSFTLearner(Agent):
             lambda *xs: np.concatenate(xs, axis=0), *episode_data
         )
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
+        terminate = episode_data["terminate"]  # only true terminations should zero out the discount
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
         last_gamma = float(self._config.rl.discount**act_h)
@@ -723,7 +724,9 @@ class FilteredSFTLearner(Agent):
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        # Bootstrap after truncation: only zero out discount on true termination, not truncation.
+        # Truncated episodes ended due to time limit — the next state still has value, so we bootstrap.
+        _discount = np.asarray([0.0 if np.any(terminate[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         # if the reward is constant, set the MC returns to reward/(1-gamma)
