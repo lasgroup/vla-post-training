@@ -17,12 +17,100 @@ whose scale_diag is ``noise_level * sqrt(t/(1-t)) * sqrt(|dt|)``.
 """
 from typing import Any
 
+import einops
 import jax
 import jax.numpy as jnp
 
 import openpi.models.model as _model
 import openpi.models.pi0 as _pi0
 import openpi.shared.array_typing as at
+from openpi.models import gemma as _gemma
+from openpi.models.pi0 import make_attn_mask
+
+
+# ---------------------------------------------------------------------------
+# Prefix-cache helpers.
+#
+# These mirror what would otherwise be ``Pi0`` methods, but live here in the
+# parent repo so the openpi submodule stays clean. They reach into Pi0's
+# public surface (embed_prefix/embed_suffix/PaliGemma.llm/action_out_proj)
+# plus the convention-private ``_get_sde_dist``; numerically identical to
+# the in-method version.
+# ---------------------------------------------------------------------------
+
+def compute_prefix_cache(
+    model: _pi0.Pi0,
+    observation: _model.Observation,
+) -> tuple[_gemma.KVCache, at.Bool[at.Array, "b _p"]]:
+    """Run a single prefix forward and return the per-layer KV cache.
+
+    Output can be reused across many suffix-only forwards (e.g. the 10 SDE
+    rescoring steps in OGPO's PPO surrogate), avoiding redundant PaliGemma
+    evaluations and the activation-memory blow-up they cause. The prefix
+    mask is returned alongside because suffix-side attention masks need to
+    know which prefix positions are valid.
+
+    Gradients flow through ``kv_cache`` exactly as they would through a
+    normal forward pass — so if the PaliGemma backbone is unfrozen later,
+    the cached path is still numerically equivalent.
+    """
+    prefix_tokens, prefix_mask, prefix_ar_mask = model.embed_prefix(observation)
+    prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+    positions = jnp.cumsum(prefix_mask, axis=1) - 1
+    (_, _), kv_cache = model.PaliGemma.llm(
+        [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
+    )
+    return kv_cache, prefix_mask
+
+
+def get_dist_and_log_prob_with_cache(
+    model: _pi0.Pi0,
+    *,
+    x_t: at.Float[at.Array, "batch horizon action_dim"],
+    sample: at.Float[at.Array, "batch horizon action_dim"],
+    time: at.Float[at.Array, " batch"],
+    observation: _model.Observation,
+    kv_cache: _gemma.KVCache,
+    prefix_mask: at.Bool[at.Array, "b _p"],
+    dt: at.Float[at.Array, ""],
+    noise_level: float = 0.7,
+):
+    """Same as Pi0.get_dist_and_log_prob but reusing a precomputed prefix.
+
+    The KV cache and prefix mask come from a prior ``compute_prefix_cache``
+    call on the same observation under the same model parameters. Only the
+    action-expert / suffix side of the model is re-run here — the PaliGemma
+    prefix path is replayed from the cache.
+    """
+    suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = model.embed_suffix(
+        observation, x_t, time
+    )
+    suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+    prefix_attn_mask_b = einops.repeat(
+        prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1]
+    )
+    full_attn_mask = jnp.concatenate(
+        [prefix_attn_mask_b, suffix_attn_mask], axis=-1
+    )
+    positions = (
+        jnp.sum(prefix_mask, axis=-1)[:, None]
+        + jnp.cumsum(suffix_mask, axis=-1)
+        - 1
+    )
+
+    (prefix_out, suffix_out), _ = model.PaliGemma.llm(
+        [None, suffix_tokens],
+        mask=full_attn_mask,
+        positions=positions,
+        kv_cache=kv_cache,
+        adarms_cond=[None, adarms_cond],
+    )
+    assert prefix_out is None
+    v_t = model.action_out_proj(suffix_out[:, -model.action_horizon:])
+    dist = model._get_sde_dist(
+        x_t=x_t, v_t=v_t, time=time, dt=dt, noise_level=noise_level
+    )
+    return dist.log_prob(sample), dist
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +204,7 @@ def score_chain_under_model(
 
     # ONE prefix forward; gradients still flow through the cache when the
     # PaliGemma backbone is unfrozen.
-    kv_cache, prefix_mask = model.compute_prefix_cache(observation)
+    kv_cache, prefix_mask = compute_prefix_cache(model, observation)
 
     # We unroll the loop in Python rather than ``jax.lax.scan`` because nnx
     # modules carry hidden mutable state that scan does not handle cleanly,
@@ -125,7 +213,8 @@ def score_chain_under_model(
     # come from a single ``compute_prefix_cache`` call upstream.
     per_step = []
     for k in range(num_steps):
-        lp_k, _ = model.get_dist_and_log_prob_with_cache(
+        lp_k, _ = get_dist_and_log_prob_with_cache(
+            model,
             x_t=x_chain[k],
             sample=x_next_chain[k],
             time=times[k],
