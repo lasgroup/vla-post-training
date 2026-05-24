@@ -26,7 +26,9 @@ from launcher_util import (
 
 SCRIPT = "scripts/ogpo_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_ogpo_sft"
-PROJECT_NAME = "ogpo_agent_sweep"
+PROJECT_NAME = "libero_59"
+WANDB_ENTITY = "vla-experiments"
+os.environ.setdefault("WANDB_ENTITY", WANDB_ENTITY)
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
