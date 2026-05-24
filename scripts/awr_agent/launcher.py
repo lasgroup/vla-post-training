@@ -32,8 +32,8 @@ DEFAULT_SAVE_INTERVAL = 100_000
 DEFAULT_SEED = 0
 DEFAULT_BUFFER_CAPACITY = 250000
 DEFAULT_POLICY_START_TRAINING = 1000
-DEFAULT_POLICY_UPDATE_INTERVAL = 1
-DEFAULT_NUM_ROLLOUTS = 1
+DEFAULT_POLICY_UPDATE_INTERVAL = 10
+DEFAULT_NUM_ROLLOUTS = 4
 DEFAULT_COLLECT_INTERVAL = 300
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
 DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD = True
@@ -43,9 +43,9 @@ DEFAULT_TRAIN_ENV_NUM = 4
 DEFAULT_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_TASKS = ["libero_90_59"]
 DEFAULT_EVAL_ENV_NUM = 4
-DEFAULT_EVAL_INTERVAL = 300
-DEFAULT_NUM_EVAL_ROLLOUTS = 8
-NUM_TRAIN_STEPS = 5_000
+DEFAULT_EVAL_INTERVAL = 10000
+DEFAULT_NUM_EVAL_ROLLOUTS = 16
+NUM_TRAIN_STEPS = 1_000_000
 DEFAULT_CRITIC_TRAINING_START_STEP = 0
 DEFAULT_CRITIC_INFERENCE_START_STEP = 900
 DEFAULT_NUM_CPUS = 16
@@ -60,24 +60,26 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # Critic training schedule
     "collect.use_time_to_success_as_reward": [True],
     "rl.critic.num_updates_per_batch": [1],
-    "rl.critic.td_weight_schedule.init_value": [0.5],
-    "rl.critic.td_weight_schedule.end_value": [0.5],
+    "rl.critic.batch_size": [1024],
+    "rl.critic.td_weight_schedule.init_value": [1.0],
+    "rl.critic.td_weight_schedule.end_value": [1.0],
     "rl.critic.td_weight_schedule.switch_step": [500_000],
     "rl.critic.num_value_bins": [1],
+    "collect.fix_mc_returns": [True],
     # Policy training
     "rl.policy.training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.policy.reset_params_to_ema_period": [500],
     # Best-of-N collection
     "collect.store_prefix_rep": [True],
-    "rl.n_samples": [32],
+    "rl.n_samples": [1],
     "rl.critic_inference_start_step": [0],
     # AWR-specific
     "rl.use_mc_returns": [False],
     "lr_schedule.value": [2.5e-5],
     "rl.store_success_episodes_only": [False],
     ("collect.tasks", "collect.eval_tasks"): [
-        (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
+        (["libero_90_59", "libero_90_59"]),
     ],
 }
 
