@@ -2,11 +2,15 @@
 """Print step-bucketed quantiles of OGPO debug metrics from a wandb run.
 
 Usage:
-    python tests/ogpo/wandb_quantiles.py \
-        --entity my-entity --project ogpo_agent_sweep --run-name some_run
+    python tests/ogpo/wandb_quantiles.py
+    python tests/ogpo/wandb_quantiles.py --run-name <other-run>
+    python tests/ogpo/wandb_quantiles.py --entity <ent> --project <proj> --run-name <run>
 
-You can also pass --run-id (W&B run id, the 8-char slug) instead of --run-name.
-By default, buckets are 500 training steps wide. Pass --bucket 1000 to change.
+By default the script targets the OGPO debug run hardcoded below
+(``diverse-data-synthesis/libero_50``,
+``libero_59_20260523-003059_b32efa_seed1``); override any of
+``--entity / --project / --run-name`` on the CLI.
+Buckets default to 500 training steps; pass ``--bucket 1000`` to change.
 
 What it prints
 --------------
@@ -37,6 +41,12 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 import wandb
+
+
+# Defaults for the current OGPO debug run. Override any of these from CLI.
+DEFAULT_ENTITY = "diverse-data-synthesis"
+DEFAULT_PROJECT = "libero_50"
+DEFAULT_RUN_NAME = "libero_59_20260523-003059_b32efa_seed1"
 
 
 # Metrics the OGPO actor/critic emit. Wildcards are matched against the
@@ -77,18 +87,12 @@ DEFAULT_QUANTILES: tuple[float, ...] = (0.05, 0.25, 0.50, 0.75, 0.95)
 
 
 def _resolve_run(api: wandb.Api, entity: str, project: str,
-                 run_name: str | None, run_id: str | None) -> "wandb.apis.public.Run":
-    if run_id is None and run_name is None:
-        raise ValueError("Provide --run-name or --run-id")
-    if run_id is not None:
-        return api.run(f"{entity}/{project}/{run_id}")
-    # run_name path: filter by display_name, take the most recent if multiple.
+                 run_name: str) -> "wandb.apis.public.Run":
     matches = list(api.runs(f"{entity}/{project}",
                             filters={"display_name": run_name}))
     if not matches:
         raise ValueError(
-            f"No run with display name {run_name!r} in {entity}/{project}. "
-            "Use --run-id to disambiguate."
+            f"No run with display name {run_name!r} in {entity}/{project}."
         )
     if len(matches) > 1:
         print(
@@ -186,11 +190,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="Print step-bucketed quantiles of W&B metrics for an OGPO run."
     )
-    ap.add_argument("--entity", required=True, help="W&B entity (team/user)")
-    ap.add_argument("--project", required=True, help="W&B project name")
-    group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("--run-name", help="W&B run display name")
-    group.add_argument("--run-id", help="W&B run id (8-char slug)")
+    ap.add_argument("--entity", default=DEFAULT_ENTITY,
+                    help=f"W&B entity (default: {DEFAULT_ENTITY})")
+    ap.add_argument("--project", default=DEFAULT_PROJECT,
+                    help=f"W&B project name (default: {DEFAULT_PROJECT})")
+    ap.add_argument("--run-name", default=DEFAULT_RUN_NAME,
+                    help=f"W&B run display name (default: {DEFAULT_RUN_NAME})")
     ap.add_argument("--bucket", type=int, default=500,
                     help="Step bucket width (default: 500)")
     ap.add_argument(
@@ -215,7 +220,7 @@ def main() -> None:
     args = ap.parse_args()
 
     api = wandb.Api(timeout=60)
-    run = _resolve_run(api, args.entity, args.project, args.run_name, args.run_id)
+    run = _resolve_run(api, args.entity, args.project, args.run_name)
     print(f"Run: {run.entity}/{run.project}/{run.id}  ({run.name})")
     print(f"State: {run.state}  Steps: {run.summary.get('_step', '?')}")
 

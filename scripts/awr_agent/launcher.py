@@ -62,7 +62,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.td_weight_schedule.switch_step": [1_000_000],
     "rl.store_success_episodes_only": [True],
     ("collect.tasks", "collect.eval_tasks"): [
-        (["libero_90_1-14", "libero_90_16-89"], ["libero_90_1-14", "libero_90_16-89"]),
+        (["libero_90_59"], ["libero_90_59"]),
     ],
 }
 
