@@ -3,7 +3,6 @@ import copy
 import functools
 import gc
 import logging
-import os
 import weakref
 from typing import Any, Dict
 
@@ -722,7 +721,13 @@ class FilteredSFTLearner(Agent):
         if is_success:
             self._save_episode_in_buffer(episode_data, task_description)
 
-    def _save_episode_in_buffer(self, episode_data, task_description):
+    def _save_episode_in_buffer(
+        self,
+        episode_data,
+        task_description,
+        *,
+        target_buffer: ShardedReplayBuffer | None = None,
+    ):
 
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
             "Only Filtered SFT config should be passed " "to the filtered SFT agent"
@@ -775,7 +780,9 @@ class FilteredSFTLearner(Agent):
             _obs[PREFIX_EMBEDDING_NAME] = prefix_emb
             _next_obs[PREFIX_EMBEDDING_NAME] = next_prefix_emb
 
-        self._online_data_buffer.insert(
+        if target_buffer is None:
+            target_buffer = self._online_data_buffer
+        target_buffer.insert(
             {
                 "observation": _obs,
                 "actions": _actions.astype(np.float32),

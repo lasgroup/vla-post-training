@@ -126,6 +126,9 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
     critic_update_interval: int = 1
     critic_training_start_step: int = 0
+    critic_validation_every_n_episodes: int = 0
+    critic_validation_buffer_capacity: int = 50_000
+    critic_validation_interval: int = 25
     use_ema_critic: bool = True
     critic_ema_decay: float = 0.995
     critic_reduction: str = "min"

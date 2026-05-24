@@ -18,6 +18,8 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
 from src.rl.best_of_n.update_critic import (
+    evaluate_q_loss,
+    evaluate_value_loss,
     init_state_action_critic_train_state,
     init_state_value_train_state,
     train_q_step,
@@ -27,6 +29,7 @@ from src.rl.best_of_n.update_critic import (
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.networks.rl_networks import ObsType, ActionType
+from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
@@ -61,6 +64,18 @@ class BestofNLearner(FilteredSFTLearner):
         self._state_normalize = normalizer
         self._action_normalize = normalizer
         self._transition_state_dim = int(dummy_obs["state"].shape[-1])
+        self._critic_validation_buffer = None
+        self._critic_validation_episode_counter = 0
+        if self._config.rl.critic_validation_every_n_episodes > 0:
+            self._critic_validation_buffer = ShardedReplayBuffer(
+                dummy_data=self._make_buffer_dummy_data(),
+                max_capacity=self._config.rl.critic_validation_buffer_capacity,
+                data_sharding=self._data_sharding,
+                seed=self._config.seed + 1,
+                preprocess_fn=None,
+                postprocess_fn=None,
+                freeze_dict=False,
+            )
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -101,6 +116,8 @@ class BestofNLearner(FilteredSFTLearner):
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
         self._q_train_step = functools.partial(train_q_step, self._config)
         self._value_train_step = functools.partial(train_value_step, self._config)
+        self._q_evaluate_loss = functools.partial(evaluate_q_loss, self._config)
+        self._value_evaluate_loss = functools.partial(evaluate_value_loss, self._config)
         # self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_critic_update_function()
 
@@ -134,6 +151,30 @@ class BestofNLearner(FilteredSFTLearner):
                 self._replicated_sharding,
             ),
             donate_argnums=(1, 2),
+        )
+
+        def _evaluate_critics_wrapper(batch, q_state, value_state, policy_state, rng):
+            return self._evaluate_critics(
+                batch=batch,
+                q_state=q_state,
+                value_state=value_state,
+                policy_state=policy_state,
+                rng=rng,
+            )
+
+        self._evaluate_critics_jitted = jax.jit(
+            _evaluate_critics_wrapper,
+            in_shardings=(
+                self._data_sharding,
+                self._state_action_critic_state_sharding,
+                self._value_state_sharding,
+                self._train_state_sharding,
+                self._replicated_sharding,
+            ),
+            out_shardings=(
+                self._replicated_sharding,
+                self._replicated_sharding,
+            ),
         )
 
     def _maybe_restore_policy_ema_after_resume(self):
@@ -293,8 +334,18 @@ class BestofNLearner(FilteredSFTLearner):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        self._save_episode_in_buffer(episode_data, task_description)
+        self._critic_validation_episode_counter += 1
+        every_n = int(self._config.rl.critic_validation_every_n_episodes)
+        use_validation_buffer = (
+            every_n > 0
+            and self._critic_validation_buffer is not None
+            and self._critic_validation_episode_counter % every_n == 0
+        )
+        self._save_episode_in_buffer(
+            episode_data,
+            task_description,
+            target_buffer=self._critic_validation_buffer if use_validation_buffer else None,
+        )
 
     def sample_actions(self, observations, **kwargs):
         if self.training_steps < self._config.rl.critic_inference_start_step:
@@ -477,21 +528,13 @@ class BestofNLearner(FilteredSFTLearner):
             return_prefix_rep=False,
         )
         return sampled_actions
-        
-    @at.typecheck
-    def _update_critics(
+
+    def _prepare_critic_batches(
             self,
             batch: Dict[str, Any],
-            q_state: training_utils.TrainState,
-            value_state: training_utils.TrainState,
             policy_state: training_utils.TrainState,
             rng: at.KeyArrayLike,
-    ) -> Tuple[
-        training_utils.TrainState,
-        training_utils.TrainState,
-        dict[str, at.Array],
-        dict[str, at.Array],
-    ]:
+    ):
         assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
         if self._config.rl.train_on_policy_value_function:
             # We replace the action from the batch with the on policy action
@@ -509,11 +552,26 @@ class BestofNLearner(FilteredSFTLearner):
             batch,
             policy_state,
         )
-        
-        # Update the state action critic state
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
-
         value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
+        return batch, value_batch, rng
+
+    @at.typecheck
+    def _update_critics(
+            self,
+            batch: Dict[str, Any],
+            q_state: training_utils.TrainState,
+            value_state: training_utils.TrainState,
+            policy_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> Tuple[
+        training_utils.TrainState,
+        training_utils.TrainState,
+        dict[str, at.Array],
+        dict[str, at.Array],
+    ]:
+        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
+        batch, value_batch, rng = self._prepare_critic_batches(batch, policy_state, rng)
+        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
 
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
@@ -533,6 +591,21 @@ class BestofNLearner(FilteredSFTLearner):
             )
 
         return q_state, value_state, q_info, value_info
+
+    @at.typecheck
+    def _evaluate_critics(
+            self,
+            batch: Dict[str, Any],
+            q_state: training_utils.TrainState,
+            value_state: training_utils.TrainState,
+            policy_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> Tuple[dict[str, at.Array], dict[str, at.Array]]:
+        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
+        batch, value_batch, _ = self._prepare_critic_batches(batch, policy_state, rng)
+        q_info = self._q_evaluate_loss(q_state, value_state, batch)
+        value_info = self._value_evaluate_loss(value_state, q_state, value_batch)
+        return q_info, value_info
 
     @at.typecheck
     def update(self) -> dict:
@@ -567,6 +640,11 @@ class BestofNLearner(FilteredSFTLearner):
             log_memory_debug("step_start", training_steps=self.training_steps)
 
         self.training_steps += 1
+        critic_validation_buffer_size = (
+            0
+            if self._critic_validation_buffer is None
+            else self._critic_validation_buffer.size
+        )
         update_critic = (
                 self.training_steps >= rl_config.critic_training_start_step
                 and self.training_steps % rl_config.critic_update_interval == 0
@@ -576,7 +654,10 @@ class BestofNLearner(FilteredSFTLearner):
             return {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
-                )
+                ),
+                "critic_validation_buffer_size": jnp.asarray(
+                    float(critic_validation_buffer_size), dtype=jnp.float32
+                ),
             }
 
         online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
@@ -611,13 +692,44 @@ class BestofNLearner(FilteredSFTLearner):
                               } | {f"critic/value_{key}": value for key, value in value_info.items()}
                 if self.debug:
                     log_memory_debug("after_update_critics")
+
+        validate_critic = (
+                self._critic_validation_buffer is not None
+                and rl_config.critic_validation_interval > 0
+                and online_batch_size > 0
+                and self.training_steps % rl_config.critic_validation_interval == 0
+                and critic_validation_buffer_size >= online_batch_size
+        )
+        if validate_critic:
+            validation_batch = self._critic_validation_buffer.sample(
+                batch_size=online_batch_size
+            )
+            validation_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_val_info, value_val_info = self._evaluate_critics_jitted(
+                    validation_batch,
+                    self._state_action_critic_state,
+                    self._value_state,
+                    self._train_state,
+                    validation_rng,
+                )
+            loss_keys = ("loss", "mc_loss", "td_loss")
+            critic_info = critic_info | {
+                f"critic/val/q_{key}": q_val_info[key] for key in loss_keys
+            } | {
+                f"critic/val/value_{key}": value_val_info[key] for key in loss_keys
+            }
+
         self._maybe_restore_policy_ema_after_resume()
         info = (
                 critic_info
                 | {
                     "online_buffer_size": jnp.asarray(
                         float(self._online_data_buffer.size), dtype=jnp.float32
-                    )
+                    ),
+                    "critic_validation_buffer_size": jnp.asarray(
+                        float(critic_validation_buffer_size), dtype=jnp.float32
+                    ),
                 }
         )
         info = jax.tree.map(np.asarray, info)

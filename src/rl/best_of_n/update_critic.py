@@ -1,6 +1,6 @@
 # ruff: noqa: F722
 import dataclasses
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 import flax.nnx as nnx
@@ -227,6 +227,88 @@ def _kernel_param_norm(model: nnx.Module) -> at.Float[at.Array, ""]:
     return optax.global_norm(kernel_params)
 
 
+def _q_loss_and_aux(
+    config: OnlineTrainConfig,
+    critic_model: StateActionCritic,
+    target_value_model: StateValue,
+    batch: CriticBatch,
+    step: at.ArrayLike,
+) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    observation, actions, next_observation, reward, discount, mc_return = batch
+    reward = _as_scalar_batch(reward)
+    discount = _as_scalar_batch(discount)
+    mc_return = _as_scalar_batch(mc_return)
+    actions = flatten_action_horizon(actions)
+
+    q_logits = critic_model(observation, actions)
+    bootstrapped_values = summarize_critic_values(
+        target_value_model(next_observation),
+        config,
+        critic_reduction=config.rl.critic_reduction,
+    )
+    td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
+    lower, upper = get_value_bounds(config)
+    q_dist = make_value_distribution(
+        q_logits,
+        config.rl.num_value_bins,
+        lower,
+        upper,
+        config.rl.value_target_type,
+    )
+    td_weight = config.rl.td_weight_schedule.create()(step)
+    td_weight = jnp.clip(td_weight, 0.0, 1.0)
+    td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+    mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
+    loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+    return loss, {
+        "value_mean": jnp.mean(q_dist.mean()),
+        "mc_loss": mc_loss,
+        "td_loss": td_loss,
+        "td_weight": td_weight,
+    }
+
+
+def _value_loss_and_aux(
+    config: OnlineTrainConfig,
+    critic_model: StateValue,
+    target_q_model: StateActionCritic,
+    batch: CriticBatch,
+    step: at.ArrayLike,
+) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    observation, actions, _, _, _, mc_return = batch
+
+    actions = flatten_action_horizon(actions)
+    mc_return = _as_scalar_batch(mc_return)
+
+    td_weight = config.rl.td_weight_schedule.create()(step)
+    td_weight = jnp.clip(td_weight, 0.0, 1.0)
+    value_logits = critic_model(observation)
+    q_values = summarize_critic_values(
+        target_q_model(observation, actions),
+        config,
+        critic_reduction=config.rl.critic_reduction,
+    )
+    lower, upper = get_value_bounds(config)
+    v_dist = make_value_distribution(
+        value_logits,
+        config.rl.num_value_bins,
+        lower,
+        upper,
+        config.rl.value_target_type,
+    )
+    mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
+    td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
+    loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+    return loss, {
+        "value_mean": jnp.mean(v_dist.mean()),
+        "mc_loss": mc_loss,
+        "td_loss": td_loss,
+        "td_weight": td_weight,
+    }
+
+
 @at.typecheck
 def train_q_step(
     config: OnlineTrainConfig,
@@ -242,58 +324,17 @@ def train_q_step(
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
     step = q_state.step // config.rl.num_critic_updates_per_batch
-    observation, actions, next_observation, reward, discount, mc_return = batch
-    reward = _as_scalar_batch(reward)
-    discount = _as_scalar_batch(discount)
-    mc_return = _as_scalar_batch(mc_return)
-    actions = flatten_action_horizon(actions)
-    assert isinstance(config.rl, BestofNLearnerConfig)
 
     @at.typecheck
     def loss_fn(
-        critic_model: StateActionCritic,
-        observation: ObsType,
-        actions: _model.Actions,
-        next_observation: ObsType,
-        reward: at.Float[at.ArrayLike, " b"],
-        discount: at.Float[at.ArrayLike, " b"],
-        mc_return: at.Float[at.ArrayLike, " b"],
-        target_value_model: StateValue,
+        critic_model: StateActionCritic, target_value_model: StateValue
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        q_logits = critic_model(observation, actions)
-        bootstrapped_values = summarize_critic_values(
-            target_value_model(next_observation),
-            config,
-            critic_reduction=config.rl.critic_reduction,
-        )
-        td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
-        _lower, _upper = get_value_bounds(config)
-        q_dist = make_value_distribution(q_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
-        td_weight = config.rl.td_weight_schedule.create()(step)
-        td_weight = jnp.clip(td_weight, 0.0, 1.0)
-        td_loss = -jnp.mean(q_dist.log_prob(td_targets))
-        mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
-        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
-        return loss, {
-            "value_mean": jnp.mean(q_dist.mean()),
-            "mc_loss": mc_loss,
-            "td_loss": td_loss,
-            "td_weight": td_weight,
-        }
+        return _q_loss_and_aux(config, critic_model, target_value_model, batch, step)
 
     diff_state = nnx.DiffState(0, nnx.Param)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
-    )(
-        q_model,
-        observation,
-        actions,
-        next_observation,
-        reward,
-        discount,
-        mc_return,
-        value_model,
-    )
+    )(q_model, value_model)
     new_state = _update_train_state(q_state, q_model, grads)
     info = {
         "loss": loss,
@@ -301,6 +342,24 @@ def train_q_step(
         "param_norm": _kernel_param_norm(q_model),
     } | aux_data
     return new_state, info
+
+
+@at.typecheck
+def evaluate_q_loss(
+    config: OnlineTrainConfig,
+    q_state: training_utils.TrainState,
+    value_state: training_utils.TrainState,
+    batch: CriticBatch,
+) -> dict[str, at.Array]:
+    q_model = nnx.merge(q_state.model_def, q_state.params)
+    q_model.train()
+    value_model = create_critic(value_state, config)
+    value_model.eval()
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    step = q_state.step // config.rl.num_critic_updates_per_batch
+
+    loss, aux_data = _q_loss_and_aux(config, q_model, value_model, batch, step)
+    return {"loss": loss} | aux_data
 
 
 @at.typecheck
@@ -320,43 +379,16 @@ def train_value_step(
     q_model = create_critic(q_state, config)
     q_model.eval()
 
-    observation, actions, _, _, _, mc_return = batch
-
-    actions = flatten_action_horizon(actions)
-    mc_return = _as_scalar_batch(mc_return)
-
     @at.typecheck
     def loss_fn(
-        critic_model: StateValue,
-        observation: ObsType,
-        actions: _model.Actions,
-        mc_return: at.Float[at.ArrayLike, " b"],
-        target_q_model: StateActionCritic,
+        critic_model: StateValue, target_q_model: StateActionCritic
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        td_weight = config.rl.td_weight_schedule.create()(step)
-        td_weight = jnp.clip(td_weight, 0.0, 1.0)
-        value_logits = critic_model(observation)
-        q_values = summarize_critic_values(
-            target_q_model(observation, actions),
-            config,
-            critic_reduction=config.rl.critic_reduction,
-        )
-        _lower, _upper = get_value_bounds(config)
-        v_dist = make_value_distribution(value_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
-        mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
-        td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
-        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
-        return loss, {
-            "value_mean": jnp.mean(v_dist.mean()),
-            "mc_loss": mc_loss,
-            "td_loss": td_loss,
-            "td_weight": td_weight,
-        }
+        return _value_loss_and_aux(config, critic_model, target_q_model, batch, step)
 
     diff_state = nnx.DiffState(0, nnx.Param)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
-    )(value_model, observation, actions, mc_return, q_model)
+    )(value_model, q_model)
     new_state = _update_train_state(value_state, value_model, grads)
     info = {
         "loss": loss,
@@ -364,3 +396,22 @@ def train_value_step(
         "param_norm": _kernel_param_norm(value_model),
     } | aux_data
     return new_state, info
+
+
+@at.typecheck
+def evaluate_value_loss(
+    config: OnlineTrainConfig,
+    value_state: training_utils.TrainState,
+    q_state: training_utils.TrainState,
+    batch: CriticBatch,
+) -> dict[str, at.Array]:
+    assert isinstance(config.rl, BestofNLearnerConfig)
+    step = value_state.step // config.rl.num_critic_updates_per_batch
+    value_model = nnx.merge(value_state.model_def, value_state.params)
+    value_model.train()
+
+    q_model = create_critic(q_state, config)
+    q_model.eval()
+
+    loss, aux_data = _value_loss_and_aux(config, value_model, q_model, batch, step)
+    return {"loss": loss} | aux_data
