@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Print step-bucketed quantiles of OGPO debug metrics from a wandb run.
+
+Usage:
+    python tests/ogpo/wandb_quantiles.py \
+        --entity my-entity --project ogpo_agent_sweep --run-name some_run
+
+You can also pass --run-id (W&B run id, the 8-char slug) instead of --run-name.
+By default, buckets are 500 training steps wide. Pass --bucket 1000 to change.
+
+What it prints
+--------------
+For each metric of interest, a small table indexed by ``[step_start,
+step_end)`` and showing ``count, mean, std, p05, p25, p50, p75, p95, min,
+max``. The metrics are the OGPO-specific diagnostics that the actor /
+critic / evaluator already log to W&B:
+
+    actor/pg_loss, actor/bc_loss, actor/ratio_mean, actor/ratio_std,
+    actor/approx_kl, actor/clipfrac, actor/advantage_mean,
+    actor/advantage_std, actor/advantage_q_up, actor/advantage_q_low,
+    actor/q_mean, actor/v_mean, actor/grad_norm, actor/param_norm,
+    actor/loss, critic/q_*, critic/value_*, eval/* metrics, and
+    ``online_buffer_size``.
+
+Useful for figuring out *when* an OGPO run goes off the rails (e.g. clipfrac
+saturating to 1, advantages collapsing to zero, BC loss exploding, eval
+oscillating between 30-50%).
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import sys
+from typing import Iterable
+
+import numpy as np
+import pandas as pd
+import wandb
+
+
+# Metrics the OGPO actor/critic emit. Wildcards are matched against the
+# full W&B metric name. Anything not present in the run is silently
+# skipped.
+DEFAULT_METRICS: tuple[str, ...] = (
+    # actor diagnostics (see src/rl/ogpo/update_actor.py)
+    "actor/loss",
+    "actor/pg_loss",
+    "actor/bc_loss",
+    "actor/ratio_mean",
+    "actor/ratio_std",
+    "actor/approx_kl",
+    "actor/clipfrac",
+    "actor/new_log_prob_mean",
+    "actor/old_log_prob_mean",
+    "actor/q_mean",
+    "actor/v_mean",
+    "actor/advantage_mean",
+    "actor/advantage_std",
+    "actor/advantage_min",
+    "actor/advantage_max",
+    "actor/advantage_q_up",
+    "actor/advantage_q_low",
+    "actor/advantage_median",
+    "actor/grad_norm",
+    "actor/param_norm",
+    # critic diagnostics (advantage_weighted_sft/update_critic.py)
+    "critic/q_*",
+    "critic/value_*",
+    # buffer + collect/eval
+    "online_buffer_size",
+    "eval/*",
+    "collect/*",
+)
+
+DEFAULT_QUANTILES: tuple[float, ...] = (0.05, 0.25, 0.50, 0.75, 0.95)
+
+
+def _resolve_run(api: wandb.Api, entity: str, project: str,
+                 run_name: str | None, run_id: str | None) -> "wandb.apis.public.Run":
+    if run_id is None and run_name is None:
+        raise ValueError("Provide --run-name or --run-id")
+    if run_id is not None:
+        return api.run(f"{entity}/{project}/{run_id}")
+    # run_name path: filter by display_name, take the most recent if multiple.
+    matches = list(api.runs(f"{entity}/{project}",
+                            filters={"display_name": run_name}))
+    if not matches:
+        raise ValueError(
+            f"No run with display name {run_name!r} in {entity}/{project}. "
+            "Use --run-id to disambiguate."
+        )
+    if len(matches) > 1:
+        print(
+            f"[warn] {len(matches)} runs match name {run_name!r}; "
+            f"using most recently created: {matches[0].id}",
+            file=sys.stderr,
+        )
+    return matches[0]
+
+
+def _select_metric_columns(columns: Iterable[str],
+                           patterns: Iterable[str]) -> list[str]:
+    cols = list(columns)
+    selected: list[str] = []
+    seen: set[str] = set()
+    for pat in patterns:
+        for col in cols:
+            if col in seen:
+                continue
+            if fnmatch.fnmatchcase(col, pat):
+                selected.append(col)
+                seen.add(col)
+    return selected
+
+
+def _fetch_history(run: "wandb.apis.public.Run",
+                   metrics: list[str],
+                   max_samples: int) -> pd.DataFrame:
+    """Pull the full history for the metrics we care about + _step.
+
+    ``run.history(samples=...)`` downsamples server-side. Use
+    ``run.scan_history`` for un-sampled access — slower but correct for
+    quantile estimates. Fall back to ``history`` if scan_history fails
+    (older wandb versions).
+    """
+    keys = ["_step", *metrics]
+    try:
+        rows = list(run.scan_history(keys=keys))
+        df = pd.DataFrame(rows)
+    except Exception as exc:  # pragma: no cover - older wandb / network glitch
+        print(f"[warn] scan_history failed ({exc}); falling back to history()",
+              file=sys.stderr)
+        df = run.history(keys=keys, samples=max_samples, pandas=True)
+    if "_step" not in df.columns:
+        raise RuntimeError(
+            "Returned history has no _step column. Was W&B logging skipped?"
+        )
+    df = df.dropna(subset=["_step"]).reset_index(drop=True)
+    df["_step"] = df["_step"].astype(int)
+    return df
+
+
+def _bucketize(df: pd.DataFrame, bucket: int) -> pd.DataFrame:
+    df = df.copy()
+    df["_bucket_start"] = (df["_step"] // bucket) * bucket
+    df["_bucket_end"] = df["_bucket_start"] + bucket
+    return df
+
+
+def _summary_for_metric(df: pd.DataFrame, metric: str,
+                        quantiles: tuple[float, ...]) -> pd.DataFrame:
+    series = df[metric]
+    mask = series.notna()
+    if not mask.any():
+        return pd.DataFrame()
+    sub = df.loc[mask, ["_bucket_start", "_bucket_end", metric]]
+    grouped = sub.groupby(["_bucket_start", "_bucket_end"], sort=True)[metric]
+
+    rows = []
+    for (start, end), g in grouped:
+        row: dict[str, float | int] = {
+            "step_start": int(start),
+            "step_end": int(end),
+            "count": int(g.shape[0]),
+            "mean": float(g.mean()),
+            "std": float(g.std(ddof=0)) if g.shape[0] > 1 else 0.0,
+            "min": float(g.min()),
+            "max": float(g.max()),
+        }
+        qs = g.quantile(list(quantiles)).to_dict()
+        for q, v in qs.items():
+            label = f"p{int(round(100 * q)):02d}"
+            row[label] = float(v)
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    ordered = (
+        ["step_start", "step_end", "count", "mean", "std"]
+        + [f"p{int(round(100 * q)):02d}" for q in quantiles]
+        + ["min", "max"]
+    )
+    return out[ordered]
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Print step-bucketed quantiles of W&B metrics for an OGPO run."
+    )
+    ap.add_argument("--entity", required=True, help="W&B entity (team/user)")
+    ap.add_argument("--project", required=True, help="W&B project name")
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("--run-name", help="W&B run display name")
+    group.add_argument("--run-id", help="W&B run id (8-char slug)")
+    ap.add_argument("--bucket", type=int, default=500,
+                    help="Step bucket width (default: 500)")
+    ap.add_argument(
+        "--metrics", nargs="+", default=list(DEFAULT_METRICS),
+        help=(
+            "Metric names or fnmatch patterns to summarize. "
+            "Defaults to the OGPO actor/critic/eval diagnostics."
+        ),
+    )
+    ap.add_argument(
+        "--quantiles", nargs="+", type=float, default=list(DEFAULT_QUANTILES),
+        help="Quantiles to report (default: 0.05 0.25 0.5 0.75 0.95)",
+    )
+    ap.add_argument(
+        "--max-samples", type=int, default=100_000,
+        help="Fallback cap for history() if scan_history is unavailable.",
+    )
+    ap.add_argument(
+        "--csv", default=None,
+        help="If set, also write the long-form summary to this CSV path.",
+    )
+    args = ap.parse_args()
+
+    api = wandb.Api(timeout=60)
+    run = _resolve_run(api, args.entity, args.project, args.run_name, args.run_id)
+    print(f"Run: {run.entity}/{run.project}/{run.id}  ({run.name})")
+    print(f"State: {run.state}  Steps: {run.summary.get('_step', '?')}")
+
+    # Discover which metric names actually exist on the run, then filter
+    # the requested patterns against that. ``run.summary`` reflects the
+    # *last* logged value per key, which is enough to enumerate keys.
+    available = sorted(k for k in run.summary.keys() if not k.startswith("_"))
+    selected = _select_metric_columns(available, args.metrics)
+    if not selected:
+        print("[err] No metrics matched. Available keys (first 40):",
+              file=sys.stderr)
+        for k in available[:40]:
+            print(f"    {k}", file=sys.stderr)
+        sys.exit(2)
+    print(f"Metrics ({len(selected)}): {', '.join(selected)}")
+    print(f"Bucket width: {args.bucket} steps")
+    print()
+
+    df = _fetch_history(run, selected, args.max_samples)
+    df = _bucketize(df, args.bucket)
+
+    qs = tuple(sorted(set(args.quantiles)))
+
+    long_rows: list[pd.DataFrame] = []
+    for metric in selected:
+        summary = _summary_for_metric(df, metric, qs)
+        if summary.empty:
+            print(f"--- {metric}: no data ---")
+            print()
+            continue
+        print(f"=== {metric} ===")
+        # Use to_string so all rows print even if there are many.
+        with pd.option_context("display.float_format", "{:.4g}".format,
+                                "display.width", 200,
+                                "display.max_rows", None):
+            print(summary.to_string(index=False))
+        print()
+        if args.csv is not None:
+            summary = summary.assign(metric=metric)
+            long_rows.append(summary)
+
+    if args.csv is not None and long_rows:
+        long_df = pd.concat(long_rows, ignore_index=True)
+        cols = ["metric"] + [c for c in long_df.columns if c != "metric"]
+        long_df = long_df[cols]
+        long_df.to_csv(args.csv, index=False)
+        print(f"Wrote long-form CSV: {args.csv}")
+
+
+if __name__ == "__main__":
+    main()
