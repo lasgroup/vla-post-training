@@ -54,7 +54,7 @@ DEFAULT_NUM_CPUS = 16
 # Keys can be any `_config.cli()` override.
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
-    "seed": [0, 1, 2],
+    "seed": [0],
     "log_interval": [25],
     "batch_size": [256],
     # Critic training schedule
@@ -70,11 +70,20 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.policy.training_start_step": [900],
     "rl.online_ratio": [1.0],
     "rl.policy.reset_params_to_ema_period": [500],
-    # Best-of-N collection
+    # Best-of-N collection: n_samples=32 requires prefix caching for efficiency.
     "collect.store_prefix_rep": [True],
-    "rl.n_samples": [1],
+    "rl.n_samples": [1, 32],
     "rl.critic_inference_start_step": [0],
-    # AWR-specific
+    # AWR loss weight + filtered SFT loss weight sweep.
+    # (awr_loss_weight=0, filtered_sft_weight=1) = pure filtered SFT (BC on successes).
+    # (awr_loss_weight=1, filtered_sft_weight>0) = AWR + auxiliary filtered SFT loss.
+    ("rl.awr_loss_weight", "rl.filtered_sft_weight"): [
+        (1.0, 0.0),
+        (1.0, 0.1),
+        (1.0, 0.25),
+        (1.0, 0.5),
+        (0.0, 1.0),
+    ],
     "rl.use_mc_returns": [False],
     "lr_schedule.value": [2.5e-5],
     "rl.store_success_episodes_only": [False],
