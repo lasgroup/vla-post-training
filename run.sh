@@ -13,7 +13,7 @@ export CUDA_VISIBLE_DEVICES=0
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_ALLOCATOR=platform
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.25
-export PYTHONPATH=.:./openpi/packages/openpi-client/src:./openpi/src:./openpi/packages/openpi-client:./molmospaces
+export PYTHONPATH=.
 export MUJOCO_GL=egl
 export PYOPENGL_PLATFORM=egl
 
