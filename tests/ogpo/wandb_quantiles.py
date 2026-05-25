@@ -46,7 +46,7 @@ import wandb
 # Defaults for the current OGPO debug run. Override any of these from CLI.
 DEFAULT_ENTITY = "RL-experiments"
 DEFAULT_PROJECT = "libero_59"
-DEFAULT_RUN_NAME = "OGPO"
+DEFAULT_RUN_NAME = "libero_59_20260525-174526_e04a0c_seed1"
 
 
 # Metrics the OGPO actor/critic emit. Wildcards are matched against the
@@ -128,20 +128,45 @@ def _fetch_history(run: "wandb.apis.public.Run",
     quantile estimates. Fall back to ``history`` if scan_history fails
     (older wandb versions).
     """
-    keys = ["_step", *metrics]
+    # Metrics in this project are logged on different cadences (actor vs.
+    # critic vs. eval vs. buffer_size). ``scan_history`` with a single big
+    # ``keys=[...]`` list returns only rows where *all* keys are present —
+    # which is often the empty set for running jobs. Pull each metric on its
+    # own then outer-merge on ``_step`` so partial logging produces NaN
+    # instead of an empty frame.
+    per_metric_frames: list[pd.DataFrame] = []
     try:
-        rows = list(run.scan_history(keys=keys))
-        df = pd.DataFrame(rows)
+        for m in metrics:
+            rows = list(run.scan_history(keys=["_step", m]))
+            if not rows:
+                continue
+            sub = pd.DataFrame(rows)
+            if "_step" not in sub.columns or m not in sub.columns:
+                continue
+            per_metric_frames.append(sub[["_step", m]].dropna(subset=[m]))
     except Exception as exc:  # pragma: no cover - older wandb / network glitch
         print(f"[warn] scan_history failed ({exc}); falling back to history()",
               file=sys.stderr)
-        df = run.history(keys=keys, samples=max_samples, pandas=True)
-    if "_step" not in df.columns:
+        df = run.history(keys=["_step", *metrics], samples=max_samples, pandas=True)
+        if "_step" not in df.columns:
+            raise RuntimeError(
+                "Returned history has no _step column. Was W&B logging skipped?"
+            )
+        df = df.dropna(subset=["_step"]).reset_index(drop=True)
+        df["_step"] = df["_step"].astype(int)
+        return df
+
+    if not per_metric_frames:
         raise RuntimeError(
-            "Returned history has no _step column. Was W&B logging skipped?"
+            "No metric rows returned. Has the run logged anything yet for "
+            "the requested keys?"
         )
+    df = per_metric_frames[0]
+    for sub in per_metric_frames[1:]:
+        df = df.merge(sub, on="_step", how="outer")
     df = df.dropna(subset=["_step"]).reset_index(drop=True)
     df["_step"] = df["_step"].astype(int)
+    df = df.sort_values("_step").reset_index(drop=True)
     return df
 
 
@@ -224,15 +249,26 @@ def main() -> None:
     print(f"Run: {run.entity}/{run.project}/{run.id}  ({run.name})")
     print(f"State: {run.state}  Steps: {run.summary.get('_step', '?')}")
 
-    # Discover which metric names actually exist on the run, then filter
-    # the requested patterns against that. ``run.summary`` reflects the
-    # *last* logged value per key, which is enough to enumerate keys.
-    available = sorted(k for k in run.summary.keys() if not k.startswith("_"))
+    # Discover which metric names exist on the run. ``run.summary`` reflects
+    # the *last* logged value per key, which is enough for *finished* runs
+    # but lags for running ones — newly-introduced keys may not be in the
+    # summary cache yet. Combine summary with ``run.history(samples=1)``
+    # column names as a more authoritative discovery source.
+    available_set = {k for k in run.summary.keys() if not k.startswith("_")}
+    try:
+        sample = run.history(samples=1, pandas=True)
+        available_set.update(
+            c for c in sample.columns if not c.startswith("_")
+        )
+    except Exception as exc:  # pragma: no cover - tolerate API quirks
+        print(f"[warn] history(samples=1) failed ({exc}); "
+              "falling back to summary keys only.", file=sys.stderr)
+    available = sorted(available_set)
     selected = _select_metric_columns(available, args.metrics)
     if not selected:
-        print("[err] No metrics matched. Available keys (first 40):",
+        print("[err] No metrics matched. Available keys (first 60):",
               file=sys.stderr)
-        for k in available[:40]:
+        for k in available[:60]:
             print(f"    {k}", file=sys.stderr)
         sys.exit(2)
     print(f"Metrics ({len(selected)}): {', '.join(selected)}")
