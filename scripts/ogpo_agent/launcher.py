@@ -27,7 +27,7 @@ from launcher_util import (
 SCRIPT = "scripts/ogpo_agent/exp.py"
 CONFIG_NAME = "pi05_libero_online_ogpo_sft"
 PROJECT_NAME = "libero_59"
-WANDB_ENTITY = "vla-experiments"
+WANDB_ENTITY = "RL-experiments"
 os.environ.setdefault("WANDB_ENTITY", WANDB_ENTITY)
 DEFAULT_LOG_INTERVAL = 50
 DEFAULT_SEED = 0
@@ -83,7 +83,7 @@ def main() -> None:
         choices=["swiss-ai", "local"],
         help="Execution mode",
     )
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="12:00:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--project_name", default=PROJECT_NAME, help="W&B project name")
     parser.add_argument("--group", default=None, help="W&B group name")
