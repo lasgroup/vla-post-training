@@ -54,7 +54,7 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    "seed": [0, 1, 2],
+    "seed": [0],
     # Data collection/eval
     "collect.num_rollouts": [10],
     # Critic training
@@ -74,7 +74,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
         # ("libero_90_43", "libero_90_43"),  # Put the white bowl on top of the cabinet
         ("libero_90_44", "libero_90_44"),  # Turn on the stove
         # ("libero_90_47", "libero_90_47"),  # Put the cream cheese box in the basket
-        ("libero_90_59", "libero_90_59"),  # Put the tomato sauce in the tray
+        # ("libero_90_59", "libero_90_59"),  # Put the tomato sauce in the tray
         # ("libero_90_60", "libero_90_60"),  # Put the black bowl on the left in the tray
     ],
 }
@@ -142,7 +142,9 @@ def main() -> None:
             "rl.n_samples": args.n_samples,
             "rl.critic_training_start_step": args.critic_training_start_step,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
+            "rl.critic_encoder_impl": 'transformer',
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
+            "collect.fix_mc_returns": True,
             "batch_size": DEFAULT_BATCH_SIZE,
             "collect.env_num": args.train_env_num,
             "collect.eval_env_num": args.eval_env_num,
