@@ -85,7 +85,7 @@ def train_step(
             ),
         )
         # Sample actions for expanded states [B * G, dim_A]
-        actions, outs = model.sample_actions(
+        sampled_actions, outs = model.sample_actions(
             rng=step_rng,
             observation=expanded_policy_obs,
             noise=noise,
@@ -104,7 +104,7 @@ def train_step(
             critic_reduction=config.rl.critic.reduction,
         )
         q_value = summarize_critic_values(
-            state_action_critic(expanded_critic_obs, flatten_action_horizon(actions)),
+            state_action_critic(expanded_critic_obs, flatten_action_horizon(sampled_actions)),
             config,
             critic_reduction=config.rl.critic.reduction,
         )
