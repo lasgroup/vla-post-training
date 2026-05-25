@@ -114,6 +114,8 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 policy_batch = jax.device_put(batch, self._data_sharding)
 
             policy_rng, self._rng = jax.random.split(self._rng, 2)
+            if is_success is not None:
+                is_success = jax.device_put(is_success, self._data_sharding)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     policy_batch,
