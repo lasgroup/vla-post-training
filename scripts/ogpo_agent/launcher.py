@@ -69,6 +69,13 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "collect.num_initial_rollouts": [5],
     "lr_schedule.value": [2.5e-5],
     "rl.store_success_episodes_only": [True],
+    # Match AWR's stable critic regime: train critic on MC returns only
+    # (switch_step beyond NUM_TRAIN_STEPS keeps td_weight at 0); the launcher
+    # then disables the EMA critic below for parity with AWR.
+    "rl.td_weight_schedule.switch_step": [1_000_000],
+    # Polyak target for PG: ema_decay=0.995 ≈ original OGPO's actor_tau=0.005.
+    # Keeps the "old" policy close to current so the PPO ratio stays near 1.
+    "ema_decay": [0.995],
 }
 
 
@@ -153,6 +160,11 @@ def main() -> None:
         # Keep critic warmup aligned with policy start.
         policy_start = flags["rl.policy_training_start_step"]
         flags["rl.critic_pre_training_steps"] = policy_start
+        # Mirror AWR: when td_weight_schedule never switches to TD, the critic
+        # trains on MC returns throughout and there's no benefit to an EMA
+        # critic for advantage estimation.
+        if flags["rl.td_weight_schedule.switch_step"] >= args.num_train_steps:
+            flags["rl.use_ema_critic"] = False
 
         flags.setdefault("exp_name", auto_exp_name(args.project_name, flags, idx))
         command_list.append(flags)

@@ -44,9 +44,9 @@ import wandb
 
 
 # Defaults for the current OGPO debug run. Override any of these from CLI.
-DEFAULT_ENTITY = "diverse-data-synthesis"
+DEFAULT_ENTITY = "RL-experiments"
 DEFAULT_PROJECT = "libero_59"
-DEFAULT_RUN_NAME = "libero_59_20260523-003059_b32efa_seed1"
+DEFAULT_RUN_NAME = "OGPO"
 
 
 # Metrics the OGPO actor/critic emit. Wildcards are matched against the
