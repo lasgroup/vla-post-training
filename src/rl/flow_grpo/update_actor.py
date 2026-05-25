@@ -26,6 +26,9 @@ def train_step(
     state_action_critic_state: training_utils.TrainState,
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
+    mc_return: at.Array | None = None,
+    is_success: at.Float[at.Array, " b"] | None = None,
+    scale: at.Array | float = 1.0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     assert isinstance(config.rl, FlowGRPOSFTLearnerConfig)
     policy_observation, critic_observation, actions = batch
@@ -48,6 +51,8 @@ def train_step(
     beta = max(config.rl.beta, 1e-6)
     num_steps = config.rl.num_steps
     noise_level = config.rl.noise_level
+    # Read outside loss_fn so the `if` is a compile-time Python branch.
+    filtered_sft_weight = config.rl.filtered_sft_weight
 
     if use_mpo_advantage_weight:
         group_size = 1
@@ -135,16 +140,30 @@ def train_step(
         if score.ndim == 1:
             score = score[:, jnp.newaxis, jnp.newaxis]
 
-        loss = -jnp.mean(score * log_probs)
+        grpo_loss = -jnp.mean(score * log_probs)
 
         info = {
-            "loss": loss,
+            "grpo_loss": grpo_loss,
             "q_mean": jnp.mean(q_value),
             "score_mean": jnp.mean(score),
             "log_prob_mean": jnp.mean(log_probs),
         }
 
-        return loss, info
+        if filtered_sft_weight > 0.0 and is_success is not None:
+            _is_success = jax.lax.stop_gradient(is_success)
+            # Use buffer actions (from outer batch) on the original B observations —
+            # not the expanded B*G used for the GRPO loss.
+            sft_rng = jax.random.fold_in(rng, 1)
+            sft_chunked_loss = model.compute_loss(sft_rng, policy_observation, actions, train=True)
+            while _is_success.ndim < sft_chunked_loss.ndim:
+                _is_success = _is_success[..., jnp.newaxis]
+            sft_loss = jnp.mean(_is_success * sft_chunked_loss)
+            info["sft_loss"] = sft_loss
+            total_loss = grpo_loss + filtered_sft_weight * sft_loss
+        else:
+            total_loss = grpo_loss
+
+        return total_loss, info
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
 
