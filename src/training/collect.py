@@ -1,3 +1,4 @@
+import time
 from typing import Any
 import jax
 import numpy as np
@@ -50,11 +51,17 @@ def evaluate_policy(
 
         obs, info = env.reset(options={"task_id": current_task_ids})
 
+        sample_calls = 0
+        sample_time_total = 0.0
+
         while total_episodes < num_rollouts:
+            sample_start = time.monotonic()
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=info["task_description"],
             )
+            sample_time_total += time.monotonic() - sample_start
+            sample_calls += 1
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
             next_obs, _, terminate, truncate, _ = env.step(env_action_chunk)
 
@@ -99,8 +106,11 @@ def evaluate_policy(
                 next_obs = jax.tree.map(update_state, next_obs, env_obs)
                 info = jax.tree.map(update_state, info, env_info)
 
+            sample_rate = sample_calls / sample_time_total if sample_time_total > 0 else 0.0
+            postfix = {"sample_rate": f"{sample_rate:.2f}/s"}
             if total_episodes > 0:
-                pbar.set_postfix(SR=total_successes / total_episodes)
+                postfix["SR"] = total_successes / total_episodes
+            pbar.set_postfix(postfix)
 
             obs = next_obs
 
@@ -146,11 +156,17 @@ def collect_data(
 
         obs, info = env.reset(options={"task_id": current_task_ids})
 
+        sample_calls = 0
+        sample_time_total = 0.0
+
         while total_episodes < num_rollouts:
+            sample_start = time.monotonic()
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=info["task_description"],
             )
+            sample_time_total += time.monotonic() - sample_start
+            sample_calls += 1
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
             next_obs, reward, terminate, truncate, _ = env.step(env_action_chunk)
             aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
@@ -206,8 +222,11 @@ def collect_data(
                 next_obs = jax.tree.map(update_state, next_obs, env_obs)
                 info = jax.tree.map(update_state, info, env_info)
 
+            sample_rate = sample_calls / sample_time_total if sample_time_total > 0 else 0.0
+            postfix = {"sample_rate": f"{sample_rate:.2f}/s"}
             if total_episodes > 0:
-                pbar.set_postfix(SR=total_successes / total_episodes)
+                postfix["SR"] = total_successes / total_episodes
+            pbar.set_postfix(postfix)
 
             obs = next_obs
 
