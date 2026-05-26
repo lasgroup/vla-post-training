@@ -508,7 +508,7 @@ class BestofNLearner(FilteredSFTLearner):
 
             if return_prefix_rep:
                 if all_best_prefix is None:
-                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+                    all_best_prefix = np.zeros((env_num, *prefix.shape[1:]), dtype=np.float32)
                 all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions

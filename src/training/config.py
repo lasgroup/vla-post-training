@@ -315,12 +315,6 @@ class OnlineTrainConfig(TrainConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if isinstance(self.rl, BestofNLearnerConfig) and self.rl.critic_encoder_impl == "transformer":
-            assert not self.collect.store_prefix_rep, (
-                "critic_encoder_impl='transformer' requires collect.store_prefix_rep=False: "
-                "the prefix sequence is too large to retain in the replay buffer and must "
-                "be recomputed from the current policy each train batch."
-            )
 
 
 def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
