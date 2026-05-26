@@ -135,9 +135,7 @@ class Transformer(nnx.Module):
         self.final_norm = nnx.RMSNorm(hidden_dims[-1], rngs=rngs) if use_layer_norm else None
 
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
-        if x.ndim == 2:
-            x = x[:, None, :]
-        assert x.ndim == 3, f"Transformer expects (B, T, D) or (B, D), got shape {x.shape}"
+        assert x.ndim == 3, f"Transformer expects (B, T, D), got shape {x.shape}"
 
         x = self.input_proj(x)
         for block, inter in zip(self.blocks, self.inter_projs):
