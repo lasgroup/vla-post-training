@@ -53,29 +53,31 @@ def train_step(
     noise_level = config.rl.noise_level
     # Read outside loss_fn so the `if` is a compile-time Python branch.
     filtered_sft_weight = config.rl.filtered_sft_weight
+    K = config.rl.grad_accumulation_steps
 
     if use_mpo_advantage_weight:
         group_size = 1
 
-    @at.typecheck
     def loss_fn(
-        model: _model.BaseModel,
-        rng: at.KeyArrayLike,
-        policy_observation: _model.Observation,
-        critic_observation: ObsType,
-        state_action_critic: nnx.Module,
-        value_critic: nnx.Module,
-    ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        model,
+        rng,
+        policy_obs,
+        critic_obs,
+        micro_actions,
+        micro_is_success,
+        state_action_critic,
+        value_critic,
+    ):
         step_rng, noise_rng = jax.random.split(rng)
 
         def expand_and_flatten(x):
             return jnp.repeat(x, repeats=group_size, axis=0)
 
-        # Repeat action G times to get a group evaluation, [B * G, ...]
-        expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_observation)
-        expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_observation)
+        # Repeat each observation G times for group evaluation, [B_micro * G, ...]
+        expanded_policy_obs = jax.tree.map(expand_and_flatten, policy_obs)
+        expanded_critic_obs = jax.tree.map(expand_and_flatten, critic_obs)
 
-        # Sample noise vector x_1, [B * G, T, dim_A]
+        # Sample noise vector x_1, [B_micro * G, T, dim_A]
         noise = jax.random.normal(
             noise_rng,
             (
@@ -84,7 +86,7 @@ def train_step(
                 model.action_dim,
             ),
         )
-        # Sample actions for expanded states [B * G, dim_A]
+        # Sample actions for expanded states [B_micro * G, dim_A]
         sampled_actions, outs = model.sample_actions(
             rng=step_rng,
             observation=expanded_policy_obs,
@@ -94,10 +96,10 @@ def train_step(
             return_info_dict=True,
         )
 
-        # Stack log-prob of per step generation [B * G, ..., T].
+        # Stack log-prob of per step generation [B_micro * G, ..., T].
         log_probs = jnp.moveaxis(outs["log_prob"], 0, -1)
 
-        # 2. Compute the advantage weights
+        # Compute advantage weights.
         value = summarize_critic_values(
             value_critic(expanded_critic_obs),
             config,
@@ -112,7 +114,7 @@ def train_step(
         if use_mpo_advantage_weight:
             score = advantage / beta
             score = jnp.minimum(score, weight_clip)  # Clipping
-            score = jax.nn.softmax(score, axis=0)  # (B, )
+            score = jax.nn.softmax(score, axis=0)  # (B_micro,)
             score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
         else:
             adv = advantage
@@ -121,14 +123,10 @@ def train_step(
                 assert (
                     total_batch_size % group_size == 0
                 ), f"Batch/group mismatch: total_batch_size={total_batch_size}, group_size={config.rl.group_size}"
-                B = total_batch_size // group_size
-                # 4. Reshape back to (B, G) for Group Relative calculations
-                # This works because 'repeat' groups copies together, and 'reshape' reads row-major.
-                # Get groups per sample in the batch and set the group to be the last dimension.
-                # NOTE: jnp.transpose requires a full permutation for all dimensions;
-                # swapaxes is the intended "swap last two dims" operation.
-                adv = jnp.swapaxes(adv.reshape(B, group_size, -1), 1, 2)
-                log_probs = jnp.swapaxes(log_probs.reshape(B, group_size, -1), 1, 2)
+                B_micro = total_batch_size // group_size
+                # Reshape to (B_micro, G) for group-relative normalisation.
+                adv = jnp.swapaxes(adv.reshape(B_micro, group_size, -1), 1, 2)
+                log_probs = jnp.swapaxes(log_probs.reshape(B_micro, group_size, -1), 1, 2)
                 group_mean = jnp.mean(adv, axis=-1, keepdims=True)
                 group_std = jnp.std(adv, axis=-1, keepdims=True)
                 adv = (adv - group_mean) / jnp.maximum(group_std, 1e-6)
@@ -136,7 +134,7 @@ def train_step(
                 adv = jnp.clip(adv, -weight_clip, weight_clip)
             score = jax.lax.stop_gradient(adv)
 
-        # Expand score (B*G,) to (B*G, 1, 1) to broadcast with log_probs (B*G, action_horizon, num_steps)
+        # Expand score to broadcast with log_probs (B_micro*G, action_horizon, num_steps)
         if score.ndim == 1:
             score = score[:, jnp.newaxis, jnp.newaxis]
 
@@ -149,12 +147,12 @@ def train_step(
             "log_prob_mean": jnp.mean(log_probs),
         }
 
-        if filtered_sft_weight > 0.0 and is_success is not None:
-            _is_success = jax.lax.stop_gradient(is_success)
-            # Use buffer actions (from outer batch) on the original B observations —
-            # not the expanded B*G used for the GRPO loss.
+        if filtered_sft_weight > 0.0 and micro_is_success is not None:
+            _is_success = jax.lax.stop_gradient(micro_is_success)
+            # Use buffer actions on the original B_micro observations —
+            # not the expanded B_micro*G used for the GRPO loss.
             sft_rng = jax.random.fold_in(rng, 1)
-            sft_chunked_loss = model.compute_loss(sft_rng, policy_observation, actions, train=True)
+            sft_chunked_loss = model.compute_loss(sft_rng, policy_obs, micro_actions, train=True)
             while _is_success.ndim < sft_chunked_loss.ndim:
                 _is_success = _is_success[..., jnp.newaxis]
             sft_loss = jnp.mean(_is_success * sft_chunked_loss)
@@ -167,22 +165,56 @@ def train_step(
 
     train_rng = jax.random.fold_in(rng, policy_state.step)
 
-    # Filter out frozen params.
-    diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, aux_data), grads = nnx.value_and_grad(
-        loss_fn, has_aux=True, argnums=diff_state
-    )(
-        policy_model,
-        train_rng,
-        policy_observation,
-        critic_observation,
-        state_action_critic,
-        value_critic,
-    )
+    # Gradient accumulation: split B distinct observations into K micro-batches.
+    # Group normalisation operates within each group (single observation × G samples),
+    # so splitting at observation boundaries preserves correct normalisation.
+    B = policy_observation.state.shape[0]
+    assert B % K == 0, f"Batch size {B} must be divisible by grad_accumulation_steps {K}"
+    micro_B = B // K
+
+    accumulated_grads = None
+    total_loss = jnp.zeros(())
+    total_aux: dict = {}
+
+    for k in range(K):
+        start, end = k * micro_B, (k + 1) * micro_B
+        micro_policy_obs = jax.tree.map(lambda x: x[start:end], policy_observation)
+        micro_critic_obs = jax.tree.map(lambda x: x[start:end], critic_observation)
+        micro_actions = actions[start:end]
+        micro_is_success = is_success[start:end] if is_success is not None else None
+        micro_rng = jax.random.fold_in(train_rng, k)
+
+        diff_state = nnx.DiffState(0, config.trainable_filter)
+        (micro_loss, micro_aux), micro_grads = nnx.value_and_grad(
+            loss_fn, has_aux=True, argnums=diff_state
+        )(
+            policy_model,
+            micro_rng,
+            micro_policy_obs,
+            micro_critic_obs,
+            micro_actions,
+            micro_is_success,
+            state_action_critic,
+            value_critic,
+        )
+
+        total_loss = total_loss + micro_loss / K
+        total_aux = {
+            key: total_aux.get(key, jnp.zeros(())) + val / K
+            for key, val in micro_aux.items()
+        }
+
+        if accumulated_grads is None:
+            accumulated_grads = micro_grads
+        else:
+            accumulated_grads = jax.tree.map(jnp.add, accumulated_grads, micro_grads)
+
+    # Average accumulated gradients across K micro-batches.
+    accumulated_grads = jax.tree.map(lambda g: g / K, accumulated_grads)
 
     params = nnx.filter_state(policy_state.params, config.trainable_filter)
     updates, new_opt_state = policy_state.tx.update(
-        grads, policy_state.opt_state, params
+        accumulated_grads, policy_state.opt_state, params
     )
     new_params = optax.apply_updates(params, updates)
 
@@ -231,8 +263,8 @@ def train_step(
         ),
     )
     info = {
-        "loss": loss,
-        "grad_norm": optax.global_norm(grads),
+        "loss": total_loss,
+        "grad_norm": optax.global_norm(accumulated_grads),
         "param_norm": optax.global_norm(kernel_params),
-    } | aux_data
+    } | total_aux
     return new_state, info

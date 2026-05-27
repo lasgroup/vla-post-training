@@ -7,20 +7,20 @@ import numpy as np
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 
-from src.rl.flow_grpo.update_actor import train_step as flow_grpo_train_step
+from src.rl.fm_grpo.update_actor import train_step as fm_grpo_train_step
 from src.rl.mpo_weighted_sft.mpo_weighted_sft_learner import MPOWeightedSFTLearner
-from src.training.config import FlowGRPOSFTLearnerConfig
+from src.training.config import FMGRPOLearnerConfig
 
 
-class FlowGRPOLearner(MPOWeightedSFTLearner):
+class FMGRPOLearner(MPOWeightedSFTLearner):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._train_step = functools.partial(flow_grpo_train_step, self._config)
+        self._train_step = functools.partial(fm_grpo_train_step, self._config)
         self._refresh_update_functions()
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, FlowGRPOSFTLearnerConfig)
+        assert isinstance(self._config.rl, FMGRPOLearnerConfig)
         rl_config = self._config.rl
 
         self.training_steps += 1
@@ -77,10 +77,10 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     )
                 self._state_action_critic_state = q_state
                 self._value_state = value_state
-
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
+
             # Extract is_success before converting to SFT tuple (field is lost after).
             online_is_success = jnp.asarray(online_batch["is_success"], dtype=jnp.float32)
             online_batch = self._online_batch_to_sft_batch(online_batch)
@@ -102,7 +102,6 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     batch,
                     online_batch,
                 )
-                # Offline data is expert demonstrations; treat as successes for SFT.
                 is_success = jnp.concatenate([
                     jnp.ones(n_offline, dtype=jnp.float32),
                     online_is_success[:n_online],
@@ -111,26 +110,26 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 gc.collect()
             else:
                 batch = next(self._data_iter)
+
         if update_policy:
-            # When group_size > 1, the flow GRPO train_step internally repeats
-            # each sample group_size times. Randomly subsample the batch so that
-            # reduced_batch_size * group_size == original_batch_size.
-            if rl_config.group_size > 1 and not rl_config.use_mpo_advantage_weight:
+            # Subsample to batch_size // group_size distinct observations so that
+            # after group expansion inside train_step the total is batch_size.
+            # This keeps memory comparable to AWR regardless of group_size.
+            if rl_config.group_size > 1:
                 subsample_rng, self._rng = jax.random.split(self._rng, 2)
                 batch_size = self._config.batch_size
                 reduced_size = batch_size // rl_config.group_size
-                indices = jax.random.permutation(subsample_rng, batch_size)[
-                    :reduced_size
-                ]
+                indices = jax.random.permutation(subsample_rng, batch_size)[:reduced_size]
                 policy_batch = jax.tree.map(lambda x: x[indices], batch)
                 policy_batch = jax.device_put(policy_batch, self._data_sharding)
                 is_success = is_success[indices] if is_success is not None else None
             else:
                 policy_batch = jax.device_put(batch, self._data_sharding)
 
-            policy_rng, self._rng = jax.random.split(self._rng, 2)
             if is_success is not None:
                 is_success = jax.device_put(is_success, self._data_sharding)
+
+            policy_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     policy_batch,
@@ -139,12 +138,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     self._value_state,
                     policy_rng,
                     None,        # mc_return
-                    is_success,  # passed to train_step for filtered SFT loss
+                    is_success,
                     1.0,         # scale
                 )
             self._train_state = policy_state
             self._maybe_restore_policy_ema_after_resume()
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
+
         info = (
             actor_info
             | critic_info

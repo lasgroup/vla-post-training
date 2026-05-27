@@ -188,12 +188,26 @@ class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class FMGRPOLearnerConfig(MPOWeightedSFTLearnerConfig):
+    """Flow-Matching GRPO: group-normalised advantages × FM loss proxy for -log p(a|s).
+
+    Sampling runs outside value_and_grad (stop_gradient), so the gradient tape
+    only sees one FM forward pass — O(1) memory w.r.t. SDE steps.
+    """
+    group_size: int = 8
+    normalize_adv: bool = True
+    # Steps used for action sampling (ODE, no gradient, no memory constraint).
+    sample_num_steps: int = 10
+
+
+@dataclasses.dataclass(frozen=True)
 class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
     group_size: int = 8
     num_steps: int = 10
     noise_level: float = 0.3
     normalize_adv: bool = True
     use_mpo_advantage_weight: bool = True
+    grad_accumulation_steps: int = 1
 
 
 @dataclasses.dataclass(frozen=True)
@@ -494,6 +508,13 @@ _CONFIGS.extend(
             rl_config=FlowGRPOSFTLearnerConfig(
                 store_buffer_actions_in_batch=True,
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+            ),
+        ),
+        make_base_libero_config(
+            name="pi05_libero_online_fm_grpo",
+            rl_config=FMGRPOLearnerConfig(
+                store_buffer_actions_in_batch=True,
+                policy=PolicyTrainingConfig(update_interval=10, training_start_step=900),
             ),
         ),
         # 4. Best of N
