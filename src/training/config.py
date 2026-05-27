@@ -337,49 +337,45 @@ class OnlineDataConfig(DataConfig):
 @dataclasses.dataclass(frozen=True)
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
+    group_name: str = "online_training"
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
 
+    def __post_init__(self):
+        super().__post_init__()
 
-def resolve_critic_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
-    """Auto-compute and fill in value_lower_bound / value_upper_bound on config.rl.critic."""
-    critic = config.rl.critic
-    if critic.value_lower_bound is not None and critic.value_upper_bound is not None:
-        return config
+        if isinstance(self.rl, BestofNLearnerConfig):
+            if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
+                return
 
-    discount = float(config.rl.discount)
-    T = int(config.collect.max_episode_steps)
-    if config.collect.use_time_to_success_as_reward:
-        lower = -(1.0 - discount ** T) / (1.0 - discount) if discount < 1.0 else -float(T)
-        upper = 0.0
-    else:
-        lower = 0.0
-        upper = 1.0
-    num_bins = critic.num_value_bins
-    if num_bins > 1:
-        half_bw = (upper - lower) / (2 * (num_bins - 1))
-        lower -= half_bw
-        upper += half_bw
+            discount = float(self.rl.discount)
+            T = int(self.collect.max_episode_steps)
+            if self.collect.use_time_to_success_as_reward:
+                lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+                upper = 0.0
+            else:
+                lower = 0.0
+                upper = 1.0
+            num_bins = self.rl.critic.num_value_bins
+            if num_bins > 1:
+                half_bw = (upper - lower) / (2 * (num_bins - 1))
+                lower -= half_bw
+                upper += half_bw
 
-    return dataclasses.replace(
-        config,
-        rl=dataclasses.replace(
-            config.rl,
-            critic=dataclasses.replace(
-                critic,
-                value_lower_bound=lower,
-                value_upper_bound=upper,
-            ),
-        ),
-    )
-
-
-def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
-    """Backwards-compatible alias for resolve_critic_value_bounds."""
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return resolve_critic_value_bounds(config)
+            object.__setattr__(
+                self,
+                'rl',
+                dataclasses.replace(
+                    self.rl,
+                    critic=dataclasses.replace(
+                        self.rl.critic,
+                        value_lower_bound=lower,
+                        value_upper_bound=upper
+                    )
+                )
+            )
 
 
 def make_base_libero_config(
