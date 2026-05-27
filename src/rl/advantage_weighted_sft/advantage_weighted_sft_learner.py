@@ -33,17 +33,12 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
-from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(self, config):
-
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig), (
-            "Only AdvantageWeightedSFTLearnerConfig should be passed to the AWR agent"
-        )
 
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
@@ -333,11 +328,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         """Best-of-N collection: sample n_samples candidates per env and keep the highest-Q one.
 
         Falls through to the base class (single sample) when n_samples <= 1 or before
-        critic_inference_start_step so the critic has time to warm up first.
+        critic.inference_start_step so the critic has time to warm up first.
         """
         assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
         n_samples = self._config.rl.n_samples
-        if n_samples <= 1 or self.training_steps < self._config.rl.critic_inference_start_step:
+        if n_samples <= 1 or self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
 
         rng, self._rng = jax.random.split(self._rng)

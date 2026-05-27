@@ -18,7 +18,7 @@ params:
 
   rl.buffer_capacity: [250000]
   rl.online_ratio: [1.0]
-  rl.policy_training_start_step: [900]
-  rl.reset_policy_params_to_ema_period: [500]
+  rl.policy.training_start_step: [900]
+  rl.policy.reset_params_to_ema_period: [500]
 
   seed: [0, 1, 2]

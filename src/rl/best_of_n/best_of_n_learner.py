@@ -30,7 +30,6 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
-from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import BestofNLearnerConfig
 
@@ -294,7 +293,7 @@ class BestofNLearner(FilteredSFTLearner):
         self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
     def sample_actions(self, observations, **kwargs):
-        if self.training_steps < self._config.rl.critic_inference_start_step:
+        if self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
         n_samples = self._config.rl.n_samples
         rng, self._rng = jax.random.split(self._rng)

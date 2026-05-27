@@ -138,6 +138,7 @@ class CriticTrainingConfig:
     value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
+    inference_start_step: int = 100
     # Critics are lightweight (MLP-only); a larger batch than the policy often
     # stabilises TD learning without a meaningful memory cost.
     batch_size: int | None = None  # If None: use the global config.batch_size
@@ -165,8 +166,6 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # n_samples > 1 enables best-of-N collection: the agent samples N candidate
     # action sequences and selects the one with the highest Q-value.
     n_samples: int = 1
-    # Step at which the Q-critic is considered trained enough to guide collection.
-    critic_inference_start_step: int = 100
     # Weight for an auxiliary BC loss on successful transitions only.
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
@@ -178,7 +177,6 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
     critic: CriticTrainingConfig = CriticTrainingConfig()
     n_samples: int = 8
-    critic_inference_start_step: int = 100
     train_on_policy_value_function: bool = False
 
 
@@ -543,8 +541,7 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_ogpo_sft",
             rl_config=OGPOSFTLearnerConfig(
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
             ),
             freeze_filter=_make_ogpo_freeze_filter(),

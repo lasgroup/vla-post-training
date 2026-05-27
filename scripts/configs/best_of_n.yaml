@@ -19,10 +19,10 @@ params:
   ]
 
   rl.buffer_capacity: [250000]
-  rl.critic_inference_start_step: [0]
-  rl.critic_pre_training_steps: [0]
-  rl.td_weight_schedule.init_value: [0.5]
-  rl.td_weight_schedule.end_value: [0.5]
-  rl.td_weight_schedule.switch_step: [500000]
+  rl.critic.inference_start_step: [0]
+  rl.critic.pre_training_steps: [0]
+  rl.critic.td_weight_schedule.init_value: [0.5]
+  rl.critic.td_weight_schedule.end_value: [0.5]
+  rl.critic.td_weight_schedule.switch_step: [500000]
 
   seed: [0, 1, 2]
