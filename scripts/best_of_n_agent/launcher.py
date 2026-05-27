@@ -58,7 +58,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
     "seed": [0, 1, 2, 3],
     # Data collection/eval
-    "collect.num_rollouts": [10],
+    "collect.num_rollouts": [13],
     # Critic training
     "collect.use_time_to_success_as_reward": [True],
     "rl.num_critic_updates_per_batch": [1],
@@ -143,6 +143,7 @@ def main() -> None:
             "rl.num_critic_updates_per_batch": DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH,
             "rl.n_samples": args.n_samples,
             "rl.critic_training_start_step": args.critic_training_start_step,
+            "rl.critic_validation_buffer_capacity": 20000,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
             "rl.critic_validation_every_n_episodes": 5,
             "rl.critic_encoder_impl": 'transformer',
