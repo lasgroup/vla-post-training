@@ -215,6 +215,13 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # Treat the EMA train state as the "old" policy (PPO denominator).
     # When False, the current params are used (stop-gradient'd).
     use_ema_as_old_policy: bool = True
+    # Log-prob normalization for the PPO ratio. Mirrors the official OGPO
+    # ``normalize_denoising_horizon`` / ``normalize_act_space_dimension``
+    # knobs (see ``ogpo/configs/algos/ogpo.yaml``). With both on, the
+    # log-ratio is per-(sde_step, horizon_pos, action_dim) — making
+    # ``clip_epsilon`` a meaningful per-dim bound.
+    normalize_denoising_horizon: bool = True
+    normalize_act_space_dimension: bool = True
 
 
 @dataclasses.dataclass(frozen=True)

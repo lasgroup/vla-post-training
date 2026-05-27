@@ -117,8 +117,20 @@ def train_step(
     x_next_chain    = jax.lax.stop_gradient(chain_pack["x_next_chain"]) # [K, B*G, H, D]
     times           = jax.lax.stop_gradient(chain_pack["times"])        # [K, B*G]
     dt              = jax.lax.stop_gradient(chain_pack["dt"])           # scalar
+
+    # Per-scalar-dim normalization of the summed log-prob, mirroring the
+    # official OGPO knobs. Without this, `sum_log_prob` returns the joint
+    # log-prob over K·H·D ≈ hundreds of dims, so a sub-1% per-dim policy
+    # shift produces a log-ratio of tens and PPO's clip saturates.
+    K, _, H, D = x_chain.shape
+    log_prob_norm = jnp.float32(1.0)
+    if rl.normalize_denoising_horizon:
+        log_prob_norm = log_prob_norm * jnp.float32(K * H)
+    if rl.normalize_act_space_dimension:
+        log_prob_norm = log_prob_norm * jnp.float32(D)
+
     old_lp          = jax.lax.stop_gradient(
-        sum_log_prob(chain_pack["log_prob_per_step"])
+        sum_log_prob(chain_pack["log_prob_per_step"]) / log_prob_norm
     )  # [B*G]
 
     # --- 2. Q − V advantages, then group-relative centering. -----------
@@ -157,15 +169,20 @@ def train_step(
             dt=dt,
             noise_level=noise_level,
         )  # [K, B*G, H]
-        new_lp = sum_log_prob(new_log_prob_per_step)  # [B*G]
+        # Same normalization as old_lp so the ratio is on a per-dim scale.
+        new_lp = sum_log_prob(new_log_prob_per_step) / log_prob_norm  # [B*G]
 
         log_ratio = new_lp - old_lp                   # [B*G]
         ratio = jnp.exp(log_ratio)
-        clipped_ratio = jnp.clip(
-            ratio, 1.0 - rl.clip_epsilon, 1.0 + rl.clip_epsilon
-        )
+        lower_bound = 1.0 - rl.clip_epsilon
+        upper_bound = 1.0 + rl.clip_epsilon
+        clipped_ratio = jnp.clip(ratio, lower_bound, upper_bound)
         pg_per_sample = jnp.minimum(ratio * advantage, clipped_ratio * advantage)
         pg_loss = -jnp.mean(pg_per_sample)
+        # Unclipped surrogate for comparison — when clipfrac saturates, this
+        # diverges from pg_loss and reveals how much signal the clip is
+        # actually killing.
+        pg_loss_unclipped = -jnp.mean(ratio * advantage)
 
         # BC on the un-expanded online batch (size B).
         bc_loss = jnp.float32(0.0)
@@ -176,17 +193,48 @@ def train_step(
             bc_loss = jnp.mean(chunked_bc)
 
         total = pg_loss + rl.bc_coeff * bc_loss
-        approx_kl = jnp.mean(old_lp - new_lp)
-        clipfrac = jnp.mean(
-            (jnp.abs(ratio - 1.0) > rl.clip_epsilon).astype(jnp.float32)
+        # PPO's k3 approximation of KL(old || new); ratio_mean and log_ratio
+        # together pin down a Gaussian fit on the log-ratio when needed.
+        approx_kl = jnp.mean((ratio - 1.0) - log_ratio)
+        ratio_clipped_lower = jnp.mean(
+            (ratio < lower_bound).astype(jnp.float32)
         )
+        ratio_clipped_upper = jnp.mean(
+            (ratio > upper_bound).astype(jnp.float32)
+        )
+        clipfrac = ratio_clipped_lower + ratio_clipped_upper
+        # Alive-fraction proxy: fraction of samples whose ratio sits inside the
+        # PPO clip window — these are the only samples carrying a non-clipped
+        # PG gradient. Healthy runs should have this well above 0.5.
+        alive_fraction = jnp.mean(
+            ((ratio >= lower_bound) & (ratio <= upper_bound)).astype(jnp.float32)
+        )
+
         aux = {
             "pg_loss": pg_loss,
+            "pg_loss_unclipped": pg_loss_unclipped,
             "bc_loss": bc_loss,
+            # Ratio distribution: mean/std collapse to a single point estimate
+            # when the distribution is bimodal (mass near 0 + small heavy
+            # tail); quantiles + min/max disambiguate that case.
             "ratio_mean": jnp.mean(ratio),
             "ratio_std":  jnp.std(ratio),
+            "ratio_min":  jnp.min(ratio),
+            "ratio_max":  jnp.max(ratio),
+            "ratio_p05":  jnp.quantile(ratio, 0.05),
+            "ratio_p50":  jnp.quantile(ratio, 0.50),
+            "ratio_p95":  jnp.quantile(ratio, 0.95),
+            # log_ratio is roughly Gaussian per sample even when ratio isn't;
+            # std measures per-sample disagreement between current and EMA.
+            "log_ratio_mean": jnp.mean(log_ratio),
+            "log_ratio_std":  jnp.std(log_ratio),
+            "log_ratio_min":  jnp.min(log_ratio),
+            "log_ratio_max":  jnp.max(log_ratio),
             "approx_kl": approx_kl,
             "clipfrac": clipfrac,
+            "clipfrac_upper": ratio_clipped_upper,
+            "clipfrac_lower": ratio_clipped_lower,
+            "alive_fraction": alive_fraction,
             "new_log_prob_mean": jnp.mean(new_lp),
             "old_log_prob_mean": jnp.mean(old_lp),
             "q_mean": jnp.mean(q_value),

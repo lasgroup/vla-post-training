@@ -117,13 +117,3 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             }
         )
         return jax.tree.map(np.asarray, info)
-
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
-        """Store every rollout, regardless of success. v1 has no success filter."""
-        assert env_index in range(len(self._episode_storage)), (
-            f"env_index must be between 0 and {len(self._episode_storage) - 1}, "
-            f"but got {env_index}."
-        )
-        episode_data = self._episode_storage[env_index]
-        self._episode_storage[env_index] = []
-        self._save_episode_in_buffer(episode_data, task_description)
