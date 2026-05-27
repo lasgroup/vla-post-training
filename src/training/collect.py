@@ -38,7 +38,7 @@ def evaluate_policy(
         repeated_task_ids.extend([t] * num_rollouts_per_task)
     num_rollouts = num_rollouts_per_task * len(config.collect.tasks)
 
-    with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
+    with tqdm.tqdm(total=num_rollouts, desc="evaluation") as pbar:
 
         current_task_ids, valid_envs = [], []
         for _ in range(env.env_num):
@@ -143,7 +143,10 @@ def collect_data(
     for t in config.collect.tasks:
         repeated_task_ids.extend([t] * num_rollouts_per_task)
 
-    with tqdm.tqdm(total=num_rollouts) as pbar:
+    with (
+        tqdm.tqdm(total=num_rollouts, desc="data collection (episodes)") as pbar,
+        tqdm.tqdm(desc="data collection (steps)") as step_pbar,
+    ):
 
         current_task_ids, valid_envs = [], []
         for _ in range(env.env_num):
@@ -160,6 +163,7 @@ def collect_data(
         sample_time_total = 0.0
 
         while total_episodes < num_rollouts:
+            step_pbar.update(1)
             sample_start = time.monotonic()
             action_chunk = agent.sample_actions(
                 obs,

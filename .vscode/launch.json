@@ -26,7 +26,7 @@
         "MUJOCO_GL": "egl",
         "PYOPENGL_PLATFORM": "egl",
         "JAX_DISABLE_JIT": "1",
-        // "JAX_PLATFORMS": "cpu"
+        "JAX_PLATFORMS": "cpu"
       }
     }
   ]

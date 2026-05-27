@@ -94,7 +94,11 @@ def make_env_libero(config, tasks, num_devices: int = 4):
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
-    max_steps = get_max_steps_libero(task_suite_name)
+    # Episode length until truncation. Prefer the explicit config value; fall back
+    # to the per-suite default when it is not set.
+    max_steps = config.collect.max_episode_steps
+    if max_steps is None:
+        max_steps = get_max_steps_libero(task_suite_name)
 
     def env_fn(rank: int):
         args = env_args.copy()

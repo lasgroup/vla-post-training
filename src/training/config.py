@@ -258,7 +258,10 @@ class CollectionConfig:
     eval_env_num: int = 4
     eval_interval: int = 300
     num_eval_rollouts: int = 32
-    max_episode_steps: int = 400  # used to auto-compute value bounds
+    # Episode length (raw sim steps) until truncation. Controls the env TimeLimit
+    # and is used to auto-compute value bounds. If None, the per-suite default is
+    # used for the env (e.g. get_max_steps_libero) and 400 for value bounds.
+    max_episode_steps: int | None = None
 
     def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers
@@ -323,7 +326,7 @@ def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConf
         return config
 
     discount = float(config.rl.discount)
-    T = int(config.collect.max_episode_steps)
+    T = int(config.collect.max_episode_steps) if config.collect.max_episode_steps is not None else 400
     if config.collect.use_time_to_success_as_reward:
         lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
         upper = 0.0
@@ -425,6 +428,7 @@ def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
             num_initial_rollouts=1,
             num_eval_rollouts=2,
             store_prefix_rep=False,
+            max_episode_steps=30,
         ),
         rl=BestofNLearnerConfig(
             n_samples=2,
@@ -532,9 +536,12 @@ _CONFIGS.extend(
             ),
         ),
         # 4. Best of N
-        make_base_libero_config(
-            name="pi05_libero_online_best_of_n",
-            rl_config=BestofNLearnerConfig(),
+        dataclasses.replace(
+            make_base_libero_config(
+                name="pi05_libero_online_best_of_n",
+                rl_config=BestofNLearnerConfig(),
+            ),
+            collect=CollectionConfig(store_prefix_rep=True),
         ),
         make_debug_best_of_n_libero_config(),
         make_base_libero_config(

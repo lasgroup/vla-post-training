@@ -259,6 +259,7 @@ def main(config: _config.OnlineTrainConfig):
         initial=start_step,
         total=config.num_train_steps,
         dynamic_ncols=True,
+        desc="training",
     )
 
     infos = []
