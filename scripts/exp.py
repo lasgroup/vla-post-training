@@ -42,7 +42,6 @@ import wandb
 
 from src.envs import make_env
 from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
-from src.rl.best_of_n.best_of_n_learner import BestofNLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 import src.training.config as _config
@@ -57,8 +56,6 @@ def main(config: _config.OnlineTrainConfig):
 
     if isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig):
         algo_class = AdvantageWeightedSFTLearner
-    elif isinstance(config.rl, _config.BestofNLearnerConfig):
-        algo_class = BestofNLearner
     elif isinstance(config.rl, _config.FilteredSFTLearnerConfig):
         algo_class = FilteredSFTLearner
     else:

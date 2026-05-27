@@ -170,28 +170,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
     awr_loss_weight: float = 1.0
-
-
-@dataclasses.dataclass(frozen=True)
-class BestofNLearnerConfig(FilteredSFTLearnerConfig):
-    online_ratio: float = 1.0
-    critic: CriticTrainingConfig = CriticTrainingConfig()
-    n_samples: int = 8
     train_on_policy_value_function: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
-    store_buffer_actions_in_batch: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
-    group_size: int = 8
-    num_steps: int = 10
-    noise_level: float = 0.3
-    normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -344,7 +323,7 @@ class OnlineTrainConfig(TrainConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if isinstance(self.rl, BestofNLearnerConfig):
+        if isinstance(self.rl, AdvantageWeightedSFTLearnerConfig):
             if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
                 return
 
@@ -510,29 +489,12 @@ _CONFIGS.extend(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
-        # 3. MPO Weighted SFT
-        make_base_libero_config(
-            name="pi05_libero_online_mpo_sft",
-            rl_config=MPOWeightedSFTLearnerConfig(
-                store_buffer_actions_in_batch=False,
+        make_base_molmo_config(
+            name="pi05_libero_online_aw_sft",
+            rl_config=AdvantageWeightedSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+                online_ratio=1.0,
             ),
-        ),
-        make_base_libero_config(
-            name="pi05_libero_online_flow_grpo_sft",
-            rl_config=FlowGRPOSFTLearnerConfig(
-                store_buffer_actions_in_batch=True,
-                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
-            ),
-        ),
-        # 4. Best of N
-        make_base_libero_config(
-            name="pi05_libero_online_best_of_n",
-            rl_config=BestofNLearnerConfig(),
-        ),
-        make_base_libero_config(
-            name="pi05_libero_online_dsrl",
-            rl_config=DSRLLearnerConfig(),
         ),
         # OGPO: PPO on flow policies with on-policy SDE log-probs and a BC
         # anchor on the same on-policy batch. v1 freezes the PaliGemma

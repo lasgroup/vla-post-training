@@ -11,8 +11,6 @@ import os
 from pathlib import Path
 import tempfile
 
-import copy
-
 from src.rl.dataset import Dataset, DatasetDict, read_nested, write_nested
 import collections
 from flax.core import frozen_dict

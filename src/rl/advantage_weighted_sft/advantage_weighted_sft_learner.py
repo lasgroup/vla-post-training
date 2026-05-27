@@ -26,15 +26,15 @@ from src.rl.advantage_weighted_sft.update_critic import (
     init_state_value_train_state,
     train_q_step,
     train_value_step,
+    _build_pi0_backbone_critic_defs,
 )
-from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
+from src.training.config import Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
@@ -106,9 +106,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_update_functions()
 
-    def _policy_mc_return_sharding(self):
-        return self._data_sharding
-
     def _refresh_update_functions(self):
         self._train_state_sharding = sharding.fsdp_sharding(
             self._train_state, self._mesh, log=False
@@ -161,7 +158,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,
                 self._value_state_sharding,
                 self._replicated_sharding,
-                self._policy_mc_return_sharding(),
+                self._data_sharding,
                 self._data_sharding,
                 self._replicated_sharding,
             ),
@@ -330,7 +327,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         Falls through to the base class (single sample) when n_samples <= 1 or before
         critic.inference_start_step so the critic has time to warm up first.
         """
-        assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
         n_samples = self._config.rl.n_samples
         if n_samples <= 1 or self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
@@ -494,6 +490,22 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         }
 
     @at.typecheck
+    def _get_on_policy_action(
+            self,
+            online_observation: _model.Observation,
+            policy_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> _model.Actions:
+        model = self._get_policy_model(policy_state)
+        sampled_actions = model.sample_actions(
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
+        )
+        return sampled_actions
+
+    @at.typecheck
     def _update_critics(
         self,
         batch: Dict[str, Any],
@@ -507,6 +519,17 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
+        if self._config.rl.train_on_policy_value_function:
+            # We replace the action from the batch with the on policy action
+            # This ensures that we train an on policy critic.
+            policy_sample_rng, rng = jax.random.split(rng, 2)
+            value_actions = self._get_on_policy_action(
+                online_observation=_model.Observation.from_dict(batch["observation"]),
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
+        else:
+            value_actions = batch["actions"]
         # Add prefix representation to the batch for the critic
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -515,6 +538,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         # Update the state action critic state
         num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
+
+        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
+
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
             q_state, q_info = self._q_train_step(
@@ -528,7 +554,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 v_rng,
                 value_state,
                 q_state,
-                batch,
+                value_batch,
             )
 
         return q_state, value_state, q_info, value_info
