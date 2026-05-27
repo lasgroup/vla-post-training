@@ -1,6 +1,19 @@
 # ruff: noqa: E402
 # suppress Numba FNV hashing warnings
+import sys
 import warnings
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+DOTENV_PATH = PROJECT_ROOT / ".env"
+assert DOTENV_PATH.is_file(), f"Expected .env file at {DOTENV_PATH}"
+assert load_dotenv(DOTENV_PATH, override=False), (
+    f"Found .env file at {DOTENV_PATH}, but python-dotenv did not load any variables"
+)
 
 from src.rl.networks.mlp import MLP
 from src.rl.networks.transformer import Transformer
@@ -46,13 +59,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
 import gc
 import platform
-from pathlib import Path
 from typing import Any, cast
-
-from dotenv import load_dotenv
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 import flax.nnx as nnx
 from flax.training import common_utils
