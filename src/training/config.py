@@ -427,7 +427,7 @@ def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
             num_rollouts=1,
             num_initial_rollouts=1,
             num_eval_rollouts=2,
-            store_prefix_rep=False,
+            store_prefix_rep=True,
             max_episode_steps=30,
         ),
         rl=BestofNLearnerConfig(
@@ -442,6 +442,7 @@ def make_debug_best_of_n_libero_config() -> OnlineTrainConfig:
             critic_inference_start_step=0,
             critic_pre_training_steps=0,
         ),
+        group='task_43'
     )
 
 

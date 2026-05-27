@@ -46,7 +46,13 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
 import gc
 import platform
+from pathlib import Path
 from typing import Any, cast
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 import flax.nnx as nnx
 from flax.training import common_utils

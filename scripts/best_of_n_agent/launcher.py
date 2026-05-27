@@ -10,7 +10,13 @@ Usage:
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Union
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from launcher_util import (
@@ -30,7 +36,7 @@ PROJECT_NAME = "value_learning"
 DEFAULT_LOG_INTERVAL = 25
 DEFAULT_SAVE_INTERVAL = 100_000
 DEFAULT_SEED = 0
-DEFAULT_BUFFER_CAPACITY = 250000
+DEFAULT_BUFFER_CAPACITY = 70_000
 DEFAULT_NUM_ROLLOUTS = 1
 DEFAULT_COLLECT_INTERVAL = 6_000
 DEFAULT_NUM_CRITIC_UPDATES_PER_BATCH = 10
@@ -54,7 +60,7 @@ DEFAULT_NUM_CPUS = 16
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # General
-    "seed": [0],
+    "seed": [0, 1, 2, 3],
     # Data collection/eval
     "collect.num_rollouts": [10],
     # Critic training
@@ -71,11 +77,11 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "rl.n_samples": [32],
     # Single-task tasks from ralf/value_learning.
     ("collect.tasks", "collect.eval_tasks"): [
-        # ("libero_90_43", "libero_90_43"),  # Put the white bowl on top of the cabinet
+        ("libero_90_43", "libero_90_43"),  # Put the white bowl on top of the cabinet
         ("libero_90_44", "libero_90_44"),  # Turn on the stove
-        # ("libero_90_47", "libero_90_47"),  # Put the cream cheese box in the basket
+        ("libero_90_47", "libero_90_47"),  # Put the cream cheese box in the basket
         # ("libero_90_59", "libero_90_59"),  # Put the tomato sauce in the tray
-        # ("libero_90_60", "libero_90_60"),  # Put the black bowl on the left in the tray
+        ("libero_90_60", "libero_90_60"),  # Put the black bowl on the left in the tray
     ],
 }
 
@@ -143,6 +149,7 @@ def main() -> None:
             "rl.critic_training_start_step": args.critic_training_start_step,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
             "rl.critic_encoder_impl": 'transformer',
+            "rl.critic_encoder_hidden_dims": (256, 256),
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
             "collect.fix_mc_returns": True,
             "batch_size": DEFAULT_BATCH_SIZE,
