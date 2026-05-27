@@ -157,8 +157,11 @@ class Transformer(nnx.Module):
 
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         assert x.ndim == 3, f"Transformer expects (B, T, D), got shape {x.shape}"
-        assert x.shape[1] == 249, (
-            f"Transformer expects 248 prefix embeddings + 1 state vector, got shape {x.shape}"
+        # assert x.shape[1] == 249, (
+        #     f"Transformer expects all PaliGemma prefix embeddings + 1 state vector, got shape {x.shape}"
+        # )
+        assert x.shape[1] == 969, (
+            f"Transformer expects all PaliGemma prefix embeddings + 1 state vector, got shape {x.shape}"
         )
 
         x = self.input_proj(x)
