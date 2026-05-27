@@ -61,7 +61,7 @@ applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     # Q - V), not OGPO's group-relative baseline — much cheaper per update.
     # Switch to ``vanilla`` and bump G if you want OGPO-square parity.
     "rl.group_num_samples": [1],
-    "rl.clip_epsilon": [0.2],
+    "rl.clip_epsilon": [0.01],
     "rl.bc_coeff": [1.0],
     "rl.num_sde_steps": [10],
     "rl.noise_level": [0.3],
