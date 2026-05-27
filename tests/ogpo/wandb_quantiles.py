@@ -121,53 +121,27 @@ def _select_metric_columns(columns: Iterable[str],
 def _fetch_history(run: "wandb.apis.public.Run",
                    metrics: list[str],
                    max_samples: int) -> pd.DataFrame:
-    """Pull the full history for the metrics we care about + _step.
+    """Pull history for the requested metrics + _step in one call.
 
-    ``run.history(samples=...)`` downsamples server-side. Use
-    ``run.scan_history`` for un-sampled access — slower but correct for
-    quantile estimates. Fall back to ``history`` if scan_history fails
-    (older wandb versions).
+    ``run.history(keys=..., samples=N)`` is a single HTTP round trip,
+    server-side projected to the requested columns, and returns a pandas
+    DataFrame directly. ``samples`` is an upper bound — pass it large
+    enough (default 100k) and you get every row for runs smaller than
+    that, exactly.
     """
-    # Metrics in this project are logged on different cadences (actor vs.
-    # critic vs. eval vs. buffer_size). ``scan_history`` with a single big
-    # ``keys=[...]`` list returns only rows where *all* keys are present —
-    # which is often the empty set for running jobs. Pull each metric on its
-    # own then outer-merge on ``_step`` so partial logging produces NaN
-    # instead of an empty frame.
-    per_metric_frames: list[pd.DataFrame] = []
-    try:
-        for m in metrics:
-            rows = list(run.scan_history(keys=["_step", m]))
-            if not rows:
-                continue
-            sub = pd.DataFrame(rows)
-            if "_step" not in sub.columns or m not in sub.columns:
-                continue
-            per_metric_frames.append(sub[["_step", m]].dropna(subset=[m]))
-    except Exception as exc:  # pragma: no cover - older wandb / network glitch
-        print(f"[warn] scan_history failed ({exc}); falling back to history()",
-              file=sys.stderr)
-        df = run.history(keys=["_step", *metrics], samples=max_samples, pandas=True)
-        if "_step" not in df.columns:
-            raise RuntimeError(
-                "Returned history has no _step column. Was W&B logging skipped?"
-            )
-        df = df.dropna(subset=["_step"]).reset_index(drop=True)
-        df["_step"] = df["_step"].astype(int)
-        return df
-
-    if not per_metric_frames:
+    df = run.history(
+        keys=["_step", *metrics],
+        samples=max_samples,
+        pandas=True,
+        x_axis="_step",
+    )
+    if "_step" not in df.columns:
         raise RuntimeError(
-            "No metric rows returned. Has the run logged anything yet for "
-            "the requested keys?"
+            "Returned history has no _step column. Was W&B logging skipped?"
         )
-    df = per_metric_frames[0]
-    for sub in per_metric_frames[1:]:
-        df = df.merge(sub, on="_step", how="outer")
     df = df.dropna(subset=["_step"]).reset_index(drop=True)
     df["_step"] = df["_step"].astype(int)
-    df = df.sort_values("_step").reset_index(drop=True)
-    return df
+    return df.sort_values("_step").reset_index(drop=True)
 
 
 def _bucketize(df: pd.DataFrame, bucket: int) -> pd.DataFrame:

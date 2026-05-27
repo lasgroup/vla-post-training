@@ -117,8 +117,20 @@ def train_step(
     x_next_chain    = jax.lax.stop_gradient(chain_pack["x_next_chain"]) # [K, B*G, H, D]
     times           = jax.lax.stop_gradient(chain_pack["times"])        # [K, B*G]
     dt              = jax.lax.stop_gradient(chain_pack["dt"])           # scalar
+
+    # Per-scalar-dim normalization of the summed log-prob, mirroring the
+    # official OGPO knobs. Without this, `sum_log_prob` returns the joint
+    # log-prob over K·H·D ≈ hundreds of dims, so a sub-1% per-dim policy
+    # shift produces a log-ratio of tens and PPO's clip saturates.
+    K, _, H, D = x_chain.shape
+    log_prob_norm = jnp.float32(1.0)
+    if rl.normalize_denoising_horizon:
+        log_prob_norm = log_prob_norm * jnp.float32(K * H)
+    if rl.normalize_act_space_dimension:
+        log_prob_norm = log_prob_norm * jnp.float32(D)
+
     old_lp          = jax.lax.stop_gradient(
-        sum_log_prob(chain_pack["log_prob_per_step"])
+        sum_log_prob(chain_pack["log_prob_per_step"]) / log_prob_norm
     )  # [B*G]
 
     # --- 2. Q − V advantages, then group-relative centering. -----------
@@ -157,7 +169,8 @@ def train_step(
             dt=dt,
             noise_level=noise_level,
         )  # [K, B*G, H]
-        new_lp = sum_log_prob(new_log_prob_per_step)  # [B*G]
+        # Same normalization as old_lp so the ratio is on a per-dim scale.
+        new_lp = sum_log_prob(new_log_prob_per_step) / log_prob_norm  # [B*G]
 
         log_ratio = new_lp - old_lp                   # [B*G]
         ratio = jnp.exp(log_ratio)

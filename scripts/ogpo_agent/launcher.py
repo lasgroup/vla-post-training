@@ -45,7 +45,7 @@ DEFAULT_TRAIN_ENV_NUM = 1
 DEFAULT_EVAL_ENV_NUM = 1
 DEFAULT_EVAL_INTERVAL = 300
 DEFAULT_NUM_EVAL_ROLLOUTS = 8
-NUM_TRAIN_STEPS = 5_000
+NUM_TRAIN_STEPS = 10_000
 
 # ---------- Hyperparameter grid ----------
 # Keys can be any `_config.cli()` override.
