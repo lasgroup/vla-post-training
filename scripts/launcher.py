@@ -31,7 +31,7 @@ RESULTS_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/result
 def generate_srun_command(
     script: str,
     config_name: str,
-    mode: str = 'swissai',
+    mode: str = 'swiss-ai',
     flags: Optional[Dict[str, Any]] = None,
     account: str = DEFAULT_ACCOUNT,
     environment: str = DEFAULT_ENVIRONMENT,
@@ -52,7 +52,7 @@ def generate_srun_command(
         "srun",
         f"--account={account}",
         f"--environment={environment}",
-    ] if mode == 'swissai' else []
+    ] if mode == 'swiss-ai' else []
     tokens += [
         "uv",
         "run",

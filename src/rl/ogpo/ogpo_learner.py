@@ -44,12 +44,12 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
-            and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic.training_start_step
+            and self.training_steps % rl_config.critic.update_interval == 0
         )
         update_policy = (
-            self.training_steps >= rl_config.policy_training_start_step
-            and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy.training_start_step
+            and self.training_steps % rl_config.policy.update_interval == 0
         )
 
         if not update_critic and not update_policy:
