@@ -144,6 +144,7 @@ def main() -> None:
             "rl.n_samples": args.n_samples,
             "rl.critic_training_start_step": args.critic_training_start_step,
             "rl.critic_inference_start_step": args.critic_inference_start_step,
+            "rl.critic_validation_every_n_episodes": 5,
             "rl.critic_encoder_impl": 'transformer',
             "rl.critic_encoder_hidden_dims": (256, 256),
             "collect.use_time_to_success_as_reward": DEFAULT_USE_TIME_TO_SUCCESS_AS_REWARD,
