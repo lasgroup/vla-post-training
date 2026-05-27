@@ -133,12 +133,11 @@ def init_state_action_critic_train_state(
 
     train_state_shape = jax.eval_shape(init, dummy_obs, dummy_act, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    train_state = jax.jit(
-        init,
-        in_shardings=replicated_sharding,
-        out_shardings=state_sharding,
-    )(dummy_obs, dummy_act, init_rng)
+    # Initialize on the CPU backend, then move params to the GPU sharding.
+    cpu = jax.devices("cpu")[0]
+    args_cpu = jax.device_put((dummy_obs, dummy_act, init_rng), cpu)
+    cpu_state = jax.jit(init, backend="cpu")(*args_cpu)
+    train_state = jax.device_put(cpu_state, state_sharding)
     return train_state, state_sharding
 
 
@@ -171,12 +170,12 @@ def init_state_value_train_state(
 
     train_state_shape = jax.eval_shape(init, dummy_obs, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-    train_state = jax.jit(
-        init,
-        in_shardings=replicated_sharding,
-        out_shardings=state_sharding,
-    )(dummy_obs, init_rng)
+    # See init_state_action_critic_train_state: init on CPU to avoid GPU cuSolver
+    # in orthogonal init, then move to the GPU sharding.
+    cpu = jax.devices("cpu")[0]
+    args_cpu = jax.device_put((dummy_obs, init_rng), cpu)
+    cpu_state = jax.jit(init, backend="cpu")(*args_cpu)
+    train_state = jax.device_put(cpu_state, state_sharding)
     return train_state, state_sharding
 
 
