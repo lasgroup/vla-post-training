@@ -1,5 +1,5 @@
 script: scripts/exp.py
-config_name: pi05_libero_online_best_of_n
+config_name: pi05_libero_online_awr
 project_name: best_of_n_sweep
 group_name: best_of_n_sweep
 params:
@@ -24,5 +24,8 @@ params:
   rl.critic.td_weight_schedule.init_value: [0.5]
   rl.critic.td_weight_schedule.end_value: [0.5]
   rl.critic.td_weight_schedule.switch_step: [500000]
+  rl.n_samples: [8]
+  rl.online_ratio: [1.0]
+  rl.policy.training_start_step: [1000000]
 
   seed: [0, 1, 2]
