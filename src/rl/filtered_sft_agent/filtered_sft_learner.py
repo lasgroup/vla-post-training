@@ -467,6 +467,7 @@ class FilteredSFTLearner(Agent):
             "reward": np.zeros((1,), dtype=np.float32),
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
+            "is_success": np.zeros((1,), dtype=np.float32),
         }
 
     def _get_online_replay_buffer(
@@ -687,9 +688,11 @@ class FilteredSFTLearner(Agent):
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
         if is_success:
-            self._save_episode_in_buffer(episode_data, task_description)
+            self._save_episode_in_buffer(episode_data, task_description, is_success=True)
 
-    def _save_episode_in_buffer(self, episode_data, task_description):
+    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
+        # target_buffer allows PARL (and other wrappers) to redirect an episode
+        # into a separate buffer without subclassing or duplicating preprocessing.
 
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
             "Only Filtered SFT config should be passed " "to the filtered SFT agent"
@@ -705,6 +708,7 @@ class FilteredSFTLearner(Agent):
             lambda *xs: np.concatenate(xs, axis=0), *episode_data
         )
         done = np.logical_or(episode_data["terminate"], episode_data["truncate"])
+        terminate = episode_data["terminate"]  # only true terminations should zero out the discount
         n_steps = np.where(done)[0][0] + 1
         act_h = int(self._config.model.action_horizon)
         last_gamma = float(self._config.rl.discount**act_h)
@@ -720,7 +724,9 @@ class FilteredSFTLearner(Agent):
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
+        # Bootstrap after truncation: only zero out discount on true termination, not truncation.
+        # Truncated episodes ended due to time limit — the next state still has value, so we bootstrap.
+        _discount = np.asarray([0.0 if np.any(terminate[start : start + act_h]) else last_gamma for start in range(n_windows)])
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         # if the reward is constant, set the MC returns to reward/(1-gamma)
@@ -742,7 +748,9 @@ class FilteredSFTLearner(Agent):
             _obs[PREFIX_EMBEDDING_NAME] = prefix_emb
             _next_obs[PREFIX_EMBEDDING_NAME] = next_prefix_emb
 
-        self._online_data_buffer.insert(
+        _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
+        buf = target_buffer if target_buffer is not None else self._online_data_buffer
+        buf.insert(
             {
                 "observation": _obs,
                 "actions": _actions.astype(np.float32),
@@ -750,9 +758,11 @@ class FilteredSFTLearner(Agent):
                 "reward": _reward.astype(np.float32),
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),
+                "is_success": _is_success,
             }
         )
-        self._collection_success_episodes += 1
+        if target_buffer is None:
+            self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
@@ -769,8 +779,8 @@ class FilteredSFTLearner(Agent):
     def update(self):
         self.training_steps += 1
         update_policy = (
-            self.training_steps >= self._config.rl.policy_training_start_step
-            and self.training_steps % self._config.rl.policy_update_interval == 0
+            self.training_steps >= self._config.rl.policy.training_start_step
+            and self.training_steps % self._config.rl.policy.update_interval == 0
         )
         if not update_policy:
             return {"online_buffer_size": self._online_data_buffer.size}

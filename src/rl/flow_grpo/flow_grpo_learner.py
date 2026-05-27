@@ -25,12 +25,12 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
-            and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic.training_start_step
+            and self.training_steps % rl_config.critic.update_interval == 0
         )
         update_policy = (
-            self.training_steps >= rl_config.policy_training_start_step
-            and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy.training_start_step
+            and self.training_steps % rl_config.policy.update_interval == 0
         )
         if not update_critic and not update_policy:
             return {
@@ -45,6 +45,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
         use_online = self._online_data_buffer.size >= online_batch_size
 
         critic_info, actor_info = {}, {}
+        is_success = None
         if use_online:
             online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
             if update_critic:
@@ -65,10 +66,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
+            # Extract is_success before converting to SFT tuple (field is lost after).
+            online_is_success = jnp.asarray(online_batch["is_success"], dtype=jnp.float32)
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = rl_config.online_ratio
             if online_ratio >= 1.0:
                 batch = online_batch
+                is_success = online_is_success
             elif online_ratio > 0:
                 batch = next(self._data_iter)
                 first_leaf = jax.tree.leaves(batch)[0]
@@ -83,6 +87,11 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     batch,
                     online_batch,
                 )
+                # Offline data is expert demonstrations; treat as successes for SFT.
+                is_success = jnp.concatenate([
+                    jnp.ones(n_offline, dtype=jnp.float32),
+                    online_is_success[:n_online],
+                ])
                 del online_batch
                 gc.collect()
             else:
@@ -91,7 +100,7 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
             # When group_size > 1, the flow GRPO train_step internally repeats
             # each sample group_size times. Randomly subsample the batch so that
             # reduced_batch_size * group_size == original_batch_size.
-            if rl_config.group_size > 1:
+            if rl_config.group_size > 1 and not rl_config.use_mpo_advantage_weight:
                 subsample_rng, self._rng = jax.random.split(self._rng, 2)
                 batch_size = self._config.batch_size
                 reduced_size = batch_size // rl_config.group_size
@@ -100,10 +109,13 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                 ]
                 policy_batch = jax.tree.map(lambda x: x[indices], batch)
                 policy_batch = jax.device_put(policy_batch, self._data_sharding)
+                is_success = is_success[indices] if is_success is not None else None
             else:
                 policy_batch = jax.device_put(batch, self._data_sharding)
 
             policy_rng, self._rng = jax.random.split(self._rng, 2)
+            if is_success is not None:
+                is_success = jax.device_put(is_success, self._data_sharding)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     policy_batch,
@@ -111,7 +123,9 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
-                    None,
+                    None,        # mc_return
+                    is_success,  # passed to train_step for filtered SFT loss
+                    1.0,         # scale
                 )
             self._train_state = policy_state
             self._maybe_restore_policy_ema_after_resume()

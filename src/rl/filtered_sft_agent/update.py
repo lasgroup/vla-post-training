@@ -21,7 +21,7 @@ def train_step(
     model = nnx.merge(state.model_def, state.params)
     model.train()
     assert isinstance(config.rl, FilteredSFTLearnerConfig)
-    reset_period = config.rl.reset_policy_params_to_ema_period
+    reset_period = config.rl.policy.reset_params_to_ema_period
 
     @at.typecheck
     def loss_fn(

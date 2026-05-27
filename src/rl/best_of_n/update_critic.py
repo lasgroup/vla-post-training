@@ -38,13 +38,11 @@ StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return config.rl.use_ema_critic
+    return config.rl.critic.use_ema
 
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return config.rl.critic_ema_decay
+    return config.rl.critic.ema_decay
 
 
 def create_critic(
@@ -73,8 +71,9 @@ def summarize_critic_values(
     config: OnlineTrainConfig,
     critic_reduction: str = "min",
 ) -> at.Float[at.Array, " b"]:
+    assert isinstance(config.rl, BestofNLearnerConfig)
     lower, upper = get_value_bounds(config)
-    dist = make_value_distribution(critic_logits, config.rl.num_value_bins, lower, upper)
+    dist = make_value_distribution(critic_logits, config.rl.critic.num_value_bins, lower, upper)
     expected_values = dist.mean()
     if expected_values.ndim > 1:
         # Take min across the ensemble members
@@ -111,7 +110,7 @@ def init_state_action_critic_train_state(
 ) -> tuple[training_utils.TrainState, Any]:
     assert isinstance(config.rl, BestofNLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
     # flatten the array across the array dim
@@ -152,7 +151,7 @@ def init_state_value_train_state(
 ) -> tuple[training_utils.TrainState, Any]:
     assert isinstance(config.rl, BestofNLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
 
@@ -241,13 +240,12 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = q_state.step // config.rl.num_critic_updates_per_batch
+    step = q_state.step // config.rl.critic.num_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
-    assert isinstance(config.rl, BestofNLearnerConfig)
 
     @at.typecheck
     def loss_fn(
@@ -264,12 +262,12 @@ def train_q_step(
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
             config,
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=config.rl.critic.reduction,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         _lower, _upper = get_value_bounds(config)
-        q_dist = make_value_distribution(q_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
-        td_weight = config.rl.td_weight_schedule.create()(step)
+        q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         td_loss = -jnp.mean(q_dist.log_prob(td_targets))
         mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
@@ -313,7 +311,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = value_state.step // config.rl.num_critic_updates_per_batch
+    step = value_state.step // config.rl.critic.num_updates_per_batch
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
@@ -333,16 +331,16 @@ def train_value_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        td_weight = config.rl.td_weight_schedule.create()(step)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         value_logits = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
             config,
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=config.rl.critic.reduction,
         )
         _lower, _upper = get_value_bounds(config)
-        v_dist = make_value_distribution(value_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
+        v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
         td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss

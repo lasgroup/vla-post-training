@@ -127,10 +127,10 @@ def _build_pi0_backbone_critic_defs(
     prefix_embedding_shape: tuple[int, ...] | None,
 ) -> tuple[StateActionCriticDef, StateValueDef]:
     assert isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig)
-    critic_encoder_hidden_dims = config.rl.critic_encoder_hidden_dims
-    critic_decoder_hidden_dims = config.rl.critic_decoder_hidden_dims
-    critic_num_qs = config.rl.critic_num_qs
-    critic_num_vs = config.rl.critic_num_vs
+    critic_encoder_hidden_dims = config.rl.critic.encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic.decoder_hidden_dims
+    critic_num_qs = config.rl.critic.num_qs
+    critic_num_vs = config.rl.critic.num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
         network_def = lambda o, rg: MLP(
@@ -194,6 +194,7 @@ def _build_pi0_backbone_critic_defs(
 
 def main(config: _config.OnlineTrainConfig):
     init_logging()
+    config = _config.resolve_critic_value_bounds(config)
     logging.info(f"Running on: {platform.node()}")
     if config.collect.store_prefix_rep:
         logging.info(

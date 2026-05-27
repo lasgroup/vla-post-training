@@ -21,6 +21,8 @@ from src.rl.networks.rl_networks import (
     StateActionCritic,
     StateValue,
 )
+from src.rl.value_distribution import get_value_bounds, make_value_distribution
+
 
 CriticBatch = tuple[
     ObsType,
@@ -36,13 +38,11 @@ StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    return config.rl.use_ema_critic
+    return config.rl.critic.use_ema
 
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    return config.rl.critic_ema_decay
+    return config.rl.critic.ema_decay
 
 
 def create_critic(
@@ -67,21 +67,23 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 
 @at.typecheck
 def summarize_critic_values(
-    critic_values: at.ArrayLike, critic_reduction: str = "min"
+    critic_logits: at.ArrayLike,
+    config: OnlineTrainConfig,
+    critic_reduction: str = "min",
 ) -> at.Float[at.Array, " b"]:
-    critic_values = jnp.asarray(critic_values, dtype=jnp.float32)
-    # using an ensemble of critics
-    if critic_values.ndim > 1:
-        # Take min across the ensemble members
+    lower, upper = get_value_bounds(config)
+    dist = make_value_distribution(critic_logits, config.rl.critic.num_value_bins, lower, upper)
+    expected_values = dist.mean()
+    if expected_values.ndim > 1:
         if critic_reduction == "min":
-            critic_values = jnp.min(critic_values, axis=0)
+            expected_values = jnp.min(expected_values, axis=0)
         elif critic_reduction == "mean":
-            critic_values = jnp.mean(critic_values, axis=0)
+            expected_values = jnp.mean(expected_values, axis=0)
         else:
             raise NotImplementedError(
                 f"Critic reduction {critic_reduction} is not implemented."
             )
-    return _as_scalar_batch(critic_values)
+    return _as_scalar_batch(expected_values)
 
 
 @at.typecheck
@@ -104,12 +106,10 @@ def init_state_action_critic_train_state(
     dummy_obs: ObsType,
     dummy_act: ActionType,
 ) -> tuple[training_utils.TrainState, Any]:
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
-    # flatten the array across the array dim
     dummy_act = flatten_action_horizon(dummy_act)
     dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
 
@@ -145,9 +145,8 @@ def init_state_value_train_state(
     critic_def: StateValueDef,
     dummy_obs: ObsType,
 ) -> tuple[training_utils.TrainState, Any]:
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
 
@@ -193,13 +192,15 @@ def _update_train_state(
         opt_state=new_opt_state,
     )
     if state.ema_decay is not None and state.ema_params is not None:
+        param_keys = set(nnx.filter_state(new_params, nnx.Param).flat_state())
+        old_flat = dict(state.ema_params.flat_state())
+        def _ema_or_copy(path, new_val):
+            if path in param_keys:
+                return state.ema_decay * old_flat[path] + (1 - state.ema_decay) * new_val
+            return new_val
         new_state = dataclasses.replace(
             new_state,
-            ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
-                state.ema_params,
-                new_params,
-            ),
+            ema_params=new_params.map(_ema_or_copy),
         )
     return new_state
 
@@ -232,15 +233,12 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    step = q_state.step // config.rl.num_critic_updates_per_batch
+    step = q_state.step // config.rl.critic.num_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    critic_reduction = config.rl.critic_reduction
-    td_weight_schedule = config.rl.td_weight_schedule
 
     @at.typecheck
     def loss_fn(
@@ -253,30 +251,24 @@ def train_q_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        q_values = critic_model(observation, actions)
+        q_logits = critic_model(observation, actions)
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
-            critic_reduction=critic_reduction,
+            config,
+            critic_reduction=config.rl.critic.reduction,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
-        if q_values.ndim > 1:
-            td_targets = td_targets[jnp.newaxis]
-            mc_return = mc_return[jnp.newaxis]
-
-        td_errors = q_values - td_targets
-        mc_errors = q_values - mc_return
-        td_weight = td_weight_schedule.create()(step)
+        _lower, _upper = get_value_bounds(config)
+        q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
-        td_loss = jnp.mean(jnp.square(td_errors))
-        mc_loss = jnp.mean(jnp.square(mc_errors))
+        td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+        mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
-            # "td_error_mean": jnp.mean(td_errors),
-            "value_mean": jnp.mean(q_values),
+            "value_mean": jnp.mean(q_dist.mean()),
             "mc_loss": mc_loss,
             "td_loss": td_loss,
-            # "td_target_mean": jnp.mean(td_targets),
-            # "mc_error_mean": jnp.mean(mc_errors),
             "td_weight": td_weight,
         }
 
@@ -312,10 +304,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    step = value_state.step // config.rl.num_critic_updates_per_batch
-    td_weight_schedule = config.rl.td_weight_schedule
-    critic_reduction = config.rl.critic_reduction
-
+    step = value_state.step // config.rl.critic.num_updates_per_batch
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
@@ -335,24 +324,21 @@ def train_value_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        td_weight = td_weight_schedule.create()(step)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
-        values = critic_model(observation)
+        value_logits = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
-            critic_reduction=critic_reduction,
+            config,
+            critic_reduction=config.rl.critic.reduction,
         )
-        if values.ndim > 1:
-            q_values = q_values[jnp.newaxis]
-            mc_return = mc_return[jnp.newaxis]
-
-        mc_errors = values - mc_return
-        td_error = values - jax.lax.stop_gradient(q_values)
-        td_loss = jnp.mean(jnp.square(td_error))
-        mc_loss = jnp.mean(jnp.square(mc_errors))
+        _lower, _upper = get_value_bounds(config)
+        v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
+        td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
-            "value_mean": jnp.mean(values),
+            "value_mean": jnp.mean(v_dist.mean()),
             "mc_loss": mc_loss,
             "td_loss": td_loss,
             "td_weight": td_weight,
