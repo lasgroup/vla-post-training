@@ -1,0 +1,32 @@
+script: scripts/exp.py
+config_name: pi05_libero_online_aw_sft
+project_name: awr_sweep
+group_name: awr_sweep
+params:
+  log_interval: [25]
+  lr_schedule.value: [2.5e-5]
+  num_train_steps: [5000]
+  overwrite: [True]
+
+  collect.collect_interval: [300]
+  collect.num_eval_rollouts: [8]
+  collect.num_initial_rollouts: [5]
+  collect.num_rollouts: [1]
+  collect.use_time_to_success_as_reward: [True]
+  !!python/tuple [collect.tasks, collect.eval_tasks]: [
+    ["libero_90_1-14", "libero_90_1-14"], ["libero_90_16-89", "libero_90_16-89"],
+  ]
+
+  rl.buffer_capacity: [250000]
+  rl.critic.pre_training_steps: [900]
+  rl.critic.num_updates_per_batch: [10]
+  rl.online_ratio: [1.0]
+  rl.policy.training_start_step: [900]
+  rl.policy.update_interval: [1]
+  rl.policy.reset_params_to_ema_period: [500]
+  rl.store_success_episodes_only: [True]
+  rl.critic.td_weight_schedule.switch_step: [1_000_000]
+  rl.critic.use_ema: [False]
+  rl.use_mc_returns: [True]
+
+  seed: [0, 1, 2]

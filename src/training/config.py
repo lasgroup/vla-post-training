@@ -138,6 +138,7 @@ class CriticTrainingConfig:
     value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
+    inference_start_step: int = 100
     # Critics are lightweight (MLP-only); a larger batch than the policy often
     # stabilises TD learning without a meaningful memory cost.
     batch_size: int | None = None  # If None: use the global config.batch_size
@@ -165,8 +166,6 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # n_samples > 1 enables best-of-N collection: the agent samples N candidate
     # action sequences and selects the one with the highest Q-value.
     n_samples: int = 1
-    # Step at which the Q-critic is considered trained enough to guide collection.
-    critic_inference_start_step: int = 100
     # Weight for an auxiliary BC loss on successful transitions only.
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
@@ -178,7 +177,6 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
     critic: CriticTrainingConfig = CriticTrainingConfig()
     n_samples: int = 8
-    critic_inference_start_step: int = 100
     train_on_policy_value_function: bool = False
 
 
@@ -337,49 +335,45 @@ class OnlineDataConfig(DataConfig):
 @dataclasses.dataclass(frozen=True)
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
+    group_name: str = "online_training"
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
 
+    def __post_init__(self):
+        super().__post_init__()
 
-def resolve_critic_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
-    """Auto-compute and fill in value_lower_bound / value_upper_bound on config.rl.critic."""
-    critic = config.rl.critic
-    if critic.value_lower_bound is not None and critic.value_upper_bound is not None:
-        return config
+        if isinstance(self.rl, BestofNLearnerConfig):
+            if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
+                return
 
-    discount = float(config.rl.discount)
-    T = int(config.collect.max_episode_steps)
-    if config.collect.use_time_to_success_as_reward:
-        lower = -(1.0 - discount ** T) / (1.0 - discount) if discount < 1.0 else -float(T)
-        upper = 0.0
-    else:
-        lower = 0.0
-        upper = 1.0
-    num_bins = critic.num_value_bins
-    if num_bins > 1:
-        half_bw = (upper - lower) / (2 * (num_bins - 1))
-        lower -= half_bw
-        upper += half_bw
+            discount = float(self.rl.discount)
+            T = int(self.collect.max_episode_steps)
+            if self.collect.use_time_to_success_as_reward:
+                lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+                upper = 0.0
+            else:
+                lower = 0.0
+                upper = 1.0
+            num_bins = self.rl.critic.num_value_bins
+            if num_bins > 1:
+                half_bw = (upper - lower) / (2 * (num_bins - 1))
+                lower -= half_bw
+                upper += half_bw
 
-    return dataclasses.replace(
-        config,
-        rl=dataclasses.replace(
-            config.rl,
-            critic=dataclasses.replace(
-                critic,
-                value_lower_bound=lower,
-                value_upper_bound=upper,
-            ),
-        ),
-    )
-
-
-def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
-    """Backwards-compatible alias for resolve_critic_value_bounds."""
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return resolve_critic_value_bounds(config)
+            object.__setattr__(
+                self,
+                'rl',
+                dataclasses.replace(
+                    self.rl,
+                    critic=dataclasses.replace(
+                        self.rl.critic,
+                        value_lower_bound=lower,
+                        value_upper_bound=upper
+                    )
+                )
+            )
 
 
 def make_base_libero_config(
@@ -547,8 +541,7 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_ogpo_sft",
             rl_config=OGPOSFTLearnerConfig(
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
             ),
             freeze_filter=_make_ogpo_freeze_filter(),
