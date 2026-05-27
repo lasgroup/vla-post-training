@@ -661,6 +661,16 @@ class FilteredSFTLearner(Agent):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
+    def _store_full_prefix_sequence(self) -> bool:
+        return getattr(self._config.rl, "critic_encoder_impl", "mlp") == "transformer"
+
+    def _prepare_prefix_embedding_for_replay(self, prefix: Any) -> np.ndarray:
+        prefix = np.asarray(prefix, dtype=np.float32)
+        prefix = prefix.reshape((-1, prefix.shape[-1]))
+        if not self._store_full_prefix_sequence():
+            prefix = prefix.mean(axis=0)
+        return np.asarray(prefix, dtype=np.float32)
+
     def _attach_prefix_embeddings_to_episode_data(
         self,
         episode_data: list[Dict[str, Any]],
@@ -688,18 +698,15 @@ class FilteredSFTLearner(Agent):
         model.eval()
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
+        inputs = jax.device_put(inputs)
         observation = _model.Observation.from_dict(inputs)
         next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
-        next_prefix = np.asarray(next_prefix, dtype=np.float32)
-        if next_prefix.ndim == 3:
-            next_prefix = next_prefix[0]
-        next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
+        next_prefix = self._prepare_prefix_embedding_for_replay(next_prefix)
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
-            prefix = np.asarray(prefix, dtype=np.float32)
-            prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
+            prefix = self._prepare_prefix_embedding_for_replay(prefix)
             horizon = ep["observation"]["observation/state"].shape[0]
             ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0

@@ -43,16 +43,25 @@ class _TransformerBlock(nnx.Module):
         self.ffn_norm = nnx.RMSNorm(d_model, rngs=rngs)
         ffn_dim = d_model * ffn_mult
         self.gate_proj = nnx.Linear(
-            d_model, ffn_dim, use_bias=False,
-            kernel_init=default_init(init_scale), rngs=rngs,
+            d_model,
+            ffn_dim,
+            use_bias=False,
+            kernel_init=default_init(init_scale),
+            rngs=rngs,
         )
         self.up_proj = nnx.Linear(
-            d_model, ffn_dim, use_bias=False,
-            kernel_init=default_init(init_scale), rngs=rngs,
+            d_model,
+            ffn_dim,
+            use_bias=False,
+            kernel_init=default_init(init_scale),
+            rngs=rngs,
         )
         self.down_proj = nnx.Linear(
-            ffn_dim, d_model, use_bias=False,
-            kernel_init=default_init(init_scale), rngs=rngs,
+            ffn_dim,
+            d_model,
+            use_bias=False,
+            kernel_init=default_init(init_scale),
+            rngs=rngs,
         )
 
         if dropout_rate is not None:
@@ -108,34 +117,49 @@ class Transformer(nnx.Module):
         self._activate_final = activate_final
 
         self.input_proj = nnx.Linear(
-            d_input, hidden_dims[0], use_bias=False,
-            kernel_init=default_init(init_scale), rngs=rngs,
+            d_input,
+            hidden_dims[0],
+            use_bias=False,
+            kernel_init=default_init(init_scale),
+            rngs=rngs,
         )
 
         self.blocks = []
         self.inter_projs: list[Optional[nnx.Linear]] = []
         for i, d_model in enumerate(hidden_dims):
-            self.blocks.append(_TransformerBlock(
-                d_model=d_model,
-                num_heads=num_heads,
-                ffn_mult=ffn_mult,
-                activations=activations,
-                dropout_rate=dropout_rate,
-                init_scale=init_scale,
-                rngs=rngs,
-            ))
+            self.blocks.append(
+                _TransformerBlock(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    ffn_mult=ffn_mult,
+                    activations=activations,
+                    dropout_rate=dropout_rate,
+                    init_scale=init_scale,
+                    rngs=rngs,
+                )
+            )
             if i + 1 < len(hidden_dims) and hidden_dims[i + 1] != d_model:
-                self.inter_projs.append(nnx.Linear(
-                    d_model, hidden_dims[i + 1], use_bias=False,
-                    kernel_init=default_init(init_scale), rngs=rngs,
-                ))
+                self.inter_projs.append(
+                    nnx.Linear(
+                        d_model,
+                        hidden_dims[i + 1],
+                        use_bias=False,
+                        kernel_init=default_init(init_scale),
+                        rngs=rngs,
+                    )
+                )
             else:
                 self.inter_projs.append(None)
 
-        self.final_norm = nnx.RMSNorm(hidden_dims[-1], rngs=rngs) if use_layer_norm else None
+        self.final_norm = (
+            nnx.RMSNorm(hidden_dims[-1], rngs=rngs) if use_layer_norm else None
+        )
 
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         assert x.ndim == 3, f"Transformer expects (B, T, D), got shape {x.shape}"
+        assert x.shape[1] == 249, (
+            f"Transformer expects 248 prefix embeddings + 1 state vector, got shape {x.shape}"
+        )
 
         x = self.input_proj(x)
         for block, inter in zip(self.blocks, self.inter_projs):

@@ -50,9 +50,10 @@ class BestofNLearner(FilteredSFTLearner):
             debug: bool = False,
     ):
         self.debug = debug
-        self._prefix_embed_dim = None
+        self._prefix_embed_shape = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
-            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+            prefix_shape = np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[1:]
+            self._prefix_embed_shape = tuple(int(dim) for dim in prefix_shape)
 
         super().__init__(config)
 
@@ -231,8 +232,8 @@ class BestofNLearner(FilteredSFTLearner):
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
-        if self._prefix_embed_dim is not None:
-            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
+        if self._prefix_embed_shape is not None:
+            zeros = np.zeros((1, *self._prefix_embed_shape), dtype=np.float32)
             dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
             dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
         return dummy

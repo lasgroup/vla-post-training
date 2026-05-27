@@ -209,8 +209,7 @@ def main(config: _config.OnlineTrainConfig):
     logging.info(f"Running on: {platform.node()}")
     if config.collect.store_prefix_rep:
         logging.info(
-            "return_prefix_rep is enabled, but best-of-N critics recompute prefix embeddings "
-            "from observations every update."
+            "return_prefix_rep is enabled; best-of-N stores prefix embeddings in replay."
         )
 
     env_fn = make_env(config, config.collect.tasks)
