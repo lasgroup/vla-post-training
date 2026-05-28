@@ -108,78 +108,81 @@ class NormalizerConfig:
 class RLAlgorithmConfig:
     discount: float = 0.99
     buffer_capacity: int = 1024
-
-
-# Define hyperparameter structures for your algorithms
-@dataclasses.dataclass(frozen=True)
-class FilteredSFTLearnerConfig(RLAlgorithmConfig):
-    policy_update_interval: int = 1
-    policy_training_start_step: int = 0
+    # Shared by both policy and critic sampling: fraction of each batch drawn from
+    # the online replay buffer (rest comes from the offline SFT dataset).
     online_ratio: float = 0.5
-    reset_policy_params_to_ema_period: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
-class BestofNLearnerConfig(FilteredSFTLearnerConfig):
-    n_samples: int = 8
-    online_ratio: float = 1.0
-    critic_update_interval: int = 1
-    critic_training_start_step: int = 0
-    use_ema_critic: bool = True
-    critic_ema_decay: float = 0.995
-    critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=3e-4)
-    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
-    critic_encoder_hidden_dims: Sequence[int] = (512, 512)
-    critic_decoder_hidden_dims: Sequence[int] = (256, 256)
-    critic_num_qs: int = 2
-    critic_num_vs: int = 2
-    num_critic_updates_per_batch: int = 1
-    critic_inference_start_step: int = 100
+class PolicyTrainingConfig:
+    update_interval: int = 1
+    training_start_step: int = 0
+    reset_params_to_ema_period: int | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class CriticTrainingConfig:
+    update_interval: int = 1
+    training_start_step: int = 0
+    use_ema: bool = True
+    ema_decay: float = 0.995
+    reduction: str = "min"
+    encoder_hidden_dims: Sequence[int] = (512, 512)
+    decoder_hidden_dims: Sequence[int] = (256, 256)
+    num_qs: int = 2
+    num_vs: int = 2
+    num_updates_per_batch: int = 1
     td_weight_schedule: StepSchedule = StepSchedule(init_value=0.0, end_value=1.0, switch_step=1_000)
-    train_on_policy_value_function: bool = False
-    critic_pre_training_steps: int = 1_000
-    num_value_bins: int = 1                 # 1: Gaussian (MSE-equivalent), >1 = Categorical over bins
-    value_lower_bound: float | None = None  # If None:auto-computed from reward type and discount
+    pre_training_steps: int = 1_000
+    num_value_bins: int = 1  # 1: Gaussian (MSE-equivalent), >1 = Categorical over bins
+    value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
     value_upper_bound: float | None = None
-    value_target_type: str = "one_hot"      # "one_hot" | "two_hot"
-    # BRONet critic
-    use_bronet_critic: bool = False
+    value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
+    inference_start_step: int = 100
+    # Critics are lightweight (MLP-only); a larger batch than the policy often
+    # stabilises TD learning without a meaningful memory cost.
+    batch_size: int | None = None  # If None: use the global config.batch_size
+    # Class-level attributes (not dataclass fields) so subclasses can override the default.
+    lr_schedule = ConstantSchedule(value=1e-4)
+    optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    # BRONet critic (alternative to the MLP backbone)
+    use_bronet: bool = False
     bronet_hidden_dim: int = 512
     bronet_depth: int = 2
     bronet_pessimism: float = 0.0
 
 
+# Define hyperparameter structures for your algorithms
+@dataclasses.dataclass(frozen=True)
+class FilteredSFTLearnerConfig(RLAlgorithmConfig):
+    policy: PolicyTrainingConfig = PolicyTrainingConfig()
+
+
 @dataclasses.dataclass(frozen=True)
 class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
-    critic_update_interval: int = 1
-    critic_training_start_step: int = 0
-    use_ema_critic: bool = True
-    critic_ema_decay: float = 0.995
+    critic: CriticTrainingConfig = CriticTrainingConfig()
     beta: float = 0.05
     weight_clip: float = 20.0
     advantage_scale: float = 10.0
-    critic_reduction: str = "min"
-    critic_lr_schedule = ConstantSchedule(value=1e-4)
-    critic_optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
-    critic_encoder_hidden_dims: Sequence[int] = (512, 512)
-    critic_decoder_hidden_dims: Sequence[int] = (256, 256)
-    td_weight_schedule: StepSchedule = StepSchedule(
-        init_value=0.0, end_value=1.0, switch_step=1_000
-    )
-    critic_pre_training_steps: int = 1_000
-    critic_num_qs: int = 2
-    critic_num_vs: int = 2
     normalizer_config: NormalizerConfig = NormalizerConfig()
-    num_critic_updates_per_batch: int = 1
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
     normalize_advantages: bool = False
-    # BRONet critic
-    use_bronet_critic: bool = False
-    bronet_hidden_dim: int = 512
-    bronet_depth: int = 2
-    bronet_pessimism: float = 1.0
+    # n_samples > 1 enables best-of-N collection: the agent samples N candidate
+    # action sequences and selects the one with the highest Q-value.
+    n_samples: int = 1
+    # Weight for an auxiliary BC loss on successful transitions only.
+    # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
+    filtered_sft_weight: float = 0.0
+    awr_loss_weight: float = 1.0
+
+
+@dataclasses.dataclass(frozen=True)
+class BestofNLearnerConfig(FilteredSFTLearnerConfig):
+    online_ratio: float = 1.0
+    critic: CriticTrainingConfig = CriticTrainingConfig()
+    n_samples: int = 8
+    train_on_policy_value_function: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,6 +220,13 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # Treat the EMA train state as the "old" policy (PPO denominator).
     # When False, the current params are used (stop-gradient'd).
     use_ema_as_old_policy: bool = True
+    # Log-prob normalization for the PPO ratio. Mirrors the official OGPO
+    # ``normalize_denoising_horizon`` / ``normalize_act_space_dimension``
+    # knobs (see ``ogpo/configs/algos/ogpo.yaml``). With both on, the
+    # log-ratio is per-(sde_step, horizon_pos, action_dim) — making
+    # ``clip_epsilon`` a meaningful per-dim bound.
+    normalize_denoising_horizon: bool = True
+    normalize_act_space_dimension: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -312,7 +322,7 @@ class CollectionConfig:
                     sub_tasks.append(f"{prefix}_{i}")
             else:
                 sub_tasks.append(base_task)
-            
+
             # 3. Add to expanded list, repeating by the multiplier
             for sub_task in sub_tasks:
                 expanded_tasks.extend([sub_task] * multiplier)
@@ -337,40 +347,46 @@ class OnlineDataConfig(DataConfig):
 @dataclasses.dataclass(frozen=True)
 class OnlineTrainConfig(TrainConfig):
     # additional configs for online training
+    group_name: str = "online_training"
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
     group: str | None = None
 
+    def __post_init__(self):
+        super().__post_init__()
 
-def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    if config.rl.value_lower_bound is not None and config.rl.value_upper_bound is not None:
-        return config
+        if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
+            if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
+                return
 
-    discount = float(config.rl.discount)
-    T = int(config.collect.max_episode_steps)
-    if config.collect.use_time_to_success_as_reward:
-        lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
-        upper = 0.0
-    else:
-        lower = 0.0
-        upper = 1.0
-    num_bins = config.rl.num_value_bins
-    if num_bins > 1:
-        half_bw = (upper - lower) / (2 * (num_bins - 1))
-        lower -= half_bw
-        upper += half_bw
+            discount = float(self.rl.discount)
+            T = int(self.collect.max_episode_steps)
+            if self.collect.use_time_to_success_as_reward:
+                lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+                upper = 0.0
+            else:
+                lower = 0.0
+                upper = 1.0
+            num_bins = self.rl.critic.num_value_bins
+            if num_bins > 1:
+                half_bw = (upper - lower) / (2 * (num_bins - 1))
+                lower -= half_bw
+                upper += half_bw
 
-    return dataclasses.replace(
-        config,
-        rl=dataclasses.replace(
-            config.rl,
-            value_lower_bound=lower,
-            value_upper_bound=upper,
-        ),
-    )
+            object.__setattr__(
+                self,
+                'rl',
+                dataclasses.replace(
+                    self.rl,
+                    critic=dataclasses.replace(
+                        self.rl.critic,
+                        value_lower_bound=lower,
+                        value_upper_bound=upper
+                    )
+                )
+            )
 
 
 def make_base_libero_config(
@@ -412,7 +428,7 @@ def make_base_libero_config(
 
 
 def make_base_molmo_config(
-    name: str, rl_config: RLAlgorithmConfig
+        name: str, rl_config: RLAlgorithmConfig
 ) -> OnlineTrainConfig:
     """
     Factory function to generate a base OnlineTrainConfig for Molmo.
@@ -504,8 +520,7 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_aw_sft",
             rl_config=AdvantageWeightedSFTLearnerConfig(
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
         # 3. MPO Weighted SFT
@@ -513,16 +528,14 @@ _CONFIGS.extend(
             name="pi05_libero_online_mpo_sft",
             rl_config=MPOWeightedSFTLearnerConfig(
                 store_buffer_actions_in_batch=False,
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
         make_base_libero_config(
             name="pi05_libero_online_flow_grpo_sft",
             rl_config=FlowGRPOSFTLearnerConfig(
                 store_buffer_actions_in_batch=True,
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
         # 4. Best of N
@@ -541,15 +554,13 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_ogpo_sft",
             rl_config=OGPOSFTLearnerConfig(
-                policy_update_interval=20,
-                policy_training_start_step=100,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
             ),
             freeze_filter=_make_ogpo_freeze_filter(),
         ),
     ]
 )
-
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")

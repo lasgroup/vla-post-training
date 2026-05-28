@@ -28,13 +28,8 @@ disable_progress_bars()
 
 # allows using subprocenvs
 import multiprocessing as mp
-import os
 
 mp.set_start_method("spawn", force=True)
-
-# Spawned env workers re-import this module. Keep them off GPU/JAX device init.
-if mp.current_process().name != "MainProcess":
-    os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import platform
 
@@ -44,11 +39,13 @@ import jax.numpy as jnp
 import tqdm_loggable.auto as tqdm
 import wandb
 
-from src.rl.filtered_sft_agent.filtered_sft_learner import (
-    FilteredSFTLearner,
-    filtered_sft_wrap_env,
-)
+
 from src.envs import make_env
+from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
+from src.rl.best_of_n.best_of_n_learner import BestofNLearner
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
+from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
+from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.runtime_state import save_epoch_state
@@ -59,7 +56,19 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    agent = FilteredSFTLearner(config)
+    # OGPOSFTLearnerConfig subclasses AdvantageWeightedSFTLearnerConfig, so it
+    # must be checked first.
+    if isinstance(config.rl, _config.OGPOSFTLearnerConfig):
+        algo_class = OGPOAgentLearner
+    elif isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig):
+        algo_class = AdvantageWeightedSFTLearner
+    elif isinstance(config.rl, _config.BestofNLearnerConfig):
+        algo_class = BestofNLearner
+    elif isinstance(config.rl, _config.FilteredSFTLearnerConfig):
+        algo_class = FilteredSFTLearner
+    else:
+        raise ValueError(f"Unsupported algorithm: {config.rl}")
+    agent = algo_class(config)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     num_devices = max(1, jax.device_count())

@@ -44,12 +44,12 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
 
         self.training_steps += 1
         update_critic = (
-            self.training_steps >= rl_config.critic_training_start_step
-            and self.training_steps % rl_config.critic_update_interval == 0
+            self.training_steps >= rl_config.critic.training_start_step
+            and self.training_steps % rl_config.critic.update_interval == 0
         )
         update_policy = (
-            self.training_steps >= rl_config.policy_training_start_step
-            and self.training_steps % rl_config.policy_update_interval == 0
+            self.training_steps >= rl_config.policy.training_start_step
+            and self.training_steps % rl_config.policy.update_interval == 0
         )
 
         if not update_critic and not update_policy:
@@ -101,6 +101,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     self._value_state,
                     policy_rng,
                     None,        # mc_return: unused by OGPO v1
+                    None,        # is_success: unused by OGPO v1
                     1.0,         # scale: unused by OGPO v1
                 )
             self._train_state = policy_state
@@ -117,13 +118,3 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             }
         )
         return jax.tree.map(np.asarray, info)
-
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
-        """Store every rollout, regardless of success. v1 has no success filter."""
-        assert env_index in range(len(self._episode_storage)), (
-            f"env_index must be between 0 and {len(self._episode_storage) - 1}, "
-            f"but got {env_index}."
-        )
-        episode_data = self._episode_storage[env_index]
-        self._episode_storage[env_index] = []
-        self._save_episode_in_buffer(episode_data, task_description)

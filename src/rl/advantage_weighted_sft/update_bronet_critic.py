@@ -6,8 +6,8 @@ import optax
 
 import openpi.shared.array_typing as at
 import openpi.training.utils as training_utils
-from src.training.config import OnlineTrainConfig, BestofNLearnerConfig
-from src.rl.best_of_n.update_critic import (
+from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
+from src.rl.advantage_weighted_sft.update_critic import (
     CriticBatch,
     _as_scalar_batch,
     _kernel_param_norm,
@@ -26,7 +26,7 @@ def train_bronet_q_step(
     batch: CriticBatch,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
-    assert isinstance(config.rl, BestofNLearnerConfig)
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     step = q_state.step // config.rl.critic.num_updates_per_batch
 
     q_model = nnx.merge(q_state.model_def, q_state.params)
@@ -92,7 +92,7 @@ def train_bronet_value_step(
     batch: CriticBatch,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
-    assert isinstance(config.rl, BestofNLearnerConfig)
+    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     step = value_state.step // config.rl.critic.num_updates_per_batch
 
     value_model = nnx.merge(value_state.model_def, value_state.params)

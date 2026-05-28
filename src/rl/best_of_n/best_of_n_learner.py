@@ -22,31 +22,49 @@ from src.rl.best_of_n.update_critic import (
     init_state_value_train_state,
     train_q_step,
     train_value_step,
-    StateActionCriticDef,
-    StateValueDef,
+    _build_pi0_backbone_critic_defs,
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
-from src.rl.networks.rl_networks import ObsType, ActionType
+from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
-from src.rl.advantage_weighted_sft.memory_logging import log_memory_debug
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.config import BestofNLearnerConfig, OnlineTrainConfig
+from src.training.config import BestofNLearnerConfig
 
 
 class BestofNLearner(FilteredSFTLearner):
-    def __init__(
-            self,
-            config: OnlineTrainConfig,
-            dummy_obs: ObsType,
-            dummy_act: ActionType,
-            state_action_critic_def: StateActionCriticDef,
-            state_value_def: StateValueDef,
-            debug: bool = False,
-    ):
-        self.debug = debug
+    def __init__(self, config):
+
+        assert isinstance(config.rl, BestofNLearnerConfig), (
+            "Only BestofNLearnerConfig should be passed to the Best-of-N agent"
+        )
+
+        model = config.model.create(jax.random.key(config.seed))
+        fake_obs = config.model.fake_obs(batch_size=1)
+        prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        del model
+        assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
+        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        dummy_obs = {
+            "state": fake_obs.state,
+            PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
+        }
+        dummy_act = config.model.fake_act(batch_size=1)
+        if config.rl.critic.use_bronet:
+            from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
+            hidden_dim = config.rl.critic.bronet_hidden_dim
+            depth = config.rl.critic.bronet_depth
+            num_qs = config.rl.critic.num_qs
+            num_vs = config.rl.critic.num_vs
+            def state_action_critic_def(observation, action, rngs):
+                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, rngs=rngs)
+            def state_value_def(observation, rngs):
+                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, rngs=rngs)
+        else:
+            state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
+        
         self._prefix_embed_dim = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
             self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
@@ -87,29 +105,20 @@ class BestofNLearner(FilteredSFTLearner):
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
-        if self.debug:
-            log_memory_debug(
-                "init",
-                train_state=self._train_state,
-                state_action_critic_state=self._state_action_critic_state,
-                value_state=self._value_state,
-            )
-
         del self._train_step
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
-        if config.rl.use_bronet_critic:
+        if config.rl.critic.use_bronet:
             from src.rl.best_of_n.update_bronet_critic import (
                 train_bronet_q_step,
                 train_bronet_value_step,
             )
-            self._q_train_step     = functools.partial(train_bronet_q_step,     self._config)
+            self._q_train_step = functools.partial(train_bronet_q_step, self._config)
             self._value_train_step = functools.partial(train_bronet_value_step, self._config)
         else:
-            self._q_train_step     = functools.partial(train_q_step,     self._config)
+            self._q_train_step = functools.partial(train_q_step, self._config)
             self._value_train_step = functools.partial(train_value_step, self._config)
-        # self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_critic_update_function()
 
     def _refresh_critic_update_function(self):
@@ -300,11 +309,10 @@ class BestofNLearner(FilteredSFTLearner):
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        # filtered SFT keeps only successful episodes.
-        self._save_episode_in_buffer(episode_data, task_description)
+        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
     def sample_actions(self, observations, **kwargs):
-        if self.training_steps < self._config.rl.critic_inference_start_step:
+        if self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
         n_samples = self._config.rl.n_samples
         rng, self._rng = jax.random.split(self._rng)
@@ -441,7 +449,7 @@ class BestofNLearner(FilteredSFTLearner):
             rl_config = self._config.rl
             _lower, _upper = get_value_bounds(self._config)
             q_dist = make_value_distribution(
-                q_logits, rl_config.num_value_bins, _lower, _upper
+                q_logits, rl_config.critic.num_value_bins, _lower, _upper
             )
             scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
             if scores.ndim > 1:
@@ -497,7 +505,6 @@ class BestofNLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
-        assert isinstance(self._config.rl, BestofNLearnerConfig), "Expected BestofNLearnerConfig for BestofNLearner"
         if self._config.rl.train_on_policy_value_function:
             # We replace the action from the batch with the on policy action
             # This ensures that we train an on policy critic.
@@ -516,7 +523,7 @@ class BestofNLearner(FilteredSFTLearner):
         )
         
         # Update the state action critic state
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
 
         value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
 
@@ -541,11 +548,8 @@ class BestofNLearner(FilteredSFTLearner):
 
     @at.typecheck
     def update(self) -> dict:
-        assert isinstance(self._config.rl, BestofNLearnerConfig), "Only BestofN config should " \
-                                                                                "be passed to the best-of-N agent"
-        rl_config = self._config.rl
 
-        if rl_config.critic_pre_training_steps == self.training_steps:
+        if self._config.rl.critic.pre_training_steps == self.training_steps:
             # Reset optimizer state of the value and q function
             q_opt_state = self._state_action_critic_state.tx.init(
                 nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
@@ -568,13 +572,11 @@ class BestofNLearner(FilteredSFTLearner):
                 ema_params=new_ema_value_params,
             )
             del new_ema_value_params, v_opt_state
-        if self.debug:
-            log_memory_debug("step_start", training_steps=self.training_steps)
 
         self.training_steps += 1
         update_critic = (
-                self.training_steps >= rl_config.critic_training_start_step
-                and self.training_steps % rl_config.critic_update_interval == 0
+                self.training_steps >= self._config.rl.critic.training_start_step
+                and self.training_steps % self._config.rl.critic.update_interval == 0
         )
 
         if not update_critic:
@@ -583,25 +585,23 @@ class BestofNLearner(FilteredSFTLearner):
                     float(self._online_data_buffer.size), dtype=jnp.float32
                 )
             }
+        if self._config.rl.critic.batch_size:
+            critic_batch_size = self._config.rl.critic.batch_size
+        else:
 
-        online_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
-        use_online = (
-                self._online_data_buffer.size >= online_batch_size
-        )
+            critic_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+
+        use_online = self._online_data_buffer.size >= critic_batch_size
 
         critic_info = {}
         if use_online:
-            online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+            critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size)
             if update_critic:
-                if self.debug:
-                    log_memory_debug(
-                        "before_critics", train_state=self._train_state, batch=online_batch
-                    )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
                     q_state, value_state, q_info, value_info = (
                         self._update_critics_jitted(
-                            online_batch,
+                            critic_online_batch,
                             self._state_action_critic_state,
                             self._value_state,
                             self._train_state,
@@ -612,10 +612,8 @@ class BestofNLearner(FilteredSFTLearner):
                 self._value_state = value_state
 
                 critic_info = {
-                                  f"critic/q_{key}": value for key, value in q_info.items()
-                              } | {f"critic/value_{key}": value for key, value in value_info.items()}
-                if self.debug:
-                    log_memory_debug("after_update_critics")
+                    f"critic/q_{key}": value for key, value in q_info.items()
+                } | {f"critic/value_{key}": value for key, value in value_info.items()}
         self._maybe_restore_policy_ema_after_resume()
         info = (
                 critic_info

@@ -73,7 +73,7 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         )
         # Update the state action critic state
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
-        num_updates = max(self._config.rl.num_critic_updates_per_batch, 1)
+        num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
             q_state, q_info = self._q_train_step(
@@ -100,6 +100,8 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         value_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
         mc_return: at.Array | None = None,
+        is_success: at.Float[at.Array, " b"] | None = None,
+        scale: at.Array | float = 1.0,
     ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         if not self._config.rl.store_buffer_actions_in_batch:
@@ -123,6 +125,8 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
             value_state,
             batch,
             mc_return=mc_return,
+            is_success=is_success,
+            scale=scale,
         )
 
         return policy_state, info

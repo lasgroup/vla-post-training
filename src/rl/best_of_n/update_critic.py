@@ -36,15 +36,87 @@ CriticBatch = tuple[
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
+from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
+from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
+from src.rl.networks.mlp import MLP
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+
+
+def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, StateValueDef]:
+    critic_encoder_hidden_dims = config.rl.critic.encoder_hidden_dims
+    critic_decoder_hidden_dims = config.rl.critic.decoder_hidden_dims
+    critic_num_qs = config.rl.critic.num_qs
+    critic_num_vs = config.rl.critic.num_vs
+
+    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
+        network_def = lambda o, rg: MLP(
+            input=o,
+            hidden_dims=critic_encoder_hidden_dims,
+            activate_final=True,
+            rngs=rg,
+        )
+        state_vector_keys = ["state"]
+        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
+            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+        return MLPEncoder(
+            dummy_obs=observation,
+            encoder_def=network_def,
+            state_vector_keys=state_vector_keys,
+            rngs=rngs,
+        )
+
+    def state_action_decoder_def(
+        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionEnsembleDecoder:
+        return StateActionEnsembleDecoder(
+            observation=embedding,
+            action=action,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_qs=critic_num_qs,
+            num_bins=config.rl.critic.num_value_bins,
+            rngs=rngs,
+        )
+
+    def state_value_decoder_def(
+        embedding: jax.Array, rngs: nnx.Rngs
+    ) -> StateValueEnsembleDecoder:
+        return StateValueEnsembleDecoder(
+            observation=embedding,
+            hidden_dims=critic_decoder_hidden_dims,
+            num_vs=critic_num_vs,
+            num_bins=config.rl.critic.num_value_bins,
+            rngs=rngs,
+        )
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> StateActionCritic:
+        return StateActionCritic(
+            observation=observation,
+            action=action,
+            encoder_def=encoder_def,
+            decoder_def=state_action_decoder_def,
+            rngs=rngs,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
+        return StateValue(
+            observation=observation,
+            encoder_def=encoder_def,
+            decoder_def=state_value_decoder_def,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
+
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return config.rl.use_ema_critic
+    return config.rl.critic.use_ema
 
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
-    assert isinstance(config.rl, BestofNLearnerConfig)
-    return config.rl.critic_ema_decay
+    return config.rl.critic.ema_decay
 
 
 def create_critic(
@@ -73,8 +145,9 @@ def summarize_critic_values(
     config: OnlineTrainConfig,
     critic_reduction: str = "min",
 ) -> at.Float[at.Array, " b"]:
+    assert isinstance(config.rl, BestofNLearnerConfig)
     lower, upper = get_value_bounds(config)
-    dist = make_value_distribution(critic_logits, config.rl.num_value_bins, lower, upper)
+    dist = make_value_distribution(critic_logits, config.rl.critic.num_value_bins, lower, upper)
     expected_values = dist.mean()
     if expected_values.ndim > 1:
         # Take min across the ensemble members
@@ -111,7 +184,7 @@ def init_state_action_critic_train_state(
 ) -> tuple[training_utils.TrainState, Any]:
     assert isinstance(config.rl, BestofNLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
     # flatten the array across the array dim
@@ -152,7 +225,7 @@ def init_state_value_train_state(
 ) -> tuple[training_utils.TrainState, Any]:
     assert isinstance(config.rl, BestofNLearnerConfig)
     tx = _optimizer.create_optimizer(
-        config.rl.critic_optimizer, config.rl.critic_lr_schedule, weight_decay_mask=None
+        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
     )
     ema_decay = _critic_ema_decay(config)
 
@@ -241,13 +314,12 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = q_state.step // config.rl.num_critic_updates_per_batch
+    step = q_state.step // config.rl.critic.num_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
-    assert isinstance(config.rl, BestofNLearnerConfig)
 
     @at.typecheck
     def loss_fn(
@@ -264,12 +336,12 @@ def train_q_step(
         bootstrapped_values = summarize_critic_values(
             target_value_model(next_observation),
             config,
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=config.rl.critic.reduction,
         )
         td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         _lower, _upper = get_value_bounds(config)
-        q_dist = make_value_distribution(q_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
-        td_weight = config.rl.td_weight_schedule.create()(step)
+        q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         td_loss = -jnp.mean(q_dist.log_prob(td_targets))
         mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
@@ -313,7 +385,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = value_state.step // config.rl.num_critic_updates_per_batch
+    step = value_state.step // config.rl.critic.num_updates_per_batch
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
@@ -333,16 +405,16 @@ def train_value_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_q_model: StateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        td_weight = config.rl.td_weight_schedule.create()(step)
+        td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         value_logits = critic_model(observation)
         q_values = summarize_critic_values(
             target_q_model(observation, actions),
             config,
-            critic_reduction=config.rl.critic_reduction,
+            critic_reduction=config.rl.critic.reduction,
         )
         _lower, _upper = get_value_bounds(config)
-        v_dist = make_value_distribution(value_logits, config.rl.num_value_bins, _lower, _upper, config.rl.value_target_type)
+        v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
         td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
