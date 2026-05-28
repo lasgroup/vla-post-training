@@ -351,7 +351,7 @@ class OnlineTrainConfig(TrainConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if isinstance(self.rl, BestofNLearnerConfig):
+        if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
                 return
 

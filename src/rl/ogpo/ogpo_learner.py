@@ -101,6 +101,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     self._value_state,
                     policy_rng,
                     None,        # mc_return: unused by OGPO v1
+                    None,        # is_success: unused by OGPO v1
                     1.0,         # scale: unused by OGPO v1
                 )
             self._train_state = policy_state

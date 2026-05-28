@@ -66,9 +66,10 @@ def train_step(
     value_state: training_utils.TrainState,
     batch: tuple[_model.Observation, ObsType, _model.Actions],
     mc_return: at.Array | None = None,
+    is_success: at.Array | None = None,
     scale: at.Array | float = 1.0,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    del mc_return, scale  # OGPO uses Q-V advantages, not MC normalization (v1).
+    del mc_return, is_success, scale  # OGPO uses Q-V advantages; AWR-style MC normalization unused.
 
     assert isinstance(config.rl, OGPOSFTLearnerConfig)
     rl = config.rl
@@ -138,11 +139,13 @@ def train_step(
         state_action_critic(
             expanded_critic_obs, flatten_action_horizon(sampled_actions)
         ),
-        critic_reduction=rl.critic_reduction,
+        config,
+        critic_reduction=rl.critic.reduction,
     )  # [B*G]
     v_value = summarize_critic_values(
         value_critic(expanded_critic_obs),
-        critic_reduction=rl.critic_reduction,
+        config,
+        critic_reduction=rl.critic.reduction,
     )  # [B*G]
     advantage_raw = q_value - v_value  # [B*G]
 
