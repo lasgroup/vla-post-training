@@ -2,7 +2,7 @@
 """Launcher for experiments.
 
 Usage:
-    python scripts/launcher.py --config scripts/configs/filtered_sft.yaml
+    ./scripts/launcher.py --config scripts/configs/filtered_sft.yaml
 """
 
 import argparse
@@ -211,11 +211,11 @@ def generate_run_commands(
     if not dry:
         # create results directory, handling existing directory
         try:
-            os.mkdir(results_dir)
+            os.makedirs(results_dir)
         except FileExistsError:
             # ask what to do if results_dir exists
-            print(f"Directory {results_dir} exists. Delete?")
-            if input().lower() in ["y", "yes"]:
+            print(f"Directory {results_dir} exists. Delete? [yes/no]")
+            if input().lower() in ["yes"]:
                 print("Deleting result directory.")
                 shutil.rmtree(results_dir, ignore_errors=True)
                 os.mkdir(results_dir)
