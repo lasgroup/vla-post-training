@@ -26,16 +26,16 @@ def evaluate_policy(
     num_rollouts_per_task = config.collect.num_eval_rollouts
     total_episodes = 0
     total_successes = 0
-    tasks = set(config.collect.tasks)
+    tasks = set(config.collect.eval_tasks)
     episodes_per_task = {k: 0 for k in tasks}
     successes_per_task = {k: 0 for k in tasks}
     env_step_counts = np.zeros(env.env_num, dtype=np.int32)
     successful_episode_lengths = []
 
     repeated_task_ids = []
-    for t in config.collect.tasks:
+    for t in config.collect.eval_tasks:
         repeated_task_ids.extend([t] * num_rollouts_per_task)
-    num_rollouts = num_rollouts_per_task * len(config.collect.tasks)
+    num_rollouts = num_rollouts_per_task * len(config.collect.eval_tasks)
 
     with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
 
@@ -45,7 +45,7 @@ def evaluate_policy(
                 current_task_ids.append(repeated_task_ids.pop(0))
                 valid_envs.append(True)
             else:
-                current_task_ids.append(config.collect.tasks[-1])
+                current_task_ids.append(config.collect.eval_tasks[-1])
                 valid_envs.append(False)
 
         obs, info = env.reset(options={"task_id": current_task_ids})
@@ -87,7 +87,7 @@ def evaluate_policy(
                 if repeated_task_ids:
                     task_id = repeated_task_ids.pop(0)
                 else:
-                    task_id = config.collect.tasks[-1]
+                    task_id = config.collect.eval_tasks[-1]
                     valid_envs[env_index] = False
                 current_task_ids[env_index] = task_id
                 env_obs, env_info = env.reset(id=int(env_index), options={"task_id": task_id})
