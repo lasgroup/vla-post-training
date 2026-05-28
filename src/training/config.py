@@ -143,6 +143,11 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     value_lower_bound: float | None = None  # If None:auto-computed from reward type and discount
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"      # "one_hot" | "two_hot"
+    # BRONet critic
+    use_bronet_critic: bool = False
+    bronet_hidden_dim: int = 512
+    bronet_depth: int = 2
+    bronet_pessimism: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,6 +175,11 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
     normalize_advantages: bool = False
+    # BRONet critic
+    use_bronet_critic: bool = False
+    bronet_hidden_dim: int = 512
+    bronet_depth: int = 2
+    bronet_pessimism: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -331,6 +341,7 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
+    group: str | None = None
 
 
 def resolve_best_of_n_value_bounds(config: OnlineTrainConfig) -> OnlineTrainConfig:

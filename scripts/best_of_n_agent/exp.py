@@ -60,6 +60,7 @@ from src.rl.best_of_n.update_critic import (
     StateActionCriticDef,
     StateValueDef,
 )
+from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.networks.decoders.values.state_action_value import (
     StateActionEnsembleDecoder,
@@ -194,6 +195,41 @@ def _build_pi0_backbone_critic_defs(
     return state_action_critic_def, state_value_def
 
 
+def _build_bronet_critic_defs(
+    config: _config.OnlineTrainConfig,
+    *,
+    prefix_embedding_shape: tuple[int, ...] | None,
+) -> tuple[StateActionCriticDef, StateValueDef]:
+    assert isinstance(config.rl, _config.BestofNLearnerConfig)
+    hidden_dim = config.rl.bronet_hidden_dim
+    depth      = config.rl.bronet_depth
+    num_qs     = config.rl.critic_num_qs
+    num_vs     = config.rl.critic_num_vs
+
+    def state_action_critic_def(
+        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
+    ) -> BroNetStateActionCritic:
+        return BroNetStateActionCritic(
+            observation=observation,
+            action=action,
+            hidden_dim=hidden_dim,
+            depth=depth,
+            num_qs=num_qs,
+            rngs=rngs,
+        )
+
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> BroNetStateValue:
+        return BroNetStateValue(
+            observation=observation,
+            hidden_dim=hidden_dim,
+            depth=depth,
+            num_vs=num_vs,
+            rngs=rngs,
+        )
+
+    return state_action_critic_def, state_value_def
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     config = _config.resolve_best_of_n_value_bounds(config)
@@ -230,9 +266,14 @@ def main(config: _config.OnlineTrainConfig):
         config, prefix_embedding_shape=prefix_embedding_shape
     )
     dummy_act = config.model.fake_act(batch_size=1)
-    state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
-        config, prefix_embedding_shape=prefix_embedding_shape
-    )
+    if config.rl.use_bronet_critic:
+        state_action_critic_def, state_value_def = _build_bronet_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
+    else:
+        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(
+            config, prefix_embedding_shape=prefix_embedding_shape
+        )
     agent = BestofNLearner(
         config=config,
         dummy_obs=dummy_obs,
@@ -240,8 +281,6 @@ def main(config: _config.OnlineTrainConfig):
         state_action_critic_def=state_action_critic_def,
         state_value_def=state_value_def,
     )
-    if not hasattr(config, "group"):
-        object.__setattr__(config, "group", None)
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     start_step = int(agent.training_steps)

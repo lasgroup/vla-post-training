@@ -99,8 +99,16 @@ class BestofNLearner(FilteredSFTLearner):
         gc.collect()
 
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
-        self._q_train_step = functools.partial(train_q_step, self._config)
-        self._value_train_step = functools.partial(train_value_step, self._config)
+        if config.rl.use_bronet_critic:
+            from src.rl.best_of_n.update_bronet_critic import (
+                train_bronet_q_step,
+                train_bronet_value_step,
+            )
+            self._q_train_step     = functools.partial(train_bronet_q_step,     self._config)
+            self._value_train_step = functools.partial(train_bronet_value_step, self._config)
+        else:
+            self._q_train_step     = functools.partial(train_q_step,     self._config)
+            self._value_train_step = functools.partial(train_value_step, self._config)
         # self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_critic_update_function()
 
