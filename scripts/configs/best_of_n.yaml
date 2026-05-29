@@ -15,7 +15,7 @@ params:
   collect.use_time_to_success_as_reward: [True]
   !!python/tuple [collect.tasks, collect.eval_tasks]: [
     [libero_90_44, libero_90_44],     # "Turn on the stove"
-    # [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
+    [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
   ]
 
   rl.buffer_capacity: [250000]
@@ -25,4 +25,4 @@ params:
   rl.critic.td_weight_schedule.end_value: [0.5]
   rl.critic.td_weight_schedule.switch_step: [500000]
 
-  seed: [0]
+  seed: [0, 1, 2]
