@@ -29,4 +29,4 @@ params:
   rl.critic.use_ema: [False]
   rl.use_mc_returns: [True]
 
-  seed: [0, 1, 2]
+  seed: [0]

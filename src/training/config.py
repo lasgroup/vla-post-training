@@ -149,7 +149,6 @@ class CriticTrainingConfig:
     use_bronet: bool = False
     bronet_hidden_dim: int = 512
     bronet_depth: int = 2
-    bronet_pessimism: float = 0.0
 
 
 # Define hyperparameter structures for your algorithms
@@ -352,7 +351,6 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
-    group: str | None = None
 
     def __post_init__(self):
         super().__post_init__()
