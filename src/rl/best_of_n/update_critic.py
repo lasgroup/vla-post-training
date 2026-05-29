@@ -24,7 +24,6 @@ from src.rl.networks.rl_networks import (
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
-from src.rl.critic_utils import _bro_pessimistic_reduce
 
 
 CriticBatch = tuple[
@@ -38,6 +37,14 @@ CriticBatch = tuple[
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
+
+
+def _bro_pessimistic_reduce(values: jnp.ndarray, pessimism: float) -> jnp.ndarray:
+    """BRO ensemble reduction: mean - pessimism * half-range."""
+    mean = jnp.mean(values, axis=0)
+    spread = (jnp.max(values, axis=0) - jnp.min(values, axis=0)) / 2
+    return mean - pessimism * spread
+
 
 from src.rl.networks.encoders.encoders import MLPEncoder
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
