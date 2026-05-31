@@ -46,12 +46,12 @@ NUM_TRAIN_STEPS = 5_000
 # If this dict is empty, one run is launched with config defaults.
 applicable_configs: Dict[Union[str, tuple], List[Any]] = {
     "seed": [0],
-    "rl.policy_training_start_step": [900],
+    "rl.save_episodes_to_path": ['/capstor/store/cscs/swissai/a143/project-vlm-rm/episodes'],  # where to save episodes
+    "collect.num_initial_rollouts": [100],  # how many episodes per task
+    "num_train_steps": [0],
     "rl.online_ratio": [1.0],
-    "collect.num_initial_rollouts": [5],
-    "lr_schedule.value": [2.5e-5],
-    ("collect.tasks", "collect.eval_tasks"): [
-        ("libero_90_59", "libero_90_59"),
+    ("collect.tasks", "collect.eval_tasks"): [  # which tasks to collect
+        ("libero_90_0-9", "libero_90_0-9"),  # tasks 0 to 9 (out of [0, 89])
     ],
 }
 
