@@ -39,6 +39,7 @@ from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, N
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(self, config):
+        self._config = config
 
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
@@ -244,7 +245,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert
         obs = _model.Observation.from_dict(observation)
-        return self._policy._get_prefix_rep_with_model(model, observation=obs)
+        return self._get_prefix_rep_with_model(model, observation=obs)
 
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
@@ -459,7 +460,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
             if return_prefix_rep:
                 if all_best_prefix is None:
-                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+                    all_best_prefix = np.zeros((env_num, *prefix.shape[1:]), dtype=np.float32)
                 all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions

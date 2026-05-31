@@ -577,6 +577,7 @@ class FilteredSFTLearner(Agent):
         actions = outputs["actions"]
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
+        prefix = self._compress_prefix(prefix)
         return actions, np.asarray(prefix, dtype=np.float32)
 
     def _generate_actions(
@@ -634,7 +635,7 @@ class FilteredSFTLearner(Agent):
     def _compress_prefix(self, prefix):
         assert prefix.ndim == 3
 
-        if isinstance(self._config.rl, BestofNLearnerConfig) or isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig):
+        if isinstance(self._config.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self._config.rl.critic.encoder_type == 'mlp':
                 prefix = prefix.mean(axis=1)
             elif self._config.rl.critic.encoder_type == 'transformer':
