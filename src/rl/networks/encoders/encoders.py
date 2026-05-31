@@ -7,11 +7,13 @@ from flax.core.frozen_dict import FrozenDict
 
 from src.rl.networks.constants import xavier_init
 from src.rl.networks.mlp import MLP
+from src.rl.networks.transformer import Transformer
 from src.rl.networks.encoders.utils import extract_from_dict, EncoderType
 
 EncoderDef = Callable[[Union[FrozenDict, Dict], nnx.Rngs], EncoderType]
 MLPEncoderDef = Callable[[Union[FrozenDict, Dict], nnx.Rngs], EncoderType]
 MLPDef = Callable[[jnp.ndarray, nnx.Rngs], MLP]
+TransformerDef = Callable[[jnp.ndarray, nnx.Rngs], Transformer]
 
 
 class ImageEncoder(nnx.Module):
@@ -74,6 +76,44 @@ class MLPEncoder(nnx.Module):
     def __call__(self,
                  observations: Union[FrozenDict, Dict],
                  training: bool = False):
+        state = self._prepare_inputs(observations)
+        return self.encoder(state, training=training)
+
+
+class TransformerEncoder(nnx.Module):
+    def __init__(
+        self,
+        dummy_obs: Union[FrozenDict, Dict],
+        encoder_def: TransformerDef,
+        state_vector_keys: List[str] | None = None,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        if state_vector_keys is None:
+            state_vector_keys = ["state"]
+        self._state_vector_keys = state_vector_keys
+        dummy_state = self._prepare_inputs(dummy_obs)
+        self.encoder = encoder_def(dummy_state, rngs)
+
+    def _prepare_inputs(self, observations: Union[FrozenDict, Dict]):
+        observations = FrozenDict(observations)
+        state_list = [
+            extract_from_dict(observations, key) for key in self._state_vector_keys
+        ]
+        d_token = max(s.shape[-1] for s in state_list)
+        tokens = []
+        for s in state_list:
+            if s.ndim == 2:
+                s = s[:, None, :]
+            pad = d_token - s.shape[-1]
+            if pad > 0:
+                pad_width = [(0, 0)] * s.ndim
+                pad_width[-1] = (0, pad)
+                s = jnp.pad(s, pad_width)
+            tokens.append(s)
+        return jnp.concatenate(tokens, axis=-2)
+
+    def __call__(self, observations: Union[FrozenDict, Dict], training: bool = False):
         state = self._prepare_inputs(observations)
         return self.encoder(state, training=training)
 

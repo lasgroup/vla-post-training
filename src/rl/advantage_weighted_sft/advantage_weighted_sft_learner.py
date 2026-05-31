@@ -42,10 +42,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
-        prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        prefix_rep = self._compress_prefix(model.get_prefix_rep(fake_obs)[0])
         del model
-        assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
-        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        prefix_embedding_shape = tuple(prefix_rep.shape[1:])
         dummy_obs = {
             "state": fake_obs.state,
             PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
@@ -53,9 +52,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         dummy_act = config.model.fake_act(batch_size=1)
         state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
 
-        self._prefix_embed_dim = None
+        self._prefix_embed_shape = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
-            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+            self._prefix_embed_shape = np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[1:]
 
         super().__init__(config)
 
@@ -186,8 +185,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
-        if self._prefix_embed_dim is not None:
-            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
+        if self._prefix_embed_shape is not None:
+            zeros = np.zeros((1, *self._prefix_embed_shape), dtype=np.float32)
             dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
             dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
         return dummy
@@ -245,10 +244,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert
         obs = _model.Observation.from_dict(observation)
-        prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
-        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        prefix = jnp.mean(prefix, axis=1)
-        return prefix
+        return self._policy._get_prefix_rep_with_model(model, observation=obs)
 
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
@@ -426,9 +422,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             }
             obs_for_prefix = _model.Observation.from_dict(inputs)
             prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
-            prefix = np.asarray(prefix)
-            if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
             critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
                 jnp.asarray(prefix), n_samples, axis=0
             )

@@ -29,7 +29,7 @@ from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
+from src.training.config import AdvantageWeightedSFTLearnerConfig, BestofNLearnerConfig, OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
@@ -366,7 +366,8 @@ class FilteredSFTLearner(Agent):
         ):
             prefix_rep = m.get_prefix_rep(observation)
             # TODO: remove if below
-            return prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            return self._compress_prefix(prefix_rep)
 
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
@@ -630,6 +631,22 @@ class FilteredSFTLearner(Agent):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
+    def _compress_prefix(self, prefix):
+        assert prefix.ndim == 3
+
+        if isinstance(self._config.rl, BestofNLearnerConfig) or isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig):
+            if self._config.rl.critic.encoder_type == 'mlp':
+                prefix = prefix.mean(axis=1)
+            elif self._config.rl.critic.encoder_type == 'transformer':
+                B, T, D = prefix.shape
+                # We compress because full prefix saved in the buffer is too
+                # large to handle.
+                # It works fine for the default compression factor of 4:
+                # the embeddings of successive images and text do not overlap.
+                prefix = prefix.reshape(B, T // 4, 4, D).mean(axis=2)
+
+        return prefix
+
     def _attach_prefix_embeddings_to_episode_data(
         self,
         episode_data: list[Dict[str, Any]],
@@ -658,17 +675,12 @@ class FilteredSFTLearner(Agent):
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
         observation = _model.Observation.from_dict(inputs)
-        next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
-        next_prefix = np.asarray(next_prefix, dtype=np.float32)
-        if next_prefix.ndim == 3:
-            next_prefix = next_prefix[0]
-        next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
+        next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)[0]
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
             prefix = np.asarray(prefix, dtype=np.float32)
-            prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
             horizon = ep["observation"]["observation/state"].shape[0]
             ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0

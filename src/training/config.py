@@ -127,6 +127,7 @@ class CriticTrainingConfig:
     use_ema: bool = True
     ema_decay: float = 0.995
     reduction: str = "min"
+    encoder_type: Literal["mlp", "transformer"] = "mlp"
     encoder_hidden_dims: Sequence[int] = (512, 512)
     decoder_hidden_dims: Sequence[int] = (256, 256)
     num_qs: int = 2
