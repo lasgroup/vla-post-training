@@ -28,34 +28,42 @@ from src.rl.advantage_weighted_sft.update_critic import (
     train_value_step,
 )
 from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
-from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import (
     FilteredSFTLearner,
     _copy_nnx_state,
 )
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_MASK_NAME, PREFIX_EMBEDDING_NAME
 from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def __init__(self, config):
+        self._config = config
 
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
-        prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        raw_prefix_rep = model.get_prefix_rep(fake_obs)[0]
+        prefix_rep = self._compress_prefix(raw_prefix_rep)
+        prefix_mask = self._compress_mask(
+            jnp.ones(raw_prefix_rep.shape[:2], dtype=bool)
+        )
         del model
-        assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
-        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        prefix_embedding_shape = tuple(prefix_rep.shape[1:])
         dummy_obs = {
             "state": fake_obs.state,
-            PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
+            PREFIX_EMBEDDING_NAME: jnp.zeros(
+                (1, *prefix_embedding_shape), dtype=jnp.float32
+            ),
+            PREFIX_EMBEDDING_MASK_NAME: jnp.zeros(
+                (1, *prefix_mask.shape[1:]), dtype=bool
+            ),
         }
         dummy_act = config.model.fake_act(batch_size=1)
         state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
 
-        self._prefix_embed_dim = None
-        if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
-            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+        self._prefix_embed_shape = None
+        if config.collect.store_prefix_rep:
+            self._prefix_embed_shape = np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[1:]
 
         super().__init__(config)
 
@@ -186,8 +194,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
-        if self._prefix_embed_dim is not None:
-            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
+        if self._prefix_embed_shape is not None:
+            zeros = np.zeros((1, *self._prefix_embed_shape), dtype=np.float32)
             dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
             dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
         return dummy
@@ -233,96 +241,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             path,
             self._rl_checkpoint_state(),
         )
-
-    def _recompute_prefix_embedding(
-        self,
-        *,
-        observation: dict[str, Any],
-        policy_state: training_utils.TrainState,
-    ) -> at.Float[at.Array, "batch embed"] | None:
-        model = self._get_policy_model(policy_state)
-        # Both SFT-loader Observations and online-buffer dicts are already
-        # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
-        # by the data pipeline / _preprocess_insert
-        obs = _model.Observation.from_dict(observation)
-        prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
-        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        prefix = jnp.mean(prefix, axis=1)
-        return prefix
-
-    @staticmethod
-    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        """Merge policy params into a model. Call once per update() to avoid duplicates."""
-        params = (
-            policy_state.ema_params
-            if policy_state.ema_params is not None
-            else policy_state.params
-        )
-        model = nnx.merge(policy_state.model_def, params)
-        model.eval()
-        return model
-
-    @at.typecheck
-    def _online_batch_to_critic_batch(
-        self,
-        online_batch: dict[str, Any],
-        policy_state: training_utils.TrainState,
-    ) -> tuple[
-        ObsType,
-        _model.Actions,
-        ObsType,
-        at.Float[at.Array, " b"],
-        at.Float[at.Array, " b"],
-        at.Float[at.Array, " b"],
-    ]:
-        online_observation = online_batch["observation"]
-        observation_dict: dict[str, Any] = {
-            "state": online_observation["state"],
-        }
-
-        next_observation = online_batch["next_observation"]
-        next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
-
-        if PREFIX_EMBEDDING_NAME in online_observation and PREFIX_EMBEDDING_NAME in next_observation:
-            observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[PREFIX_EMBEDDING_NAME]
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_observation[PREFIX_EMBEDDING_NAME]
-        else:
-            observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
-                observation=online_observation, policy_state=policy_state,
-            )
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
-                observation=next_observation, policy_state=policy_state,
-            )
-
-        return (
-            observation_dict,
-            online_batch["actions"],
-            next_observation_dict,
-            online_batch["reward"],
-            online_batch["discount"],
-            online_batch["mc_return"],
-        )
-
-    def _sft_batch_to_actor_batch(
-        self,
-        sft_batch: tuple[_model.Observation, _model.Actions],
-        policy_state: training_utils.TrainState,
-    ) -> tuple[_model.Observation, ObsType, _model.Actions]:
-        policy_observation, actions = sft_batch
-        policy_obs_dict = policy_observation.to_dict()
-
-        critic_observation: dict[str, Any] = {
-            "state": policy_obs_dict["state"],
-        }
-
-        prefix_embedding = self._recompute_prefix_embedding(
-            observation=policy_obs_dict,
-            policy_state=policy_state,
-        )
-
-        critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
-
-        return policy_observation, critic_observation, actions
 
     def sample_actions(self, observations, **kwargs):
         """Best-of-N collection: sample n_samples candidates per env and keep the highest-Q one.
@@ -425,12 +343,15 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 for k, v in inputs.items()
             }
             obs_for_prefix = _model.Observation.from_dict(inputs)
-            prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
-            prefix = np.asarray(prefix)
-            if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+            prefix = self._get_prefix_rep_with_model(
+                m=policy_model, observation=obs_for_prefix
+            )
+            prefix_mask = self._prefix_embedding_mask_from_inputs(inputs, prefix)
             critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
                 jnp.asarray(prefix), n_samples, axis=0
+            )
+            critic_obs[PREFIX_EMBEDDING_MASK_NAME] = jnp.repeat(
+                jnp.asarray(prefix_mask), n_samples, axis=0
             )
 
             actions_norm = np.asarray(
@@ -466,7 +387,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
             if return_prefix_rep:
                 if all_best_prefix is None:
-                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+                    all_best_prefix = np.zeros((env_num, *prefix.shape[1:]), dtype=np.float32)
                 all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions

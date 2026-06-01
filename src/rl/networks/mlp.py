@@ -41,6 +41,8 @@ class MLP(nnx.Module):
             input_dim = hidden_dim  # Update for next iteration
 
     def __call__(self, x, training: bool = False):
+        assert x.ndim == 2, f"MLP expects (B, D), got shape {x.shape}"
+
         for layer in self.layers:
             # Handle layers that need the 'training' flag vs simple functions
             if isinstance(layer, nnx.Dropout):

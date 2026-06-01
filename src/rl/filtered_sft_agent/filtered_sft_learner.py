@@ -29,7 +29,7 @@ from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
-from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
+from src.training.config import AdvantageWeightedSFTLearnerConfig, BestofNLearnerConfig, OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
@@ -39,11 +39,14 @@ from src.envs.wrappers import (
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.networks.rl_networks import ObsType
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_MASK_NAME, PREFIX_EMBEDDING_NAME
 from src.training.runtime_state import (
     load_resume_state,
     restore_train_state,
 )
+
+PREFIX_COMPRESSION_FACTOR = 4
 
 
 def filtered_sft_wrap_env(
@@ -366,7 +369,8 @@ class FilteredSFTLearner(Agent):
         ):
             prefix_rep = m.get_prefix_rep(observation)
             # TODO: remove if below
-            return prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            return self._compress_prefix(prefix_rep)
 
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
@@ -514,6 +518,30 @@ class FilteredSFTLearner(Agent):
                     inputs[key] = np.repeat(arr[np.newaxis], batch_size, axis=0)
         return inputs
 
+    def _prefix_embedding_mask_from_inputs(self, inputs: dict, prefix_embedding):
+        prefix_embedding = jnp.asarray(prefix_embedding)
+        if prefix_embedding.ndim == 2:
+            return jnp.ones((prefix_embedding.shape[0], 1), dtype=jnp.bool_)
+
+        prefix_len = prefix_embedding.shape[1] * PREFIX_COMPRESSION_FACTOR
+        masks = []
+        image_masks = inputs["image_mask"]
+        prompt_mask = inputs.get("tokenized_prompt_mask")
+        prompt_len = 0 if prompt_mask is None else prompt_mask.shape[1]
+        image_tokens_per_view = (prefix_len - prompt_len) // len(inputs["image"])
+        for name in inputs["image"]:
+            masks.append(
+                jnp.repeat(
+                    jnp.asarray(image_masks[name], dtype=jnp.bool_)[:, None],
+                    image_tokens_per_view,
+                    axis=1,
+                )
+            )
+        if prompt_mask is not None:
+            masks.append(jnp.asarray(prompt_mask, dtype=jnp.bool_))
+        raw_mask = jnp.concatenate(masks, axis=1)
+        return self._compress_mask(raw_mask)
+
     def _sample_action(
         self,
         observations: Dict,
@@ -561,7 +589,7 @@ class FilteredSFTLearner(Agent):
             inputs = jax.device_put(inputs, sharding_spec)
         observation = _model.Observation.from_dict(inputs)
         _, sample_rng = jax.random.split(rng)
-        raw_actions, prefix = self._policy._sample_actions_with_model(
+        raw_actions, raw_prefix = self._policy._sample_actions_with_model(
             m=model,
             observation=observation,
             noise=noise,
@@ -576,6 +604,7 @@ class FilteredSFTLearner(Agent):
         actions = outputs["actions"]
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
+        prefix = self._compress_prefix(raw_prefix)
         return actions, np.asarray(prefix, dtype=np.float32)
 
     def _generate_actions(
@@ -618,6 +647,121 @@ class FilteredSFTLearner(Agent):
             online_batch["actions"],
         )
 
+    @at.typecheck
+    def _online_batch_to_critic_batch(
+        self,
+        online_batch: dict[str, Any],
+        policy_state: training_utils.TrainState,
+    ) -> tuple[
+        dict[str, Any],
+        _model.Actions,
+        dict[str, Any],
+        at.Float[at.Array, " b"],
+        at.Float[at.Array, " b"],
+        at.Float[at.Array, " b"],
+    ]:
+        online_observation = online_batch["observation"]
+        observation_dict: dict[str, Any] = {
+            "state": online_observation["state"],
+        }
+
+        next_observation = online_batch["next_observation"]
+        next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
+
+        has_prefix = (
+            PREFIX_EMBEDDING_NAME in online_observation
+            and PREFIX_EMBEDDING_NAME in next_observation
+        )
+        if has_prefix:
+            observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[
+                PREFIX_EMBEDDING_NAME
+            ]
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_observation[
+                PREFIX_EMBEDDING_NAME
+            ]
+        else:
+            observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
+                observation=online_observation,
+                policy_state=policy_state,
+            )
+            next_observation_dict[PREFIX_EMBEDDING_NAME] = (
+                self._recompute_prefix_embedding(
+                    observation=next_observation,
+                    policy_state=policy_state,
+                )
+            )
+
+        observation_dict[PREFIX_EMBEDDING_MASK_NAME] = (
+            self._prefix_embedding_mask_from_inputs(
+                online_observation,
+                observation_dict[PREFIX_EMBEDDING_NAME],
+            )
+        )
+        next_observation_dict[PREFIX_EMBEDDING_MASK_NAME] = (
+            self._prefix_embedding_mask_from_inputs(
+                next_observation,
+                next_observation_dict[PREFIX_EMBEDDING_NAME],
+            )
+        )
+
+        return (
+            observation_dict,
+            online_batch["actions"],
+            next_observation_dict,
+            online_batch["reward"],
+            online_batch["discount"],
+            online_batch["mc_return"],
+        )
+
+    @staticmethod
+    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
+        """Merge policy params into a model. Call once per update() to avoid duplicates."""
+        params = (
+            policy_state.ema_params
+            if policy_state.ema_params is not None
+            else policy_state.params
+        )
+        model = nnx.merge(policy_state.model_def, params)
+        model.eval()
+        return model
+
+    def _recompute_prefix_embedding(
+        self,
+        *,
+        observation: dict[str, Any],
+        policy_state: training_utils.TrainState,
+    ) -> at.Float[at.Array, "batch embed"]:
+        model = self._get_policy_model(policy_state)
+        # Both SFT-loader Observations and online-buffer dicts are already
+        # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
+        # by the data pipeline / _preprocess_insert
+        obs = _model.Observation.from_dict(observation)
+        return self._get_prefix_rep_with_model(model, observation=obs)
+
+    def _sft_batch_to_actor_batch(
+        self,
+        sft_batch: tuple[_model.Observation, _model.Actions],
+        policy_state: training_utils.TrainState,
+    ) -> tuple[_model.Observation, ObsType, _model.Actions]:
+        policy_observation, actions = sft_batch
+        policy_obs_dict = policy_observation.to_dict()
+
+        critic_observation: dict[str, Any] = {
+            "state": policy_obs_dict["state"],
+        }
+
+        prefix_embedding = self._recompute_prefix_embedding(
+            observation=policy_obs_dict,
+            policy_state=policy_state,
+        )
+
+        critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
+        critic_observation[PREFIX_EMBEDDING_MASK_NAME] = (
+            self._prefix_embedding_mask_from_inputs(policy_obs_dict, prefix_embedding)
+        )
+
+        return policy_observation, critic_observation, actions
+
     def save_checkpoint(self, step: int | None = None):
         if step is None:
             step = self.training_steps
@@ -629,6 +773,48 @@ class FilteredSFTLearner(Agent):
     def add_data(self, step_data: StepData):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
+
+    def _compress_prefix(self, prefix):
+        if not isinstance(
+            self._config.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)
+        ):
+            return prefix
+
+        if self._config.rl.critic.encoder_type == "mlp":
+            return prefix.mean(axis=1)
+
+        if self._config.rl.critic.encoder_type != "transformer":
+            return prefix
+
+        batch_size, prefix_len, embed_dim = prefix.shape
+        grouped_prefix = prefix.reshape(
+            batch_size,
+            prefix_len // PREFIX_COMPRESSION_FACTOR,
+            PREFIX_COMPRESSION_FACTOR,
+            embed_dim,
+        )
+        return jnp.mean(grouped_prefix, axis=2)
+
+    def _compress_mask(self, prefix_mask):
+        prefix_mask = jnp.asarray(prefix_mask, dtype=jnp.bool_)
+        if not isinstance(
+            self._config.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)
+        ):
+            return prefix_mask
+
+        if self._config.rl.critic.encoder_type == "mlp":
+            return jnp.ones((prefix_mask.shape[0], 1), dtype=jnp.bool_)
+
+        if self._config.rl.critic.encoder_type != "transformer":
+            return prefix_mask
+
+        batch_size, prefix_len = prefix_mask.shape
+        grouped_mask = prefix_mask.reshape(
+            batch_size,
+            prefix_len // PREFIX_COMPRESSION_FACTOR,
+            PREFIX_COMPRESSION_FACTOR,
+        )
+        return jnp.any(grouped_mask, axis=2)
 
     def _attach_prefix_embeddings_to_episode_data(
         self,
@@ -658,17 +844,14 @@ class FilteredSFTLearner(Agent):
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
         observation = _model.Observation.from_dict(inputs)
-        next_prefix = self._get_prefix_rep_with_model(m=model, observation=observation)
-        next_prefix = np.asarray(next_prefix, dtype=np.float32)
-        if next_prefix.ndim == 3:
-            next_prefix = next_prefix[0]
-        next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
+        next_prefix = self._get_prefix_rep_with_model(
+            m=model, observation=observation
+        )[0]
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
             prefix = np.asarray(prefix, dtype=np.float32)
-            prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
             horizon = ep["observation"]["observation/state"].shape[0]
             ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0

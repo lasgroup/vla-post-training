@@ -36,10 +36,11 @@ CriticBatch = tuple[
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
-from src.rl.networks.encoders.encoders import MLPEncoder
+from src.rl.networks.encoders.encoders import MLPEncoder, TransformerEncoder
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.mlp import MLP
+from src.rl.networks.transformer import Transformer
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
@@ -50,16 +51,21 @@ def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, State
     critic_num_vs = config.rl.critic.num_vs
 
     def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        network_def = lambda o, rg: MLP(
-            input=o,
-            hidden_dims=critic_encoder_hidden_dims,
-            activate_final=True,
-            rngs=rg,
-        )
+        network_cls, wrapper_cls = {
+            "transformer": (Transformer, TransformerEncoder),
+            "mlp": (MLP, MLPEncoder),
+        }[config.rl.critic.encoder_type]
+        def network_def(o, rg):
+            return network_cls(
+                input=o,
+                hidden_dims=critic_encoder_hidden_dims,
+                activate_final=True,
+                rngs=rg,
+            )
         state_vector_keys = ["state"]
         if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
             state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
-        return MLPEncoder(
+        return wrapper_cls(
             dummy_obs=observation,
             encoder_def=network_def,
             state_vector_keys=state_vector_keys,
