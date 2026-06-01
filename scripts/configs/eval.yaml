@@ -1,0 +1,29 @@
+# Evaluate the base pi0.5 LIBERO policy on all 90 LIBERO-90 tasks.
+#
+# No trained checkpoint is needed: a fresh agent loads the base pi0.5 weights via
+# the config's weight loader (resume defaults to False). The launcher creates a
+# throwaway results dir per combo; eval.py never writes checkpoints, only a
+# JSON metrics summary into that dir.
+#
+# Run:  ./scripts/launcher.py --config scripts/configs/eval.yaml
+#
+# To eval a TRAINED checkpoint instead, run scripts/eval.py directly with
+# --resume --no-requeue and point --checkpoint_base_dir/--exp_name at the run
+# (see the docstring in scripts/eval.py).
+script: scripts/eval.py
+config_name: pi05_libero_online_filtered_sft
+project_name: base_policy_eval
+group_name: base_policy_eval
+params:
+  overwrite: [True]            # fresh throwaway checkpoint dir, no resume
+  num_train_steps: [0]         # eval.py ignores this; set 0 for clarity
+
+  # All 90 LIBERO-90 tasks (inclusive range). 10 rollouts each = 900 episodes.
+  collect.eval_tasks: [[libero_90_0-89]]
+  collect.num_eval_rollouts: [10]
+  collect.eval_env_num: [10]
+
+  # online_ratio=1.0 avoids loading the offline SFT dataset (DummyDataLoader path).
+  rl.online_ratio: [1.0]
+
+  seed: [0]
