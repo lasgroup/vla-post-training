@@ -12,7 +12,6 @@ params:
   collect.num_eval_rollouts: [8]
   collect.num_initial_rollouts: [5]
   collect.num_rollouts: [1]
-  collect.use_time_to_success_as_reward: [True]
   !!python/tuple [collect.tasks, collect.eval_tasks]: [
     ["libero_90_1-14", "libero_90_1-14"], ["libero_90_16-89", "libero_90_16-89"],
   ]
