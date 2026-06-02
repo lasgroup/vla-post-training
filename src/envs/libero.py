@@ -28,18 +28,28 @@ class LiberoWrapper(gym.Wrapper):
 
     def reset(self, seed=None, options={}):
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
+        perturbation = ""
+        if any([task.startswith("libero_" + k) for k in ["swap", "object", "position"]]):
+            perturbation = "_" + task.split("_")[1]
+            task = task.replace(perturbation, "")
+        task_suite_name = "_".join(task.split("_")[:-1]) 
         task_id = int(task_id.split("_")[-1])
         task_suite = benchmark.get_benchmark_dict()["libero_90"]()
         task = task_suite.get_task(task_id)
+        problem_folder = task_suite_name + perturbation
         self._args["bddl_file_name"] = (
             pathlib.Path(get_libero_path("bddl_files"))
-            / task.problem_folder
+            / problem_folder
             / task.bddl_file
         )
         env = OffScreenRenderEnv(**self._args)
         super().__init__(env)
         self.env.reset()
-        init_states = get_task_init_states(task_suite, task_id)
+        init_states = get_task_init_states(
+            get_libero_path("init_states"),
+            problem_folder,
+            task_suite.tasks[task_id].init_states_file
+        )
         random_index = self.rng.integers(low=0, high=init_states.shape[0])
         init_state = init_states[random_index]
         obs = self.env.set_init_state(init_state)
@@ -53,11 +63,11 @@ class LiberoWrapper(gym.Wrapper):
         return obs, reward, done, False, info
 
 
-def get_task_init_states(task_suite, task_id: int):
+def get_task_init_states(init_root: str = None, problem_folder: str = None, init_states_file: str = None):
     init_states_path = os.path.join(
-        get_libero_path("init_states"),
-        task_suite.tasks[task_id].problem_folder,
-        task_suite.tasks[task_id].init_states_file,
+        init_root,
+        problem_folder,
+        init_states_file,
     )
     torch.serialization.add_safe_globals(
         [
@@ -67,7 +77,7 @@ def get_task_init_states(task_suite, task_id: int):
             np.dtypes.Float64DType,
         ]
     )
-    init_states = torch.load(init_states_path)
+    init_states = torch.load(init_states_path, weights_only=False)
     return init_states
 
 
@@ -76,21 +86,11 @@ def get_libero_warm_start_action():
 
 
 def make_env_libero(config, tasks, num_devices: int = 4):
-    benchmark_dict = benchmark.get_benchmark_dict()
     warm_start_action = get_libero_warm_start_action()
 
     task = tasks[0]
     task_suite_name = "_".join(task.split("_")[:-1]) 
-    task_id = int(task.split("_")[-1])
-    task_suite = benchmark_dict[task_suite_name]()
-    task = task_suite.get_task(task_id)
-    task_bddl_file = (
-        pathlib.Path(get_libero_path("bddl_files"))
-        / task.problem_folder
-        / task.bddl_file
-    )
     env_args = {
-        "bddl_file_name": task_bddl_file,
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
