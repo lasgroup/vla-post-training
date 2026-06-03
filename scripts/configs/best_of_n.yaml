@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_best_of_n
-project_name: best_of_n_sweep
+project_name: best_of_n_config_fix
 group_name: best_of_n_sweep
 params:
   log_interval: [25]
@@ -14,15 +14,19 @@ params:
   collect.store_prefix_rep: [True]
   collect.use_time_to_success_as_reward: [True]
   !!python/tuple [collect.tasks, collect.eval_tasks]: [
-    [libero_90_44, libero_90_44],     # "Turn on the stove"
-    [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
+    [libero_90_59, libero_90_59],
   ]
 
+  batch_size: [1024]
+  rl.discount: [0.995]
   rl.buffer_capacity: [250000]
   rl.critic.inference_start_step: [0]
   rl.critic.pre_training_steps: [0]
   rl.critic.td_weight_schedule.init_value: [0.5]
   rl.critic.td_weight_schedule.end_value: [0.5]
   rl.critic.td_weight_schedule.switch_step: [500000]
+  rl.critic.use_bronet: [False]
+  rl.critic.bronet_hidden_dim: [512]
+  rl.n_samples: [32]
 
-  seed: [0, 1, 2]
+  seed: [0]
