@@ -122,6 +122,76 @@ def get_value_bounds(config) -> tuple[float, float]:
     return float(config.rl.critic.value_lower_bound), float(config.rl.critic.value_upper_bound)
 
 
+def make_bin_centers(
+    lower_bound: float, upper_bound: float, num_bins: int
+) -> at.Float[at.Array, " k"]:
+    """Public accessor for the uniformly spaced value-bin centers."""
+    return _bin_centers(lower_bound, upper_bound, num_bins)
+
+
+def reduce_ensemble_probs(
+    logits: at.Float[at.Array, "n b k"],
+    mode: str,
+    bin_centers: at.Float[at.Array, " k"],
+) -> at.Float[at.Array, "b k"]:
+    """Reduce an ensemble of categorical logits to a single target distribution.
+
+      - "mean": mean of the ensemble's softmax probabilities (BRC-faithful).
+      - "min":  per-sample, pick the member with the lowest expected value and
+                keep its *full* distribution. Conservative, yet still a valid
+                distribution (never collapses to a scalar).
+    """
+    probs = jax.nn.softmax(jnp.asarray(logits, dtype=jnp.float32), axis=-1)
+    if mode == "mean":
+        return jnp.mean(probs, axis=0)
+    if mode == "min":
+        means = jnp.sum(probs * bin_centers, axis=-1)  # [n, b]
+        sel = jnp.argmin(means, axis=0)  # [b]
+        batch = jnp.arange(probs.shape[1])
+        return probs[sel, batch]  # [b, k]
+    raise ValueError(f"Unknown distributional_target_reduction: {mode!r}")
+
+
+def categorical_project(
+    next_probs: at.Float[at.Array, "b k"],
+    reward: at.Float[at.Array, " b"],
+    discount: at.Float[at.Array, " b"],
+    bin_centers: at.Float[at.Array, " k"],
+) -> at.Float[at.Array, "b k"]:
+    """C51 categorical projection of a next-state value distribution.
+
+    Applies the (entropy-free) Bellman operator ``Tz = reward + discount * z`` to
+    each support atom ``z``, clips to the support, and projects the result back
+    onto the fixed bins via linear interpolation. ``discount`` already folds in
+    the terminal mask (``0`` at a terminal step -> ``Tz = reward``).
+    """
+    next_probs = jnp.asarray(next_probs, dtype=jnp.float32)
+    reward = jnp.asarray(reward, dtype=jnp.float32)
+    discount = jnp.asarray(discount, dtype=jnp.float32)
+    k = bin_centers.shape[0]
+    v_min = bin_centers[0]
+    v_max = bin_centers[-1]
+    delta_z = (v_max - v_min) / (k - 1)
+
+    tz = reward[:, jnp.newaxis] + discount[:, jnp.newaxis] * bin_centers[jnp.newaxis, :]
+    tz = jnp.clip(tz, v_min, v_max)
+    b = (tz - v_min) / delta_z  # [b, k] fractional bin positions
+    lower = jnp.floor(b)
+    upper = jnp.ceil(b)
+    lower_idx = lower.astype(jnp.int32)
+    upper_idx = upper.astype(jnp.int32)
+    # Mass split; when b lands exactly on a bin (lower == upper) keep full mass there.
+    lower_w = next_probs * (upper + (lower == upper).astype(jnp.float32) - b)
+    upper_w = next_probs * (b - lower)
+    lower_oh = jax.nn.one_hot(lower_idx, k)  # [b, k_src, k_dst]
+    upper_oh = jax.nn.one_hot(upper_idx, k)
+    target = jnp.sum(
+        lower_w[..., jnp.newaxis] * lower_oh + upper_w[..., jnp.newaxis] * upper_oh,
+        axis=1,
+    )
+    return target
+
+
 def make_value_distribution(
     logits: at.Float[at.Array, "..."],
     num_value_bins: int = 1,

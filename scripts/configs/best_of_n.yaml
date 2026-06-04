@@ -25,6 +25,11 @@ params:
   rl.critic.td_weight_schedule.init_value: [0.5]
   rl.critic.td_weight_schedule.end_value: [0.5]
   rl.critic.td_weight_schedule.switch_step: [500000]
+
+  # Categorical critic trained via distributional RL (C51 Bellman backup).
+  rl.critic.use_distributional_critic: [True]
+  rl.critic.num_value_bins: [51]
+  rl.critic.distributional_target_reduction: [mean]
   rl.n_samples: [32]
 
   seed: [0]

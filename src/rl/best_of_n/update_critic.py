@@ -21,7 +21,13 @@ from src.rl.networks.rl_networks import (
     StateActionCritic,
     StateValue,
 )
-from src.rl.value_distribution import get_value_bounds, make_value_distribution
+from src.rl.value_distribution import (
+    get_value_bounds,
+    make_value_distribution,
+    make_bin_centers,
+    categorical_project,
+    reduce_ensemble_probs,
+)
 
 
 CriticBatch = tuple[
@@ -44,6 +50,12 @@ from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
 def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, StateValueDef]:
+    # The distributional V-target is the Q distribution itself (and vice versa), which is
+    # only valid when both critics share an identical categorical support.
+    if config.rl.critic.use_distributional_critic:
+        assert config.rl.critic.num_value_bins > 1, (
+            "use_distributional_critic=True requires num_value_bins > 1."
+        )
     critic_encoder_hidden_dims = config.rl.critic.encoder_hidden_dims
     critic_decoder_hidden_dims = config.rl.critic.decoder_hidden_dims
     critic_num_qs = config.rl.critic.num_qs
@@ -333,17 +345,34 @@ def train_q_step(
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         q_logits = critic_model(observation, actions)
-        bootstrapped_values = summarize_critic_values(
-            target_value_model(next_observation),
-            config,
-            critic_reduction=config.rl.critic.reduction,
-        )
-        td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
         _lower, _upper = get_value_bounds(config)
-        q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        num_bins = config.rl.critic.num_value_bins
+        q_dist = make_value_distribution(q_logits, num_bins, _lower, _upper, config.rl.critic.value_target_type)
         td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
-        td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+
+        if config.rl.critic.use_distributional_critic:
+            # Distributional Bellman backup: project V(s')'s distribution under Tz = r + gamma * z.
+            centers = make_bin_centers(_lower, _upper, num_bins)
+            next_probs = reduce_ensemble_probs(
+                target_value_model(next_observation),
+                config.rl.critic.distributional_target_reduction,
+                centers,
+            )
+            target_probs = jax.lax.stop_gradient(
+                categorical_project(next_probs, reward, discount, centers)
+            )
+            q_logprobs = jax.nn.log_softmax(q_logits, axis=-1)
+            td_loss = -jnp.mean(jnp.sum(target_probs[jnp.newaxis] * q_logprobs, axis=-1))
+        else:
+            bootstrapped_values = summarize_critic_values(
+                target_value_model(next_observation),
+                config,
+                critic_reduction=config.rl.critic.reduction,
+            )
+            td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
+            td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+
         mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
@@ -408,15 +437,31 @@ def train_value_step(
         td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         value_logits = critic_model(observation)
-        q_values = summarize_critic_values(
-            target_q_model(observation, actions),
-            config,
-            critic_reduction=config.rl.critic.reduction,
-        )
         _lower, _upper = get_value_bounds(config)
-        v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        num_bins = config.rl.critic.num_value_bins
+        v_dist = make_value_distribution(value_logits, num_bins, _lower, _upper, config.rl.critic.value_target_type)
+
+        if config.rl.critic.use_distributional_critic:
+            # V regresses Q directly (identity Bellman map): target = reduced Q(s,a) distribution.
+            centers = make_bin_centers(_lower, _upper, num_bins)
+            target_probs = jax.lax.stop_gradient(
+                reduce_ensemble_probs(
+                    target_q_model(observation, actions),
+                    config.rl.critic.distributional_target_reduction,
+                    centers,
+                )
+            )
+            v_logprobs = jax.nn.log_softmax(value_logits, axis=-1)
+            td_loss = -jnp.mean(jnp.sum(target_probs[jnp.newaxis] * v_logprobs, axis=-1))
+        else:
+            q_values = summarize_critic_values(
+                target_q_model(observation, actions),
+                config,
+                critic_reduction=config.rl.critic.reduction,
+            )
+            td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
+
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
-        td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
             "value_mean": jnp.mean(v_dist.mean()),
