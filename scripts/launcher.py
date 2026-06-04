@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Default SLURM settings matching existing bash scripts
 DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
-DEFAULT_DURATION = "03:30:00"
+DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
 DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
 RESULTS_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/results"
@@ -328,7 +328,7 @@ def main() -> None:
     parser.add_argument("--config", type=str, default="configs/filtered_sft.yaml")
     parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
     parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local"], help="Execution mode")
-    parser.add_argument("--duration", default="03:30:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     parser.add_argument("--requeue", action="store_true", help="Submit requeue-safe resumable jobs")

@@ -4,21 +4,21 @@ project_name: vla-post-training
 group_name: fsft_tune_libero_v0
 params:
   lr_schedule.value: [5e-4, 5e-5, 5e-6]
-  num_train_steps: [10_000]
+  num_train_steps: [5_000]
   overwrite: [True]
 
-  collect.eval_interval: [9999]  # only eval at start and end
-  collect.num_initial_rollouts: [5]
+  collect.eval_interval: [4999]  # only eval at start and end
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
-    [1000, 5],
-    [1000, 20],
-    [200, 5],
-    [200, 20],
-    [10000, 1000],  # offline/batched setting
+    [500, 5],
+    [500, 20],
+    [100, 5],
+    [100, 20],
+    [5001, 1000],  # offline/batched setting
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
     [libero, libero_90_79, libero_90_79],
     [libero, libero_90_31, libero_90_31],
+    [libero, libero_90_59, libero_90_59],
   ]
 
   rl.buffer_capacity: [500000]
