@@ -29,10 +29,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
 )
 from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
 from src.rl.networks.rl_networks import ObsType
-from src.rl.filtered_sft_agent.filtered_sft_learner import (
-    FilteredSFTLearner,
-    _copy_nnx_state,
-)
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
@@ -171,18 +168,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             ),
             donate_argnums=(1,),
         )
-
-    def _maybe_restore_policy_ema_after_resume(self):
-        if not self._resume_restore_ema:
-            return
-        self._train_state = dataclasses.replace(
-            self._train_state,
-            ema_decay=self._resume_ema_decay,
-            ema_params=_copy_nnx_state(self._train_state.params),
-        )
-        self._resume_restore_ema = False
-        self._resume_ema_decay = None
-        self._refresh_update_functions()
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
@@ -715,7 +700,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
 
             self._train_state = policy_state
-            self._maybe_restore_policy_ema_after_resume()
             scale, bias = 1.0, 0.0
             normalizer_config = self._config.rl.normalizer_config
             if normalizer_config.method is not None:

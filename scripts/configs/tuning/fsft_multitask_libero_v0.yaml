@@ -5,7 +5,6 @@ group_name: fsft_multitask_libero_v0
 params:
   lr_schedule.value: [5e-5]  # TODO: update
   num_train_steps: [10_000]
-  overwrite: [True]
 
   collect.eval_interval: [9999]  # only eval at start and end
   collect.num_initial_rollouts: [5]

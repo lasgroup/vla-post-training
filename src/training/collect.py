@@ -116,6 +116,7 @@ def collect_data(
     agent: Agent, env: BaseVectorEnv, config, step: int
 ):
     agent.start_data_collection(step=step)
+    env.seed(config.seed + step)
 
     total_episodes = 0
     total_successes = 0

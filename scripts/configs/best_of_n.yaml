@@ -6,7 +6,6 @@ params:
   log_interval: [25]
   save_interval: [100000]
   num_train_steps: [100000]
-  overwrite: [True]
 
   collect.collect_interval: [6000]
   collect.eval_interval: [10000]

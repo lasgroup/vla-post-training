@@ -26,10 +26,7 @@ from src.rl.best_of_n.update_critic import (
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.networks.rl_networks import ObsType
-from src.rl.filtered_sft_agent.filtered_sft_learner import (
-    FilteredSFTLearner,
-    _copy_nnx_state,
-)
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import BestofNLearnerConfig
 
@@ -133,18 +130,6 @@ class BestofNLearner(FilteredSFTLearner):
             ),
             donate_argnums=(1, 2),
         )
-
-    def _maybe_restore_policy_ema_after_resume(self):
-        if not self._resume_restore_ema:
-            return
-        self._train_state = dataclasses.replace(
-            self._train_state,
-            ema_decay=self._resume_ema_decay,
-            ema_params=_copy_nnx_state(self._train_state.params),
-        )
-        self._resume_restore_ema = False
-        self._resume_ema_decay = None
-        self._refresh_critic_update_function()
 
     def _rl_checkpoint_state(self) -> dict[str, training_utils.TrainState]:
         return {
@@ -595,7 +580,6 @@ class BestofNLearner(FilteredSFTLearner):
                 critic_info = {
                     f"critic/q_{key}": value for key, value in q_info.items()
                 } | {f"critic/value_{key}": value for key, value in value_info.items()}
-        self._maybe_restore_policy_ema_after_resume()
         info = (
                 critic_info
                 | {

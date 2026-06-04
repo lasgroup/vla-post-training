@@ -6,7 +6,6 @@ params:
   log_interval: [25]
   lr_schedule.value: [2.5e-5]
   num_train_steps: [5_000]
-  overwrite: [True]
 
   collect.collect_interval: [300]
   collect.num_eval_rollouts: [8]

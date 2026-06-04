@@ -15,7 +15,6 @@ config_name: pi05_libero_online_filtered_sft
 project_name: base_policy_eval
 group_name: base_policy_eval
 params:
-  overwrite: [True]            # fresh throwaway checkpoint dir, no resume
   num_train_steps: [0]         # eval.py ignores this; set 0 for clarity
 
   # All 90 LIBERO-90 tasks (inclusive range). 10 rollouts each = 900 episodes.

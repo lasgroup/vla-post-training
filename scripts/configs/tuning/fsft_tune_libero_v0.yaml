@@ -5,7 +5,6 @@ group_name: fsft_tune_libero_v0
 params:
   lr_schedule.value: [5e-4, 5e-5, 5e-6]
   num_train_steps: [5_000]
-  overwrite: [True]
 
   collect.eval_interval: [4999]  # only eval at start and end
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [

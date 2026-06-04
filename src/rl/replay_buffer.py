@@ -75,7 +75,6 @@ class ReplayBuffer(Dataset):
         self._traj_counter = 0
         self._start = 0
         self.traj_bounds = dict()
-        self.streaming_buffer_size = None  # this is for streaming the online data
 
     def __len__(self) -> int:
         return self.size
@@ -185,10 +184,7 @@ class ReplayBuffer(Dataset):
         keys: Optional[Iterable[str]] = None,
         indx: Optional[np.ndarray] = None,
     ) -> frozen_dict.FrozenDict:
-        if self.streaming_buffer_size:
-            indices = np.random.randint(0, self.streaming_buffer_size, batch_size)
-        else:
-            indices = np.random.randint(0, self.size, batch_size)
+        indices = np.random.randint(0, self.size, batch_size)
         data_dict = {}
         for x in self.data:
             if isinstance(self.data[x], np.ndarray):
@@ -208,10 +204,7 @@ class ReplayBuffer(Dataset):
         keys: Optional[Iterable[str]] = None,
         indx: Optional[np.ndarray] = None,
     ) -> tuple[frozen_dict.FrozenDict, np.ndarray]:
-        if self.streaming_buffer_size:
-            indices = np.random.randint(0, self.streaming_buffer_size, batch_size)
-        else:
-            indices = np.random.randint(0, self.size, batch_size)
+        indices = np.random.randint(0, self.size, batch_size)
         data_dict = {}
         for x in self.data:
             if isinstance(self.data[x], np.ndarray):
@@ -337,7 +330,6 @@ class ShardedReplayBuffer:
         self._rng = np.random.default_rng(seed)
         self.total_inserted = 0
         self._persisted_total_inserted = 0
-        self._latest_saved_shard_path: Path | None = None
 
     @staticmethod
     def _allocate_storage(dummy_data: NestedData, capacity: int) -> NestedData:
@@ -445,22 +437,14 @@ class ShardedReplayBuffer:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         delta_count = self.total_inserted - self._persisted_total_inserted
+        delta_count = min(delta_count, self.size)  # this can cause non-determinism
         if delta_count < 0:
             raise ValueError("Replay buffer total_inserted went backwards.")
         if delta_count == 0:
             logging.info(
-                "No new replay transitions to save; reusing latest shard %s",
-                self._latest_saved_shard_path,
+                "No new replay transitions to save; reusing latest shard.",
             )
-            return {
-                "size": int(self.size),
-                "total_inserted": int(self.total_inserted),
-                "path": (
-                    None
-                    if self._latest_saved_shard_path is None
-                    else str(self._latest_saved_shard_path)
-                ),
-            }
+            return
 
         shard_data = self._slice_storage(self._recent_indices(delta_count))
         num_transitions = int(delta_count)
@@ -483,26 +467,17 @@ class ShardedReplayBuffer:
                 tmp_path.unlink()
 
         self._persisted_total_inserted = int(self.total_inserted)
-        self._latest_saved_shard_path = path
         logging.info(
             "Saved replay buffer shard to %s (new transitions=%d, replay size=%d)",
             path,
             num_transitions,
             self.size,
         )
-        return {
-            "size": int(self.size),
-            "total_inserted": int(self.total_inserted),
-            "path": str(path),
-        }
 
     def restore_shards(
         self,
         shard_dir: str | Path,
         *,
-        step: int | None = None,
-        total_inserted: int | None = None,
-        latest_shard_path: str | Path | None = None,
         rng_state_json: str | None = None,
     ) -> dict[str, int | str | None]:
         shard_dir = Path(shard_dir)
@@ -514,44 +489,22 @@ class ShardedReplayBuffer:
         self.ptr = 0
         self.size = 0
         self.total_inserted = 0
-        self._persisted_total_inserted = 0
-        self._latest_saved_shard_path = None
         self._refresh_storage_views()
         shard_paths = sorted(shard_dir.glob("step_*.h5"))
-        if step is not None:
-            shard_paths = [p for p in shard_paths if int(p.stem.split("_")[-1]) <= int(step)]
 
         for shard_path in shard_paths:
             with h5py.File(shard_path, "r") as f:
                 restored_data = read_nested(f["transitions"])
             self.insert(restored_data)
-            self._latest_saved_shard_path = shard_path
 
-        if total_inserted is not None:
-            self.total_inserted = int(total_inserted)
-        self._persisted_total_inserted = int(self.total_inserted)
-        self._latest_saved_shard_path = (
-            None if latest_shard_path is None else Path(latest_shard_path)
-        )
+        self._persisted_total_inserted = self.total_inserted
         self.set_rng_state_json(rng_state_json)
 
         logging.info(
-            "Restored replay buffer from shards in %s (step=%s, transitions=%d, latest shard=%s)",
+            "Restored replay buffer from shards in %s (transitions=%d)",
             shard_dir,
-            step,
             self.size,
-            self._latest_saved_shard_path,
         )
-        return {
-            "step": (None if step is None else int(step)),
-            "size": int(self.size),
-            "total_inserted": int(self.total_inserted),
-            "path": (
-                None
-                if self._latest_saved_shard_path is None
-                else str(self._latest_saved_shard_path)
-            ),
-        }
 
 
 if __name__ == "__main__":

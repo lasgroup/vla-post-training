@@ -128,7 +128,6 @@ class FlowGRPOLearner(MPOWeightedSFTLearner):
                     1.0,         # scale
                 )
             self._train_state = policy_state
-            self._maybe_restore_policy_ema_after_resume()
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
         info = (
             actor_info

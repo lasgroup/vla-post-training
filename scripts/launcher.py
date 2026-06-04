@@ -24,7 +24,7 @@ DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
-DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
+DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 1200
 RESULTS_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/results"
 
 
@@ -331,7 +331,7 @@ def main() -> None:
     parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
-    parser.add_argument("--requeue", action="store_true", help="Submit requeue-safe resumable jobs")
+    parser.add_argument("--skip_requeue", action="store_true", help="Submit requeue-safe resumable jobs")
 
     args = parser.parse_args()
 
@@ -339,7 +339,7 @@ def main() -> None:
         config = config = yaml.load(f, Loader=yaml.FullLoader)
 
     combos = dict_permutations(config["params"])
-    if args.requeue:
+    if not args.skip_requeue:
         combos = [apply_requeue_flags(combo) for combo in combos]
 
     generate_run_commands(
@@ -354,7 +354,7 @@ def main() -> None:
         partition=args.partition,
         dry=args.dry,
         prompt=not args.force,
-        requeue=args.requeue
+        requeue=not args.skip_requeue
     )
 
 

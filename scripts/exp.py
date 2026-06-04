@@ -52,6 +52,13 @@ from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, init_wandb
 
 
+import signal
+_stop = False
+def _on_term(signum, frame):
+    global _stop; _stop = True
+signal.signal(signal.SIGTERM, _on_term)
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -101,7 +108,6 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
-            save_epoch_state(agent, config)
 
         if step % config.collect.eval_interval == 0:
             # Molmo envs can hold onto GPU render memory, so keep eval envs
@@ -144,9 +150,9 @@ def main(config: _config.OnlineTrainConfig):
             wandb.log(reduced_info, step=step)
             infos = []
 
-    save_epoch_state(agent, config)
-    logging.info("Waiting for checkpoint manager to finish")
-    agent._checkpoint_manager.wait_until_finished()
+        if _stop or step == config.num_train_steps - 1:
+            save_epoch_state(agent, config, prepare_for_resume=_stop)
+            break
 
 
 if __name__ == "__main__":

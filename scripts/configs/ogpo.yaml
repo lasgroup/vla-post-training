@@ -7,7 +7,6 @@ params:
   lr_schedule.value: [2.5e-5]
   num_train_steps: [10_000]
   batch_size: [256]
-  overwrite: [True]
   # Polyak target for PG: ema_decay=0.995 ≈ original OGPO's actor_tau=0.005.
   # Keeps the "old" policy close to current so the PPO ratio stays near 1.
   ema_decay: [0.995]
