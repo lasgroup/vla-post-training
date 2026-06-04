@@ -25,8 +25,6 @@ params:
   rl.critic.td_weight_schedule.init_value: [0.5]
   rl.critic.td_weight_schedule.end_value: [0.5]
   rl.critic.td_weight_schedule.switch_step: [500000]
-  rl.critic.use_bronet: [False]
-  rl.critic.bronet_hidden_dim: [512]
   rl.n_samples: [32]
 
   seed: [0]
