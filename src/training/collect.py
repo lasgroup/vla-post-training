@@ -123,10 +123,9 @@ def collect_data(
     episodes_per_task = {k: 0 for k in tasks}
     successes_per_task = {k: 0 for k in tasks}
     
+    num_rollouts_per_task = config.collect.num_rollouts
     if step == 0 and config.collect.num_initial_rollouts is not None:
-        num_rollouts_per_task = config.collect.num_initial_rollouts
-    else:
-        num_rollouts_per_task = config.collect.num_rollouts
+        num_rollouts_per_task += config.collect.num_initial_rollouts
     num_rollouts = num_rollouts_per_task * len(config.collect.tasks)
 
     repeated_task_ids = []

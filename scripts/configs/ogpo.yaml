@@ -19,7 +19,6 @@ params:
   collect.num_eval_rollouts: [8]
   collect.env_num: [1]
   collect.eval_env_num: [1]
-  collect.use_time_to_success_as_reward: [True]
   !!python/tuple [collect.tasks, collect.eval_tasks]: [
     [libero_90_59, libero_90_59],
   ]
