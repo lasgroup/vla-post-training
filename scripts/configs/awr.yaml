@@ -21,7 +21,6 @@ params:
   rl.online_ratio: [1.0]
   rl.policy.training_start_step: [900]
   rl.policy.update_interval: [1]
-  rl.policy.reset_params_to_ema_period: [500]
   rl.store_success_episodes_only: [True]
   rl.critic.td_weight_schedule.switch_step: [1_000_000]
   rl.critic.use_ema: [False]

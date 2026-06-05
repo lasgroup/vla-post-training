@@ -454,9 +454,6 @@ class DSRLLearner(Agent):
             dtype=np.float32,
         )
 
-    def eval_actions(self, observations, **kwargs):
-        return self._generate_actions(observations, deterministic=True, **kwargs)
-
     def sample_actions(self, observations, **kwargs):
         return self._generate_actions(observations, deterministic=False, **kwargs)
 

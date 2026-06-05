@@ -30,11 +30,6 @@ class Agent(object):
     base_dir: str = "/agent"
 
     @abstractmethod
-    def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        """Deterministic action decoding."""
-        raise NotImplementedError
-
-    @abstractmethod
     def sample_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:

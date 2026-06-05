@@ -43,7 +43,6 @@ def train_step(
     policy.train()
 
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    reset_period = config.rl.policy.reset_params_to_ema_period
     normalizer_config = config.rl.normalizer_config
 
     if config.rl.use_mc_returns:
@@ -148,18 +147,6 @@ def train_step(
                 new_params,
             ),
         )
-        if reset_period:
-            step = new_state.step
-
-            def keep_state(state):
-                return state
-
-            def revert_to_ema(state):
-                return state.replace(params=jax.tree.map(lambda x: x, state.ema_params))
-
-            new_state = jax.lax.cond(
-                step % reset_period == 0, revert_to_ema, keep_state, new_state
-            )
 
     # Filter out params that aren't kernels.
     kernel_params = nnx.state(

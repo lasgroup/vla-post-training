@@ -117,7 +117,6 @@ class RLAlgorithmConfig:
 class PolicyTrainingConfig:
     update_interval: int = 1
     training_start_step: int = 0
-    reset_params_to_ema_period: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -346,7 +345,6 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
-    requeue: bool = False
 
     def __post_init__(self):
         super().__post_init__()
