@@ -36,6 +36,7 @@ def evaluate_policy(
     for t in config.collect.eval_tasks:
         repeated_task_ids.extend([t] * num_rollouts_per_task)
     num_rollouts = num_rollouts_per_task * len(config.collect.eval_tasks)
+    agent.start_data_collection()
 
     with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
 
@@ -104,6 +105,7 @@ def evaluate_policy(
 
             obs = next_obs
 
+    agent.end_data_collection()
     metrics = {"eval/success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
     if successful_episode_lengths:
         metrics["eval/mean_success_episode_length"] = np.mean(successful_episode_lengths)

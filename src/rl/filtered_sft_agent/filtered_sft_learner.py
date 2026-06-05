@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import functools
 import gc
 import json
@@ -110,13 +111,22 @@ def _load_weights_and_validate(
     )
 
 
-def _copy_nnx_state(state: nnx.State) -> nnx.State:
-    def _copy_value(_k, v):
-        if hasattr(v, "value") and hasattr(v, "replace"):
-            return v.replace(v.value.copy())
-        return v
+def _batch_axis_sharding(pytree, mesh: jax.sharding.Mesh):
+    n = mesh.shape[sharding.BATCH_AXIS]
+    replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
-    return state.map(_copy_value)
+    def shard(arr):
+        if n > 1 and arr.ndim >= 2:
+            for axis in np.argsort(arr.shape)[::-1]:
+                if arr.shape[axis] % n == 0:
+                    spec = [None] * arr.ndim
+                    spec[axis] = sharding.BATCH_AXIS
+                    return jax.sharding.NamedSharding(
+                        mesh, jax.sharding.PartitionSpec(*spec)
+                    )
+        return replicated
+
+    return jax.tree.map(shard, pytree)
 
 
 @at.typecheck
@@ -223,15 +233,6 @@ class FilteredSFTLearner(Agent):
         self._replicated_sharding = jax.sharding.NamedSharding(
             self._mesh, jax.sharding.PartitionSpec()
         )
-        self._policy_sharding_spec = jax.sharding.NamedSharding(
-            jax.sharding.Mesh(
-                mesh_utils.create_device_mesh((len(jax.devices()),)),
-                axis_names=("batch",),
-            ),
-            jax.sharding.PartitionSpec(
-                "batch",
-            ),
-        )
 
         # Initialize checkpoint manager.
         self._checkpoint_manager, self._resuming = (
@@ -303,6 +304,21 @@ class FilteredSFTLearner(Agent):
         logging.info(
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
+
+        # shard the EMA across devices
+        self._ema_sharding = _batch_axis_sharding(self._train_state.ema_params, self._mesh)
+        self._ema = jax.device_put(self._train_state.ema_params, self._ema_sharding)
+        self._train_state = dataclasses.replace(self._train_state, ema_params=None, ema_decay=None)
+        decay = self._config.ema_decay
+        self._ema_update_fn = jax.jit(
+            lambda ema, params: jax.tree.map(
+                lambda e, p: decay * e + (1.0 - decay) * p, ema, params
+            ),
+            in_shardings=(self._ema_sharding, self._train_state_sharding.params),
+            out_shardings=self._ema_sharding,
+            donate_argnums=0,
+        )
+        gc.collect()
 
         # prepare train_step
         self._refresh_train_step()
@@ -489,7 +505,7 @@ class FilteredSFTLearner(Agent):
         # unbatches when batch_size == 1, so add it back for single-env runs.
         num_devices = len(jax.devices())
         sharding_spec = (
-            self._policy_sharding_spec if batch_size % num_devices == 0 else None
+            self._data_sharding if batch_size % num_devices == 0 else None
         )
         if not return_prefix_rep:
             actions = self._policy.infer_with_model(
@@ -551,9 +567,6 @@ class FilteredSFTLearner(Agent):
 
         return np.asarray(actions, dtype=np.float32)
 
-    def eval_actions(self, observations: np.ndarray | Dict, **kwargs) -> np.ndarray:
-        return self._generate_actions(observations, **kwargs)
-
     def sample_actions(
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
@@ -570,8 +583,14 @@ class FilteredSFTLearner(Agent):
     def save_checkpoint(self, step: int | None = None):
         if step is None:
             step = self.training_steps
+        state_to_save = self._train_state
+        if self._ema is not None:
+            ema_rep = jax.device_put(self._ema, self._replicated_sharding)
+            state_to_save = dataclasses.replace(
+                state_to_save, ema_params=ema_rep, ema_decay=self._config.ema_decay
+            )
         _checkpoints.save_state(
-            self._checkpoint_manager, self._train_state, self._data_loader, step
+            self._checkpoint_manager, state_to_save, self._data_loader, step
         )
         self._checkpoint_manager.wait_until_finished()
 
@@ -618,12 +637,7 @@ class FilteredSFTLearner(Agent):
             lambda x: x[np.newaxis], episode_data[-1]["next_observation"]
         )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        model = nnx.merge(self._train_state.model_def, params)
+        model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
         model.eval()
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
@@ -738,12 +752,19 @@ class FilteredSFTLearner(Agent):
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
+        assert self._train_state.ema_params is None, "EMA parameters should be offloaded except during data collection."
+        ema_rep = jax.device_put(self._ema, self._replicated_sharding)
+        self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
+        # offload EMA
+        assert self._train_state.ema_params is not None, "EMA parameters should be on device during data collection."
+        self._train_state = dataclasses.replace(self._train_state, ema_params=None)
+        gc.collect()
         return collected_episodes
 
     def update(self):
@@ -782,6 +803,7 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
+        self._ema = self._ema_update_fn(self._ema, self._train_state.params)
         info = info | {
             "online_buffer_size": jnp.asarray(
                 float(self._online_data_buffer.size), dtype=jnp.float32
