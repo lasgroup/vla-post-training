@@ -49,7 +49,6 @@ from flax.training import common_utils
 import jax
 import jax.numpy as jnp
 import tqdm_loggable.auto as tqdm
-import wandb
 
 
 from src.envs import make_env
@@ -61,7 +60,7 @@ from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.runtime_state import save_epoch_state
-from src.training.utils import init_logging, init_wandb
+from src.training.utils import init_logging, Logger
 
 
 import signal
@@ -88,7 +87,7 @@ def main(config: _config.OnlineTrainConfig):
     else:
         raise ValueError(f"Unsupported algorithm: {config.rl}")
     agent = algo_class(config)
-    init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    logger = Logger(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     num_devices = max(1, jax.device_count())
     env_fn = make_env(config, config.collect.tasks, num_devices=num_devices)
@@ -115,7 +114,7 @@ def main(config: _config.OnlineTrainConfig):
                 config=config,
                 step=step,
             )
-            wandb.log(collect_info, step=step)
+            logger.log_metrics(collect_info, step=step)
             if n_collected_episodes > 0:
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
@@ -141,7 +140,7 @@ def main(config: _config.OnlineTrainConfig):
                 step=step,
             )
             eval_env.close()
-            wandb.log(eval_info, step=step)
+            logger.log_metrics(collect_info, step=step)
             logging.info(
                 f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
             )
@@ -159,7 +158,7 @@ def main(config: _config.OnlineTrainConfig):
             reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
+            logger.log_metrics(collect_info, step=step)
             infos = []
 
         if _stop or step == config.num_train_steps - 1:

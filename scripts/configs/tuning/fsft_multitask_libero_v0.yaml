@@ -3,13 +3,12 @@ config_name: pi05_libero_online_filtered_sft
 project_name: vla-post-training
 group_name: fsft_multitask_libero_v0
 params:
-  lr_schedule.value: [5e-5]  # TODO: update
-  num_train_steps: [10_000]
+  lr_schedule.value: [2.5e-5]
+  num_train_steps: [5_000]
 
-  collect.eval_interval: [9999]  # only eval at start and end
-  collect.num_initial_rollouts: [5]
+  collect.eval_interval: [4999]
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
-    [200, 5],  # TODO: tune, choose whether batched
+    [500, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
     [libero, libero_90_79, libero_90_79],
@@ -57,6 +56,5 @@ params:
 
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
-  rl.policy.training_start_step: [200]
 
   seed: [0, 1]

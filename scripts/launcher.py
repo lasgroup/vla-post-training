@@ -8,7 +8,6 @@ Usage:
 import argparse
 import datetime as dt
 import itertools
-import logging
 import os
 import secrets
 import shlex
@@ -24,7 +23,7 @@ DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
-DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 1200
+DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 1800
 RESULTS_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/results"
 
 
@@ -240,7 +239,7 @@ def generate_run_commands(
 
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
         if requeue:
-            bsub_cmd += f"--requeue --signal=B:TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} "
+            bsub_cmd += f"--requeue --signal=B:TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} --open-mode=append "
 
         cluster_cmds = []
         for i, (cmd, combo) in enumerate(zip(command_list, combos)):
@@ -307,19 +306,11 @@ def apply_requeue_flags(flags: Dict[str, Any]) -> Dict[str, Any]:
     desired_values = {
         "resume": True,
         "overwrite": False,
-        "requeue": True,
     }
     for key, value in desired_values.items():
         if updated.get(key) != value:
             overrides[key] = (updated.get(key), value)
         updated[key] = value
-    if overrides:
-        logging.warning(
-            "Requeue enabled: overriding flags for resumable execution: %s",
-            ", ".join(
-                f"{key}={old!r}->{new!r}" for key, (old, new) in overrides.items()
-            ),
-        )
     return updated
 
 

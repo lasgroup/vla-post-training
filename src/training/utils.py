@@ -1,5 +1,6 @@
 import dataclasses
 import etils.epath as epath
+import json
 import logging
 import numpy as np
 from pathlib import Path
@@ -109,20 +110,39 @@ def init_wandb(
         wandb.init(mode="disabled")
         return
 
+    wandb_settings = wandb.Settings(console_multipart=True)
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="must", project=config.project_name, settings=wandb_settings)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
             group=config.group_name,
+            settings=wandb_settings,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
+
+
+class Logger:
+
+    def __init__(self, config, resuming, enabled):
+        init_wandb(config, resuming=resuming, enabled=enabled)
+        self.ckpt_dir = config.checkpoint_dir
+        self.wandb_enabled = config.wandb_enabled
+
+    def log_metrics(self, info, step):
+        if self.wandb_enabled:
+            wandb.log(info, step=step)
+        record = {k: float(v) if isinstance(v, (int, float)) else str(v) for k, v in info.items()}
+        record['step'] = int(step)
+        log_path = epath.Path(self.ckpt_dir) / "metrics.jsonl"
+        with log_path.open("a") as f:
+            f.write(json.dumps(record) + "\n")
 
 
 def log_images(batch):
