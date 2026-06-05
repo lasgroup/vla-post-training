@@ -2,7 +2,7 @@
 import dataclasses
 import functools
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any
 import gc
 
 import etils.epath as epath
@@ -84,27 +84,27 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             critic_def=state_value_def,
             dummy_obs=dummy_obs,
         )
+        self._normalizer = Normalizer(
+            ema_weight=self._config.rl.normalizer_config.ema_weight,
+        )
+        self._normalizer_state = jax.device_put(
+            self._normalizer.init(), self._replicated_sharding
+        )
+
         self._rl_state_checkpointer = ocp.StandardCheckpointer()
         if self._resuming:
-            self._restore_rl_checkpoint(step=int(self.training_steps))
+            self._restore_rl_checkpoint(step=self.training_steps)
         jax.block_until_ready(self._state_action_critic_state)
         jax.block_until_ready(self._value_state)
 
         del self._train_step
         gc.collect()
 
-        self._normalizer = Normalizer(
-            ema_weight=self._config.rl.normalizer_config.ema_weight,
-        )
-        self._normalizer_state = self._normalizer.init()
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
         self._q_train_step = functools.partial(train_q_step, self._config)
         self._value_train_step = functools.partial(train_value_step, self._config)
         self._train_step = functools.partial(train_actor_step, self._config)
         self._refresh_update_functions()
-
-    def _policy_mc_return_sharding(self):
-        return self._data_sharding
 
     def _refresh_update_functions(self):
         self._train_state_sharding = sharding.fsdp_sharding(
@@ -158,7 +158,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._state_action_critic_state_sharding,
                 self._value_state_sharding,
                 self._replicated_sharding,
-                self._policy_mc_return_sharding(),
+                self._data_sharding,
                 self._data_sharding,
                 self._replicated_sharding,
             ),
@@ -192,32 +192,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
     def _restore_rl_checkpoint(self, *, step: int) -> None:
         path = self._rl_checkpoint_path(step)
-        if not path.exists():
-            logging.warning(
-                "No RL critic checkpoint found at %s; starting critics from scratch.",
-                path,
-            )
-            return
-        restored = self._rl_state_checkpointer.restore(
-            path,
-            self._rl_checkpoint_state(),
-        )
+        restored = self._rl_state_checkpointer.restore(path, self._rl_checkpoint_state())
         self._state_action_critic_state = restored["state_action_critic_state"]
         self._value_state = restored["value_state"]
         self._normalizer_state = restored["normalizer_state"]
 
     def save_checkpoint(self, step: int | None = None):
-        if step is None:
-            step = self.training_steps
         super().save_checkpoint(step=step)
         path = self._rl_checkpoint_path(step)
-        if path.exists():
-            return
         self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
-        self._rl_state_checkpointer.save(
-            path,
-            self._rl_checkpoint_state(),
-        )
+        self._rl_state_checkpointer.save(path, self._rl_checkpoint_state())
 
     def _recompute_prefix_embedding(
         self,
@@ -225,6 +209,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         observation: dict[str, Any],
         policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
+        # ema_replicated = jax.device_put(self._ema, self._replicated_sharding)
+        # model = nnx.merge(policy_state.model_def, ema_replicated)
+        # model.eval()
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
@@ -238,12 +225,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     @staticmethod
     def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
         """Merge policy params into a model. Call once per update() to avoid duplicates."""
-        params = (
-            policy_state.ema_params
-            if policy_state.ema_params is not None
-            else policy_state.params
-        )
-        model = nnx.merge(policy_state.model_def, params)
+        # TODO: this should be EMA
+        model = nnx.merge(policy_state.model_def, policy_state.params)
         model.eval()
         return model
 
@@ -346,12 +329,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
 
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
+        policy_model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
         policy_model.eval()
 
         for task, indices in task_to_indices.items():
@@ -467,7 +445,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             return
         self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
 
-    def _update_normalizer(self, normalizer_state, bias, scale) -> Tuple[NormalizerState, dict[str, at.Array]]:
+    def _update_normalizer(self, normalizer_state, bias, scale) -> tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(
             normalizer_state=normalizer_state,
             bias=bias,
@@ -481,12 +459,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     @at.typecheck
     def _update_critics(
         self,
-        batch: Dict[str, Any],
+        batch: dict[str, Any],
         q_state: training_utils.TrainState,
         value_state: training_utils.TrainState,
         policy_state: training_utils.TrainState,
         rng: at.KeyArrayLike,
-    ) -> Tuple[
+    ) -> tuple[
         training_utils.TrainState,
         training_utils.TrainState,
         dict[str, at.Array],
