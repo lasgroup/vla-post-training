@@ -107,9 +107,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._refresh_update_functions()
 
     def _refresh_update_functions(self):
-        self._train_state_sharding = sharding.fsdp_sharding(
-            self._train_state, self._mesh, log=False
-        )
 
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
             return self._update_critics(

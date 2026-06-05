@@ -4,10 +4,22 @@
 # import os
 # os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " --xla_gpu_deterministic_ops=true"
 
-# suppress Numba FNV hashing warnings
+
 import warnings
 
-warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
+
+def _silence_known_warnings():
+    # this should only affect the hash algorithm for Numba caches
+    warnings.filterwarnings("ignore", category=UserWarning, message=".*FNV hashing.*")
+    # flax deprecation from openpi code
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="flax.nnx.statelib")
+    # deprecation of type hints, partially from openpi
+    warnings.filterwarnings("ignore", message=".*deprecated by PEP 585.*")
+    # gymnasium does not like reading attributes/methods through wrappers
+    warnings.filterwarnings("ignore", message=".*env.seed to get variables.*")
+
+_silence_known_warnings()
+
 
 # suppress lerobot version warnings
 import logging

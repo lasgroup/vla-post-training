@@ -2,7 +2,7 @@
 import dataclasses
 import functools
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any
 import gc
 
 import etils.epath as epath
@@ -460,12 +460,12 @@ class BestofNLearner(FilteredSFTLearner):
     @at.typecheck
     def _update_critics(
             self,
-            batch: Dict[str, Any],
+            batch: dict[str, Any],
             q_state: training_utils.TrainState,
             value_state: training_utils.TrainState,
             policy_state: training_utils.TrainState,
             rng: at.KeyArrayLike,
-    ) -> Tuple[
+    ) -> tuple[
         training_utils.TrainState,
         training_utils.TrainState,
         dict[str, at.Array],

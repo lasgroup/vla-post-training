@@ -581,8 +581,6 @@ class FilteredSFTLearner(Agent):
         )
 
     def save_checkpoint(self, step: int | None = None):
-        if step is None:
-            step = self.training_steps
         state_to_save = self._train_state
         if self._ema is not None:
             ema_rep = jax.device_put(self._ema, self._replicated_sharding)
