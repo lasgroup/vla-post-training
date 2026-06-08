@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Default SLURM settings matching existing bash scripts
 DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
-DEFAULT_DURATION = "12:00:00"
+DEFAULT_DURATION = "03:30:00"
 DEFAULT_PARTITION = "normal"
 DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
 RESULTS_DIR = f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/results"
