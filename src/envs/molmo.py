@@ -86,6 +86,10 @@ class MolmoSpacesGymConfig:
     )
     episode_sampling: Literal["sequential", "random"] = "sequential"
     seed: int = 0
+    # sensor uuids to drop from the task sensor suite before stepping
+    # i.e. segmentation masks that are ignored by pi0.5
+    drop_sensor_uuids: tuple[str, ...] = ("object_image_points",)
+    reduce_resolution: bool = False
 
 
 class MolmoSpacesBenchmarkGymEnv(gym.Env):
@@ -117,6 +121,8 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self._task = None
         self._task_description: str | None = None
         self._closed = False
+        self._loaded_episode_id: int | None = None
+        self._prompt_sampler = None
 
         # Minimal placeholder spaces for v1.
         self.observation_space = gym.spaces.Dict({})
@@ -182,34 +188,48 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             raise RuntimeError("Task description is unavailable before reset().")
         return {**info, "task_description": self._task_description}
 
+    def _prune_unused_sensors(self) -> None:
+        if not self._config.drop_sensor_uuids:
+            return
+        sensor_suite = getattr(self._task, "_sensor_suite", None)
+        if sensor_suite is None or not hasattr(sensor_suite, "sensors"):
+            return
+        for uuid in self._config.drop_sensor_uuids:
+            sensor_suite.sensors.pop(uuid, None)
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         self._ensure_open()
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-        self._close_active_episode()
-
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "molmo_0"
         self._episode_id = int(task_id.split("_")[-1])
         episode = self._choose_episode()
-        exp_config = self._make_eval_config()
-        # Json benchmarks are authoritative; align config scene source with the selected episode.
-        # This avoids loading a default scene dataset/split (e.g. procthor-10k/val)
-        # for episodes that were generated from another source (e.g. ithor).
-        exp_config.scene_dataset = episode.scene_dataset
-        exp_config.data_split = episode.data_split
-        exp_config.task_sampler_config.render_device = self._render_device
-        prompt_sampler = self._make_prompt_sampler(exp_config)
-        prompt_sampler.next()
+        if self._config.reduce_resolution:
+            episode = episode.model_copy(update={"img_resolution": tuple(int(e // 2) for e in episode.img_resolution)})
+        reuse = self._sampler is not None and self._loaded_episode_id == self._episode_id
 
+        if not reuse:
+            self._close_active_episode()
+            exp_config = self._make_eval_config()
+            exp_config.scene_dataset = episode.scene_dataset
+            exp_config.data_split = episode.data_split
+            exp_config.task_sampler_config.render_device = self._render_device
+            self._prompt_sampler = self._make_prompt_sampler(exp_config)
+            with _suppress_molmo_spaces_output():
+                self._sampler = JsonEvalTaskSampler(exp_config, episode)
+            self._loaded_episode_id = self._episode_id
+
+        self._prompt_sampler.next()
         with _suppress_molmo_spaces_output():
-            self._sampler = JsonEvalTaskSampler(exp_config, episode)
             self._task = self._sampler.sample_task(
                 force_advance_scene=False,
                 house_index=episode.house_index,
             )
         if self._task is None:
             raise RuntimeError("JsonEvalTaskSampler returned no task.")
+
+        self._prune_unused_sensors()
 
         if self._task.env.n_batch != 1:
             raise ValueError(
@@ -218,7 +238,7 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             )
 
         self._task.register_policy(_RegisteredPolicyAdapter())
-        self._task_description = prompt_sampler.get_prompt(self._task).lower()
+        self._task_description = self._prompt_sampler.get_prompt(self._task).lower()
 
         observations, infos = self._task.reset()
         if not observations:
