@@ -138,12 +138,7 @@ class CriticTrainingConfig:
     value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
-    # True -> C51 distributional Bellman backup for the TD target (full-distribution
-    # projection), instead of regressing a scalar TD target into the bins. Requires
-    # num_value_bins > 1 (auto-set to 51 in OnlineTrainConfig.__post_init__ if <= 1).
     use_distributional_critic: bool = False
-    # How the ensemble of next-state distributions is reduced to a single target.
-    #   "mean" = mean-of-probs (BRC-faithful) | "min" = min-member selection (conservative)
     distributional_target_reduction: str = "mean"
     inference_start_step: int = 100
     # Critics are lightweight (MLP-only); a larger batch than the policy often
