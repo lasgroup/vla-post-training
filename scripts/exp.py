@@ -90,12 +90,6 @@ def main(config: _config.OnlineTrainConfig):
     logger = Logger(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     num_devices = max(1, jax.device_count())
-    env_fn = make_env(config, config.collect.tasks, num_devices=num_devices)
-    env = filtered_sft_wrap_env(
-        env_fn=env_fn,
-        config=config,
-    )
-
     start_step = int(agent.training_steps)
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
@@ -108,12 +102,18 @@ def main(config: _config.OnlineTrainConfig):
     for step in pbar:
 
         if step % config.collect.collect_interval == 0:
+            env_fn = make_env(config, config.collect.tasks, num_devices=num_devices)
+            env = filtered_sft_wrap_env(
+                env_fn=env_fn,
+                config=config,
+            )
             collect_info, n_collected_episodes = collect_data(
                 agent=agent,
                 env=env,
                 config=config,
                 step=step,
             )
+            env.close()
             logger.log_metrics(collect_info, step=step)
             if n_collected_episodes > 0:
                 logging.info(
