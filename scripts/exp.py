@@ -140,7 +140,7 @@ def main(config: _config.OnlineTrainConfig):
                 step=step,
             )
             eval_env.close()
-            logger.log_metrics(collect_info, step=step)
+            logger.log_metrics(eval_info, step=step)
             logging.info(
                 f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
             )
@@ -158,7 +158,7 @@ def main(config: _config.OnlineTrainConfig):
             reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
-            logger.log_metrics(collect_info, step=step)
+            logger.log_metrics(reduced_info, step=step)
             infos = []
 
         if _stop or step == config.num_train_steps - 1:
