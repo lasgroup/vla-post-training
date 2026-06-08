@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_aw_sft
-project_name: awr_sweep
+project_name: awr_sweep_batchsize_fix
 group_name: awr_sweep
 params:
   log_interval: [2000]
@@ -8,7 +8,7 @@ params:
   num_train_steps: [100000]
   overwrite: [True]
 
-  batch_size: [1024]
+ 
   rl.discount: [0.99]
   collect.collect_interval: [2000]
   collect.num_eval_rollouts: [8]
@@ -23,6 +23,7 @@ params:
   rl.buffer_capacity: [250000]
   rl.critic.pre_training_steps: [900]
   rl.critic.num_updates_per_batch: [1]
+  rl.crtic.batch_size: [1024]
   rl.online_ratio: [1.0]
   rl.policy.training_start_step: [900]
   rl.policy.update_interval: [1]
@@ -33,7 +34,7 @@ params:
   rl.critic.td_weight_schedule.end_value: [1]
   rl.critic.use_ema: [True]
   rl.use_mc_returns: [False]
-  rl.critic.use_bronet: [True, False]
+  rl.critic.use_bronet: [True]
   rl.critic.bronet_hidden_dim: [512]
 
   seed: [0, 1, 2]
