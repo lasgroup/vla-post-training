@@ -1,7 +1,7 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_best_of_n
 project_name: best_of_n_config_fix
-group_name: best_of_n_categorical
+group_name: best_of_n_seed_runs_categorical_44
 params:
   log_interval: [25]
   save_interval: [100000]
@@ -14,7 +14,7 @@ params:
   collect.store_prefix_rep: [True]
   collect.use_time_to_success_as_reward: [True]
   !!python/tuple [collect.tasks, collect.eval_tasks]: [
-    [libero_90_59, libero_90_59],
+    [libero_90_44, libero_90_44],
   ]
 
   batch_size: [1024]
@@ -32,4 +32,4 @@ params:
   rl.critic.distributional_target_reduction: [mean]
   rl.n_samples: [32]
 
-  seed: [0]
+  seed: [0,1,2]
