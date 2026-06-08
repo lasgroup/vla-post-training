@@ -107,7 +107,7 @@ class NormalizerConfig:
 @dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
     discount: float = 0.99
-    buffer_capacity: int = 1024
+    buffer_capacity: int = 256
     # Shared by both policy and critic sampling: fraction of each batch drawn from
     # the online replay buffer (rest comes from the offline SFT dataset).
     online_ratio: float = 0.5
@@ -357,7 +357,6 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
-    group: str | None = None
     
     def __post_init__(self):
         super().__post_init__()
