@@ -74,12 +74,12 @@ requeue_requested=0
 requeue_submitted=0
 child_pid=""
 
-handle_term() {{
+handle_requeue() {{
   if [[ "$requeue_requested" -eq 1 ]]; then
     return
   fi
   requeue_requested=1
-  echo "[$(date --iso-8601=seconds)] Received SIGTERM in batch shell for job ${{SLURM_JOB_ID}}; requesting requeue." >&2
+  echo "[$(date --iso-8601=seconds)] Received SIGUSR1 in batch shell for job ${{SLURM_JOB_ID}}; requesting requeue." >&2
   if scontrol requeue "${{SLURM_JOB_ID}}"; then
     requeue_submitted=1
     echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
@@ -91,7 +91,9 @@ handle_term() {{
   fi
 }}
 
-trap handle_term TERM
+# Self-requeue only on the time-limit pre-warning (SIGUSR1). A manual scancel
+# delivers SIGTERM, which is left untrapped so the job actually terminates.
+trap handle_requeue USR1
 
 {command} &
 child_pid=$!
@@ -239,7 +241,7 @@ def generate_run_commands(
 
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
         if requeue:
-            bsub_cmd += f"--requeue --signal=B:TERM@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} --open-mode=append "
+            bsub_cmd += f"--requeue --signal=B:USR1@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} --open-mode=append "
 
         cluster_cmds = []
         for i, (cmd, combo) in enumerate(zip(command_list, combos)):
