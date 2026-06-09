@@ -1,0 +1,41 @@
+script: scripts/exp.py
+config_name: pi05_libero_online_filtered_sft
+project_name: vla-post-training
+group_name: multitask_fsft_libero_v0
+params:
+  lr_schedule.value: [2.5e-5]
+  num_train_steps: [5_000]
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  collect.eval_interval: [4999]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
+    [500, 20],
+  ]
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [libero, libero_90_79, libero_90_79],
+    [libero, libero_90_31, libero_90_31],
+    [libero, libero_90_82, libero_90_82],
+    [libero, libero_90_26, libero_90_26],
+    [libero, [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_26,
+      ],
+      [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_26,
+      ],
+    ],
+    [libero, [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_26, libero_90_5, libero_90_37, libero_90_41, libero_90_65,
+        libero_90_11, libero_90_58, libero_90_27, libero_90_7, libero_90_28, libero_90_77, libero_90_9, libero_90_24,
+      ],
+      [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_26, libero_90_5, libero_90_37, libero_90_41, libero_90_65,
+        libero_90_11, libero_90_58, libero_90_27, libero_90_7, libero_90_28, libero_90_77, libero_90_9, libero_90_24,
+      ]
+    ]
+  ]
+
+  rl.buffer_capacity: [500000]
+  rl.online_ratio: [1.0]
+
+  seed: [2]
