@@ -43,4 +43,4 @@ params:
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
 
-  seed: [0]
+  seed: [1]

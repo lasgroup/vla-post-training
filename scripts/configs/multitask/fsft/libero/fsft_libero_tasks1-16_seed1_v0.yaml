@@ -13,15 +13,45 @@ params:
     [500, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
-    [libero, libero_90_79, libero_90_79],
-    [libero, libero_90_31, libero_90_31],
-    [libero, libero_90_82, libero_90_82],
-    [libero, libero_90_26, libero_90_26],
+    [libero, libero_90_79, 
+      [
+        libero_90_79,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
+      ]],
+    [libero, libero_90_31, 
+      [
+        libero_90_31,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
+      ]],
+    [libero, libero_90_82, [
+        libero_90_82,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
+      ]],
+    [libero, libero_90_26, [
+        libero_90_26,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
+      ]],
     [libero, [
         libero_90_79, libero_90_31, libero_90_82, libero_90_26,
       ],
       [
         libero_90_79, libero_90_31, libero_90_82, libero_90_26,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
       ],
     ],
     [libero, [
@@ -31,6 +61,10 @@ params:
       [
         libero_90_79, libero_90_31, libero_90_82, libero_90_26, libero_90_5, libero_90_37, libero_90_41, libero_90_65,
         libero_90_11, libero_90_58, libero_90_27, libero_90_7, libero_90_28, libero_90_77, libero_90_9, libero_90_24,
+        libero_90_40, libero_90_43, libero_90_49, libero_90_52, libero_90_42, libero_90_8, libero_90_88, 
+        libero_90_3, libero_90_86, libero_90_84, libero_90_25, libero_90_81, libero_90_73, libero_90_48, 
+        libero_90_53, libero_90_0, libero_90_64, libero_90_38, libero_90_70, libero_90_30, libero_90_47, 
+        libero_90_56, libero_90_72, libero_90_46, libero_90_67
       ]
     ]
   ]
