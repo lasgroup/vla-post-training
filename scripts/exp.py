@@ -162,8 +162,10 @@ def main(config: _config.OnlineTrainConfig):
             infos = []
 
         if _stop or step == config.num_train_steps - 1:
-            save_epoch_state(agent, config, prepare_for_resume=_stop)
+            save_epoch_state(agent, config, prepare_for_resume=True)
             break
+        if step % config.collect.collect_interval == 0:
+            save_epoch_state(agent, config, prepare_for_resume=True)
 
 
 if __name__ == "__main__":
