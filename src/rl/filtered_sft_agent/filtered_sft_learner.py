@@ -426,9 +426,8 @@ class FilteredSFTLearner(Agent):
                 lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
             )
         return {
-            "observation": dummy_obs_dict,
+            "observations": dummy_obs_dict,
             "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
-            "next_observation": dummy_obs_dict,
             "reward": np.zeros((1,), dtype=np.float32),
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
@@ -698,9 +697,15 @@ class FilteredSFTLearner(Agent):
         if n_windows <= 0:
             return
 
-        # process elements to account for action chunks
-        _obs = {self.obs_key_process_fn(k): v[:n_windows] for k, v in episode_data["observation"].items()}
-        _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
+        # in order to optimize memory usage, we join observations and next observations
+        # into a single array, and store it directly
+        # `observation` and `next_observation` are the same series shifted by one
+        _full_obs = {
+            self.obs_key_process_fn(k): np.concatenate(
+                [v[:n_steps], episode_data["next_observation"][k][n_steps - 1 : n_steps]], axis=0
+            )
+            for k, v in episode_data["observation"].items()
+        }
         _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
         _actions = self.post_step_action_filter(_actions)
         _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
@@ -718,23 +723,25 @@ class FilteredSFTLearner(Agent):
             actions = obs.pop("actions")
             return obs, actions
 
-        # Pop prefix before pi0 transforms (which don't handle it); re-attach after
-        prefix_emb = _obs.pop(PREFIX_EMBEDDING_NAME, None)
-        next_prefix_emb = _next_obs.pop(PREFIX_EMBEDDING_NAME, None)
-        # process observations and actions according to pi0 preprocessing
-        _next_obs, _ = transform({**_next_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
-        _obs, _actions = transform({**_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
+        prefix_emb = _full_obs.pop(PREFIX_EMBEDDING_NAME, None)
+        actions_padded = np.concatenate([_actions, np.repeat(_actions[-1:], act_h, axis=0)], axis=0)
+        _full_obs, actions_out = transform(
+            {**_full_obs, "actions": actions_padded, "prompt": str(task_description)}
+        )
         if prefix_emb is not None:
-            _obs[PREFIX_EMBEDDING_NAME] = prefix_emb
-            _next_obs[PREFIX_EMBEDDING_NAME] = next_prefix_emb
+            _full_obs[PREFIX_EMBEDDING_NAME] = prefix_emb
+        _actions = actions_out[:n_windows]
 
+        obs_index = np.arange(n_windows, dtype=np.int64)
+        next_obs_index = obs_index + act_h
         _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
         buf = target_buffer if target_buffer is not None else self._online_data_buffer
         buf.insert(
             {
-                "observation": _obs,
+                "observations": _full_obs,
+                "obs_index": obs_index,
+                "next_obs_index": next_obs_index,
                 "actions": _actions.astype(np.float32),
-                "next_observation": _next_obs,
                 "reward": _reward.astype(np.float32),
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),

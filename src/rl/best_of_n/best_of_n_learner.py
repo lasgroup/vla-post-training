@@ -175,8 +175,7 @@ class BestofNLearner(FilteredSFTLearner):
         dummy = super()._make_buffer_dummy_data()
         if self._prefix_embed_dim is not None:
             zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
-            dummy["observation"][PREFIX_EMBEDDING_NAME] = zeros
-            dummy["next_observation"][PREFIX_EMBEDDING_NAME] = zeros
+            dummy["observations"][PREFIX_EMBEDDING_NAME] = zeros
         return dummy
 
     def _recompute_prefix_embedding(
