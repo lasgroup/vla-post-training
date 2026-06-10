@@ -116,10 +116,27 @@ class CategoricalValueDistribution(ValueDistribution):
 def get_value_bounds(config) -> tuple[float, float]:
     """Return (lower_bound, upper_bound) for the value function output range.
 
-    Bounds are resolved once at startup (via resolve_critic_value_bounds) and
-    stored as concrete floats in config.rl.critic. This function simply reads them.
+    Resolved lazily. An explicit user override (both bounds set) wins;
+    otherwise the range is derived from the reward type, discount and episode
+    length, padded by half a bin for categorical critics.
     """
-    return float(config.rl.critic.value_lower_bound), float(config.rl.critic.value_upper_bound)
+    crit = config.rl.critic
+    if crit.value_lower_bound is not None and crit.value_upper_bound is not None:
+        return float(crit.value_lower_bound), float(crit.value_upper_bound)
+
+    discount = float(config.rl.discount)
+    T = int(config.collect.max_episode_steps)
+    if config.collect.use_time_to_success_as_reward:
+        lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+        upper = 0.0
+    else:
+        lower = 0.0
+        upper = 1.0
+    if crit.num_value_bins > 1:
+        half_bw = (upper - lower) / (2 * (crit.num_value_bins - 1))
+        lower -= half_bw
+        upper += half_bw
+    return float(lower), float(upper)
 
 
 def make_bin_centers(

@@ -359,35 +359,9 @@ class OnlineTrainConfig(TrainConfig):
                     "use_distributional_critic=True requires num_value_bins > 1; "
                     "set rl.critic.num_value_bins (e.g. 51) in the config."
                 )
-            if self.rl.critic.value_lower_bound is not None and self.rl.critic.value_upper_bound is not None:
-                return
-
-            discount = float(self.rl.discount)
-            T = int(self.collect.max_episode_steps)
-            if self.collect.use_time_to_success_as_reward:
-                lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
-                upper = 0.0
-            else:
-                lower = 0.0
-                upper = 1.0
-            num_bins = self.rl.critic.num_value_bins
-            if num_bins > 1:
-                half_bw = (upper - lower) / (2 * (num_bins - 1))
-                lower -= half_bw
-                upper += half_bw
-
-            object.__setattr__(
-                self,
-                'rl',
-                dataclasses.replace(
-                    self.rl,
-                    critic=dataclasses.replace(
-                        self.rl.critic,
-                        value_lower_bound=lower,
-                        value_upper_bound=upper
-                    )
-                )
-            )
+            # Value bounds are resolved lazily in get_value_bounds(), not cached
+            # here: caching into value_lower/upper_bound would suppress
+            # re-resolution after tyro/YAML overrides.
 
 
 def make_base_libero_config(
