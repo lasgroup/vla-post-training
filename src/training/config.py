@@ -351,7 +351,6 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
-    group: str = None
     
     def __post_init__(self):
         super().__post_init__()
