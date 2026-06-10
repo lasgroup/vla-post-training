@@ -32,6 +32,5 @@ params:
   rl.critic.use_distributional_critic: [True]
   rl.critic.num_value_bins: [51]
   rl.critic.distributional_target_reduction: [mean]
-  rl.n_samples: [32]
 
   seed: [0,1,2]
