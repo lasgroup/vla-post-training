@@ -448,8 +448,6 @@ class FilteredSFTLearner(Agent):
             max_capacity=self._config.rl.buffer_capacity,
             data_sharding=self._data_sharding,
             seed=self._config.seed,
-            preprocess_fn=None,
-            postprocess_fn=None,
             freeze_dict=False,
         )
 

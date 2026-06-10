@@ -293,8 +293,6 @@ class DSRLLearner(Agent):
             batch_size=int(getattr(self._config, "batch_size", 128)),
             data_sharding=None,
             seed=int(getattr(self._config, "seed", 0)),
-            preprocess_fn=None,
-            postprocess_fn=None,
             freeze_dict=False,
             load_paths=list(getattr(rl_cfg, "buffer_load_paths", ())),
             save_path=getattr(rl_cfg, "buffer_save_path", None),
