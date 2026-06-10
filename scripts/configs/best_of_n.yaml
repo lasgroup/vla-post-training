@@ -18,7 +18,6 @@ params:
     [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
   ]
 
-  
   rl.discount: [0.995]
   rl.buffer_capacity: [250000]
   rl.critic.batch_size: [1024]
