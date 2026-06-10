@@ -120,7 +120,7 @@ def main(config: _config.OnlineTrainConfig):
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
 
-        if step % config.collect.eval_interval == 0:
+        if (step > 0) and step % config.collect.eval_interval == 0:  # skip first eval
             # Molmo envs can hold onto GPU render memory, so keep eval envs
             # short-lived instead of reserving that memory for the whole run.
             eval_env_fn = make_env(
@@ -161,7 +161,9 @@ def main(config: _config.OnlineTrainConfig):
             logger.log_metrics(reduced_info, step=step)
             infos = []
 
-        if _stop or step == config.num_train_steps - 1:
+        if ((step + 1) % config.collect.eval_interval == 0 and config.requeue_before_eval) or \
+            ((step + 1) % config.collect.collect_interval == 0 and config.requeue_before_collect) or \
+            _stop or step == config.num_train_steps - 1:
             save_epoch_state(agent, config, prepare_for_resume=True)
             break
         if step % config.collect.collect_interval == 0:

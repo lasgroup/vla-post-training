@@ -344,6 +344,8 @@ class OnlineTrainConfig(TrainConfig):
     group_name: str = "online_training"
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
+    requeue_before_eval: bool = False
+    requeue_before_collect: bool = False
     default_prompt: str | None = None
 
     def __post_init__(self):
