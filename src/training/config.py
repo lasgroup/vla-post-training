@@ -147,6 +147,10 @@ class CriticTrainingConfig:
     # Class-level attributes (not dataclass fields) so subclasses can override the default.
     lr_schedule = ConstantSchedule(value=1e-4)
     optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    # BRONet critic (alternative to the MLP backbone)
+    use_bronet: bool = False
+    bronet_hidden_dim: int = 512
+    bronet_depth: int = 2
 
 
 # Define hyperparameter structures for your algorithms
@@ -288,8 +292,8 @@ class CollectionConfig:
     )
     replan_steps: int = 5
     num_steps_wait: int = 10
-    use_time_to_success_as_reward: bool = False
-    fix_mc_returns: bool = False
+    use_time_to_success_as_reward: bool = True
+    fix_mc_returns: bool = True
     store_prefix_rep: bool = False
     eval_env_num: int = 4
     eval_interval: int = 300
@@ -349,7 +353,7 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
-
+    
     def __post_init__(self):
         super().__post_init__()
 

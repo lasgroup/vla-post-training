@@ -52,7 +52,23 @@ class BestofNLearner(FilteredSFTLearner):
             PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
         }
         dummy_act = config.model.fake_act(batch_size=1)
-        state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
+        if config.rl.critic.use_bronet:
+            from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
+            hidden_dim = config.rl.critic.bronet_hidden_dim
+            depth = config.rl.critic.bronet_depth
+            num_qs = config.rl.critic.num_qs
+            num_vs = config.rl.critic.num_vs
+            num_bins = config.rl.critic.num_value_bins
+            if config.rl.critic.use_distributional_critic:
+                assert num_bins > 1, (
+                    "use_distributional_critic=True requires num_value_bins > 1."
+                )
+            def state_action_critic_def(observation, action, rngs):
+                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, num_bins=num_bins, rngs=rngs)
+            def state_value_def(observation, rngs):
+                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, num_bins=num_bins, rngs=rngs)
+        else:
+            state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
         
         self._prefix_embed_dim = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:

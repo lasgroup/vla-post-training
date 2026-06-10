@@ -42,6 +42,7 @@ CriticBatch = tuple[
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
 
+
 from src.rl.networks.encoders.encoders import MLPEncoder
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
@@ -326,6 +327,7 @@ def train_q_step(
     value_model = create_critic(value_state, config)
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
+
     step = q_state.step // config.rl.critic.num_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
@@ -344,6 +346,10 @@ def train_q_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_value_model: StateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        # Architecture-agnostic: critic_model is either the MLP backbone or BroNet;
+        # both emit scalar (n, b) logits when num_value_bins == 1 and categorical
+        # (n, b, k) logits when num_value_bins > 1, so the loss only branches on
+        # use_distributional_critic, never on the network type.
         q_logits = critic_model(observation, actions)
         _lower, _upper = get_value_bounds(config)
         num_bins = config.rl.critic.num_value_bins
@@ -375,10 +381,11 @@ def train_q_step(
 
         mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        value_mean = jnp.mean(q_dist.mean())
         return loss, {
-            "value_mean": jnp.mean(q_dist.mean()),
-            "mc_loss": mc_loss,
+            "value_mean": value_mean,
             "td_loss": td_loss,
+            "mc_loss": mc_loss,
             "td_weight": td_weight,
         }
 
@@ -422,7 +429,6 @@ def train_value_step(
     q_model.eval()
 
     observation, actions, _, _, _, mc_return = batch
-
     actions = flatten_action_horizon(actions)
     mc_return = _as_scalar_batch(mc_return)
 
@@ -463,17 +469,24 @@ def train_value_step(
 
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        value_mean = jnp.mean(v_dist.mean())
         return loss, {
-            "value_mean": jnp.mean(v_dist.mean()),
-            "mc_loss": mc_loss,
+            "value_mean": value_mean,
             "td_loss": td_loss,
+            "mc_loss": mc_loss,
             "td_weight": td_weight,
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)
     (loss, aux_data), grads = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
-    )(value_model, observation, actions, mc_return, q_model)
+    )(
+        value_model,
+        observation,
+        actions,
+        mc_return,
+        q_model,
+    )
     new_state = _update_train_state(value_state, value_model, grads)
     info = {
         "loss": loss,
