@@ -28,6 +28,14 @@ from src.rl.value_distribution import (
     categorical_project,
     reduce_ensemble_probs,
 )
+from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
+
+# The critic may be either the MLP backbone (StateActionCritic / StateValue) or the
+# BroNet backbone, depending on config.rl.critic.use_bronet. Both expose the same
+# call signature and output convention, so the loss is architecture-agnostic; these
+# unions just let @at.typecheck accept either backbone.
+AnyStateActionCritic = StateActionCritic | BroNetStateActionCritic
+AnyStateValue = StateValue | BroNetStateValue
 
 
 CriticBatch = tuple[
@@ -135,7 +143,7 @@ def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
 def create_critic(
     critic_state: training_utils.TrainState,
     config: OnlineTrainConfig,
-) -> StateActionCritic | StateValue:
+) -> AnyStateActionCritic | AnyStateValue:
     critic_params = critic_state.params
     if critic_state.ema_params is not None and _use_ema_critic(config):
         critic_params = critic_state.ema_params
@@ -337,14 +345,14 @@ def train_q_step(
 
     @at.typecheck
     def loss_fn(
-        critic_model: StateActionCritic,
+        critic_model: AnyStateActionCritic,
         observation: ObsType,
         actions: _model.Actions,
         next_observation: ObsType,
         reward: at.Float[at.ArrayLike, " b"],
         discount: at.Float[at.ArrayLike, " b"],
         mc_return: at.Float[at.ArrayLike, " b"],
-        target_value_model: StateValue,
+        target_value_model: AnyStateValue,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         # Architecture-agnostic: critic_model is either the MLP backbone or BroNet;
         # both emit scalar (n, b) logits when num_value_bins == 1 and categorical
@@ -434,11 +442,11 @@ def train_value_step(
 
     @at.typecheck
     def loss_fn(
-        critic_model: StateValue,
+        critic_model: AnyStateValue,
         observation: ObsType,
         actions: _model.Actions,
         mc_return: at.Float[at.ArrayLike, " b"],
-        target_q_model: StateActionCritic,
+        target_q_model: AnyStateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         td_weight = config.rl.critic.td_weight_schedule.create()(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
