@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_aw_sft
-project_name: awr_sweep_batchsize_fix
+project_name: vla_post_training
 group_name: awr_sweep
 params:
   log_interval: [2000]
@@ -9,7 +9,7 @@ params:
   overwrite: [True]
 
  
-  rl.discount: [0.99]
+  rl.discount: [0.995]
   collect.collect_interval: [2000]
   collect.num_eval_rollouts: [8]
   collect.num_initial_rollouts: [0]
