@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_best_of_n
-project_name: best_of_n_td1
+project_name: best_of_n_sweep
 group_name: best_of_n_sweep
 params:
   log_interval: [25]
