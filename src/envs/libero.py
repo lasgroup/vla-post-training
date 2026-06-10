@@ -20,6 +20,7 @@ class LiberoWrapper(gym.Wrapper):
         self._args = args
         env = OffScreenRenderEnv(**args)
         super().__init__(env)
+        self._current_bddl_file = self._args.get("bddl_file_name")
         self.rng, _ = seeding.np_random(0)
 
     def seed(self, seed=None):
@@ -31,13 +32,17 @@ class LiberoWrapper(gym.Wrapper):
         task_id = int(task_id.split("_")[-1])
         task_suite = benchmark.get_benchmark_dict()["libero_90"]()
         task = task_suite.get_task(task_id)
-        self._args["bddl_file_name"] = (
+        bddl_file = (
             pathlib.Path(get_libero_path("bddl_files"))
             / task.problem_folder
             / task.bddl_file
         )
-        env = OffScreenRenderEnv(**self._args)
-        super().__init__(env)
+        if bddl_file != self._current_bddl_file:
+            self.env.close()
+            self._args["bddl_file_name"] = bddl_file
+            env = OffScreenRenderEnv(**self._args)
+            super().__init__(env)
+            self._current_bddl_file = bddl_file
         self.env.reset()
         init_states = get_task_init_states(task_suite, task_id)
         random_index = self.rng.integers(low=0, high=init_states.shape[0])
