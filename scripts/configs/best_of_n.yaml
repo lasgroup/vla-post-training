@@ -18,16 +18,16 @@ params:
     [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
   ]
 
-  batch_size: [1024]
+  
   rl.discount: [0.995]
   rl.buffer_capacity: [250000]
+  rl.critic.batch_size: [1024]
   rl.critic.inference_start_step: [0]
   rl.critic.pre_training_steps: [0]
   rl.critic.td_weight_schedule.init_value: [1]
   rl.critic.td_weight_schedule.end_value: [1]
   rl.critic.td_weight_schedule.switch_step: [500000]
   rl.critic.use_bronet: [True]
-  rl.critic.bronet_hidden_dim: [512]
   rl.n_samples: [32]
 
   seed: [0, 1, 2]

@@ -35,6 +35,5 @@ params:
   rl.critic.use_ema: [True]
   rl.use_mc_returns: [False]
   rl.critic.use_bronet: [True]
-  rl.critic.bronet_hidden_dim: [512]
 
   seed: [0, 1, 2]
