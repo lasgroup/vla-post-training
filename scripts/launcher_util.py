@@ -6,9 +6,17 @@ import secrets
 import shlex
 from typing import Any, Dict, List, Optional
 
-# Default SLURM settings matching existing bash scripts
+# Default SLURM settings matching existing bash scripts.
+# clariden-submit-worktree exports ENVIRONMENT=<branch EDF>; honor it so jobs
+# launched from a branch worktree run against that branch's /app mount instead
+# of the base vla-post-training checkout.
 DEFAULT_ACCOUNT = "a143"
-DEFAULT_ENVIRONMENT = "vla-post-training"
+DEFAULT_ENVIRONMENT = (
+    os.environ.get("ENVIRONMENT")
+    or os.environ.get("CLARIDEN_ENV")
+    or os.environ.get("VLA_PT_ENVIRONMENT")
+    or "vla-post-training"
+)
 DEFAULT_DURATION = "03:30:00"
 DEFAULT_PARTITION = "normal"
 DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 120
@@ -17,7 +25,10 @@ DEFAULT_CPUS_PER_TASK = 4
 DEFAULT_CHECKPOINT_BASE_DIR = (
     f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/checkpoints"
 )
-DEFAULT_LOG_DIR = "logs"
+DEFAULT_LOG_DIR = os.environ.get(
+    "VLA_PT_LOG_DIR",
+    f"/capstor/scratch/cscs/{os.environ.get('USER', 'unknown')}/vla-post-training/logs",
+)
 
 
 def generate_srun_command(
@@ -41,13 +52,29 @@ def generate_srun_command(
     Returns:
         Full srun command string.
     """
+    user = os.environ.get("USER", "unknown")
+    uv_cache_dir = os.environ.get(
+        "VLA_PT_UV_CACHE_DIR",
+        os.environ.get(
+            "UV_CACHE_DIR",
+            f"/capstor/scratch/cscs/{user}/vla-post-training/uv-cache",
+        ),
+    )
+    uv_project_environment = os.environ.get(
+        "VLA_PT_UV_PROJECT_ENVIRONMENT",
+        os.environ.get("UV_PROJECT_ENVIRONMENT", "/.venv"),
+    )
     tokens = [
         "srun",
         f"--account={account}",
         f"--environment={environment}",
         f"--ntasks={ntasks}",
+        "env",
+        f"UV_CACHE_DIR={uv_cache_dir}",
+        f"UV_PROJECT_ENVIRONMENT={uv_project_environment}",
         "uv",
         "run",
+        "--no-sync",
         script,
         config_name,
     ]
