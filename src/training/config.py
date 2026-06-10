@@ -107,7 +107,7 @@ class NormalizerConfig:
 @dataclasses.dataclass(frozen=True)
 class RLAlgorithmConfig:
     discount: float = 0.99
-    buffer_capacity: int = 256
+    buffer_capacity: int = 1024
     # Shared by both policy and critic sampling: fraction of each batch drawn from
     # the online replay buffer (rest comes from the offline SFT dataset).
     online_ratio: float = 0.5
@@ -177,15 +177,9 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
-class BoNCriticTrainingConfig(CriticTrainingConfig):
-    # BoN critic was tuned at 3e-4; CriticTrainingConfig defaults to 1e-4 (AWR value).
-    lr_schedule = ConstantSchedule(value=3e-4)
-
-
-@dataclasses.dataclass(frozen=True)
 class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
-    critic: BoNCriticTrainingConfig = BoNCriticTrainingConfig()
+    critic: CriticTrainingConfig = CriticTrainingConfig()
     n_samples: int = 8
     train_on_policy_value_function: bool = False
 
@@ -357,6 +351,7 @@ class OnlineTrainConfig(TrainConfig):
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     default_prompt: str | None = None
     requeue: bool = False
+    group: str = None
     
     def __post_init__(self):
         super().__post_init__()
