@@ -1,4 +1,8 @@
 # ruff: noqa: E402
+import time
+_PROCESS_START_TIME = time.monotonic()
+import sys
+REQUEUE_EXIT_CODE = 42
 
 # uncomment to force determinism
 # import os
@@ -61,13 +65,6 @@ import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, Logger
-
-
-import signal
-_stop = False
-def _on_term(signum, frame):
-    global _stop; _stop = True
-signal.signal(signal.SIGTERM, _on_term)
 
 
 def main(config: _config.OnlineTrainConfig):
@@ -161,13 +158,15 @@ def main(config: _config.OnlineTrainConfig):
             logger.log_metrics(reduced_info, step=step)
             infos = []
 
-        if ((step + 1) % config.collect.eval_interval == 0 and config.requeue_before_eval) or \
-            ((step + 1) % config.collect.collect_interval == 0 and config.requeue_before_collect) or \
-            _stop or step == config.num_train_steps - 1:
+        about_to_collect = (step + 1) % config.collect.collect_interval == 0
+        about_to_eval = (step + 1) % config.collect.eval_interval == 0
+        runtime_exceeded = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
+        out_of_time = runtime_exceeded and (about_to_collect or about_to_eval)
+        if about_to_collect or out_of_time:
             save_epoch_state(agent, config, prepare_for_resume=True)
-            break
-        if step % config.collect.collect_interval == 0:
-            save_epoch_state(agent, config, prepare_for_resume=True)
+            if out_of_time:
+                logging.info("Exiting at step %d for requeue.", step)
+                sys.exit(REQUEUE_EXIT_CODE)
 
 
 if __name__ == "__main__":

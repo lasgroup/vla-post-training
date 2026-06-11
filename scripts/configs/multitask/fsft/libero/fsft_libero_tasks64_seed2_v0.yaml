@@ -5,6 +5,7 @@ group_name: multitask_fsft_libero_v0
 params:
   lr_schedule.value: [2.5e-5]
   num_train_steps: [5_000]
+  max_runtime: [21600]  # 7 hours
 
   collect.env_num: [8]
   collect.eval_env_num: [8]

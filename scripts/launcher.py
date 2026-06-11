@@ -23,7 +23,7 @@ DEFAULT_ACCOUNT = "a0220"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
-DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS = 1800
+REQUEUE_EXIT_CODE = 42
 RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unknown')}/results"
 
 
@@ -70,40 +70,16 @@ set -euo pipefail
 
 cd {shlex.quote(cwd)}
 
-requeue_requested=0
-requeue_submitted=0
-child_pid=""
-
-handle_requeue() {{
-  if [[ "$requeue_requested" -eq 1 ]]; then
-    return
-  fi
-  requeue_requested=1
-  echo "[$(date --iso-8601=seconds)] Received SIGUSR1 in batch shell for job ${{SLURM_JOB_ID}}; requesting requeue." >&2
-  if scontrol requeue "${{SLURM_JOB_ID}}"; then
-    requeue_submitted=1
-    echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
-  else
-    echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}}." >&2
-  fi
-  if [[ -n "$child_pid" ]]; then
-    kill -TERM "$child_pid" 2>/dev/null || true
-  fi
-}}
-
-# Self-requeue only on the time-limit pre-warning (SIGUSR1). A manual scancel
-# delivers SIGTERM, which is left untrapped so the job actually terminates.
-trap handle_requeue USR1
-
-{command} &
-child_pid=$!
 child_status=0
-wait "$child_pid" || child_status=$?
+{command} || child_status=$?
 
-if [[ "$requeue_requested" -eq 1 ]]; then
-  if [[ "$requeue_submitted" -eq 1 ]]; then
+if [[ "$child_status" -eq {REQUEUE_EXIT_CODE} ]]; then
+  echo "[$(date --iso-8601=seconds)] Job ${{SLURM_JOB_ID}} requested requeue." >&2
+  if scontrol requeue "${{SLURM_JOB_ID}}"; then
+    echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
     exit 0
   fi
+  echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}}." >&2
   exit "$child_status"
 fi
 
@@ -241,7 +217,7 @@ def generate_run_commands(
 
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
         if requeue:
-            bsub_cmd += f"--requeue --signal=B:USR1@{DEFAULT_REQUEUE_SIGNAL_LEAD_SECONDS} --open-mode=append "
+            bsub_cmd += "--requeue --open-mode=append "
 
         cluster_cmds = []
         for i, (cmd, combo) in enumerate(zip(command_list, combos)):
