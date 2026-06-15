@@ -55,10 +55,15 @@ class BestofNLearner(FilteredSFTLearner):
             depth = config.rl.critic.bronet_depth
             num_qs = config.rl.critic.num_qs
             num_vs = config.rl.critic.num_vs
+            num_bins = config.rl.critic.num_value_bins
+            if config.rl.critic.use_distributional_critic:
+                assert num_bins > 1, (
+                    "use_distributional_critic=True requires num_value_bins > 1."
+                )
             def state_action_critic_def(observation, action, rngs):
-                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, rngs=rngs)
+                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, num_bins=num_bins, rngs=rngs)
             def state_value_def(observation, rngs):
-                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, rngs=rngs)
+                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, num_bins=num_bins, rngs=rngs)
         else:
             state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
         

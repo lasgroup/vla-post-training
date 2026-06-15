@@ -90,7 +90,12 @@ def _obs_input_dim(observation: ObsType, keys: list[str]) -> int:
 
 
 class BroNetStateActionCritic(nnx.Module):
-    """Ensemble of BroNet Q-networks; returns (num_qs, B) scalar tensor."""
+    """Ensemble of BroNet Q-networks.
+
+    Output mirrors the MLP decoder convention: scalar (num_qs, B) when
+    ``num_bins == 1`` (Gaussian/MSE regression) and categorical logits
+    (num_qs, B, num_bins) when ``num_bins > 1`` (distributional critic).
+    """
 
     def __init__(
         self,
@@ -99,16 +104,19 @@ class BroNetStateActionCritic(nnx.Module):
         hidden_dim: int,
         depth: int,
         num_qs: int,
+        num_bins: int = 1,
         *,
         rngs: nnx.Rngs,
     ):
+        self.num_bins = num_bins
+        out_dim = max(1, num_bins)
         self._obs_keys = _obs_vector_keys(observation)
         input_dim = (
             _obs_input_dim(observation, self._obs_keys)
             + int(jnp.asarray(action).shape[-1])
         )
         self.nets = [
-            BroNet(input_dim, hidden_dim, depth, output_nodes=1, add_final_layer=True, rngs=rngs)
+            BroNet(input_dim, hidden_dim, depth, output_nodes=out_dim, add_final_layer=True, rngs=rngs)
             for _ in range(num_qs)
         ]
 
@@ -117,13 +125,19 @@ class BroNetStateActionCritic(nnx.Module):
     ) -> jnp.ndarray:
         parts = [jnp.asarray(observation[k]) for k in self._obs_keys] + [action]
         x = jnp.concatenate(parts, axis=-1)
-        return jnp.stack(
-            [net(x, training=training).squeeze(-1) for net in self.nets], axis=0
-        )  # (num_qs, B)
+        outs = [net(x, training=training) for net in self.nets]  # each (B, out_dim)
+        if self.num_bins <= 1:
+            outs = [o.squeeze(-1) for o in outs]  # (B,)
+        return jnp.stack(outs, axis=0)  # (num_qs, B) or (num_qs, B, num_bins)
 
 
 class BroNetStateValue(nnx.Module):
-    """Ensemble of BroNet V-networks; returns (num_vs, B) scalar tensor."""
+    """Ensemble of BroNet V-networks.
+
+    Output mirrors the MLP decoder convention: scalar (num_vs, B) when
+    ``num_bins == 1`` and categorical logits (num_vs, B, num_bins) when
+    ``num_bins > 1``.
+    """
 
     def __init__(
         self,
@@ -131,19 +145,23 @@ class BroNetStateValue(nnx.Module):
         hidden_dim: int,
         depth: int,
         num_vs: int,
+        num_bins: int = 1,
         *,
         rngs: nnx.Rngs,
     ):
+        self.num_bins = num_bins
+        out_dim = max(1, num_bins)
         self._obs_keys = _obs_vector_keys(observation)
         input_dim = _obs_input_dim(observation, self._obs_keys)
         self.nets = [
-            BroNet(input_dim, hidden_dim, depth, output_nodes=1, add_final_layer=True, rngs=rngs)
+            BroNet(input_dim, hidden_dim, depth, output_nodes=out_dim, add_final_layer=True, rngs=rngs)
             for _ in range(num_vs)
         ]
 
     def __call__(self, observation: ObsType, training: bool = False) -> jnp.ndarray:
         parts = [jnp.asarray(observation[k]) for k in self._obs_keys]
         x = jnp.concatenate(parts, axis=-1)
-        return jnp.stack(
-            [net(x, training=training).squeeze(-1) for net in self.nets], axis=0
-        )  # (num_vs, B)
+        outs = [net(x, training=training) for net in self.nets]  # each (B, out_dim)
+        if self.num_bins <= 1:
+            outs = [o.squeeze(-1) for o in outs]  # (B,)
+        return jnp.stack(outs, axis=0)  # (num_vs, B) or (num_vs, B, num_bins)
