@@ -1,0 +1,29 @@
+script: scripts/exp.py
+config_name: pi05_molmo_online_filtered_sft
+project_name: vla-post-training
+group_name: multitask_fsft_molmo_v0
+params:
+  lr_schedule.value: [2.5e-5]
+  num_train_steps: [1_000]
+  max_runtime: [36000]  # 10 hours
+
+  collect.eval_interval: [999]  # only eval at start and end
+  !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
+    [100, 20],
+  ]
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [molmo, [
+        molmo_138
+      ],
+      [
+        molmo_138,
+        molmo_8, molmo_273, molmo_222, molmo_73, molmo_346, molmo_49, molmo_21, molmo_379,
+        molmo_140, molmo_356, molmo_345, molmo_155, molmo_357, molmo_163, molmo_208, molmo_226
+      ],
+    ],
+  ]
+
+  rl.buffer_capacity: [500000]
+  rl.online_ratio: [1.0]
+
+  seed: [1]

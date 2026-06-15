@@ -13,15 +13,6 @@ params:
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
     [molmo, [
-        molmo_138
-      ],
-      [
-        molmo_138,
-        molmo_8, molmo_273, molmo_222, molmo_73, molmo_346, molmo_49, molmo_21, molmo_379,
-        molmo_140, molmo_356, molmo_345, molmo_155, molmo_357, molmo_163, molmo_208, molmo_226
-      ],
-    ],
-    [molmo, [
         molmo_164, molmo_86, molmo_70, molmo_267, molmo_366, molmo_138, molmo_143, molmo_21
       ],
       [
@@ -44,4 +35,4 @@ params:
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
 
-  seed: [1]
+  seed: [2]

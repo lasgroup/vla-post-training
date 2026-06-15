@@ -14,36 +14,6 @@ params:
     [500, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
-    [libero, libero_90_79, 
-      [
-        libero_90_79,
-
-        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
-        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
-        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
-      ]],
-    [libero, libero_90_31, 
-      [
-        libero_90_31,
-
-        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
-        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
-        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
-      ]],
-    [libero, libero_90_82, [
-        libero_90_82,
-
-        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
-        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
-        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
-      ]],
-    [libero, libero_90_38, [
-        libero_90_38,
-
-        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
-        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
-        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
-      ]],
     [libero, [
         libero_90_79, libero_90_31, libero_90_82, libero_90_38,
       ],
@@ -73,4 +43,4 @@ params:
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
 
-  seed: [0]
+  seed: [2]
