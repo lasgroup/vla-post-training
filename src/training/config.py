@@ -358,6 +358,15 @@ class OnlineTrainConfig(TrainConfig):
 
         if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self.rl.critic.use_distributional_critic:
+                # The C51 distributional backup is only implemented for best-of-N.
+                # Other critic-based algos (AWR and its subclasses MPO/FlowGRPO/OGPO)
+                # share CriticTrainingConfig, so the flag is settable there but would
+                # be silently ignored — reject it explicitly to avoid that footgun.
+                assert isinstance(self.rl, BestofNLearnerConfig), (
+                    "use_distributional_critic=True is only supported for "
+                    "BestofNLearnerConfig; it is not implemented for "
+                    f"{type(self.rl).__name__}."
+                )
                 assert self.rl.critic.num_value_bins > 1, (
                     "use_distributional_critic=True requires num_value_bins > 1; "
                     "set rl.critic.num_value_bins (e.g. 51) in the config."
