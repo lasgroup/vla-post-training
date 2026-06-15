@@ -90,6 +90,11 @@ class MolmoSpacesGymConfig:
     # i.e. segmentation masks that are ignored by pi0.5
     drop_sensor_uuids: tuple[str, ...] = ("object_image_points",)
     reduce_resolution: bool = False
+    # initial-state randomization: perturb object XY and robot init_qpos with rejection sampling.
+    randomize_init_positions: bool = True
+    init_object_position_noise_xy: float = 0.01  # meters, +/- uniform per axis
+    init_qpos_noise: float = 0.01  # radians, +/- uniform per joint
+    randomization_max_attempts: int = 20
 
 
 class MolmoSpacesBenchmarkGymEnv(gym.Env):
@@ -215,6 +220,12 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             exp_config.scene_dataset = episode.scene_dataset
             exp_config.data_split = episode.data_split
             exp_config.task_sampler_config.render_device = self._render_device
+            ts_cfg = exp_config.task_sampler_config
+            ts_cfg.randomize_init_object_positions = self._config.randomize_init_positions
+            ts_cfg.randomize_init_qpos = self._config.randomize_init_positions
+            ts_cfg.init_object_position_noise_xy = self._config.init_object_position_noise_xy
+            ts_cfg.init_qpos_noise = self._config.init_qpos_noise
+            ts_cfg.init_position_randomization_max_attempts = self._config.randomization_max_attempts
             self._prompt_sampler = self._make_prompt_sampler(exp_config)
             with _suppress_molmo_spaces_output():
                 self._sampler = JsonEvalTaskSampler(exp_config, episode)
