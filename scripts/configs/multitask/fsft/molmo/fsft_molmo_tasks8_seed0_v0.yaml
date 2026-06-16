@@ -4,10 +4,10 @@ project_name: vla-post-training
 group_name: multitask_fsft_molmo_v0
 params:
   lr_schedule.value: [2.5e-5]
-  num_train_steps: [5_000]
+  num_train_steps: [2_500]
   max_runtime: [36000]  # 10 hours
 
-  collect.eval_interval: [4999]  # only eval at start and end
+  collect.eval_interval: [2499]  # only eval at start and end
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
     [500, 20],
   ]
