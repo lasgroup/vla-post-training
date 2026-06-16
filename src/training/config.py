@@ -138,7 +138,7 @@ class CriticTrainingConfig:
     value_upper_bound: float | None = None
     value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
     use_distributional_critic: bool = False
-    distributional_target_reduction: str = "mean"
+    distributional_target_reduction: str = "min"
     inference_start_step: int = 100
     # Critics are lightweight (MLP-only); a larger batch than the policy often
     # stabilises TD learning without a meaningful memory cost.
@@ -181,7 +181,8 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
 class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
     critic: CriticTrainingConfig = CriticTrainingConfig()
-    n_samples: int = 8
+    n_samples: int = 32
+    discount: float = 0.995
     train_on_policy_value_function: bool = False
 
 
