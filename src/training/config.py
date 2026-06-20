@@ -136,7 +136,7 @@ class CriticTrainingConfig:
     num_value_bins: int = 1  # 1: Gaussian (MSE-equivalent), >1 = Categorical over bins
     value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
     value_upper_bound: float | None = None
-    value_target_type: str = "one_hot"  # "one_hot" | "two_hot"
+    value_target_type: str = "two_hot"  # "one_hot" | "two_hot"
     use_distributional_critic: bool = False
     distributional_target_reduction: str = "min"
     inference_start_step: int = 100
@@ -530,6 +530,10 @@ _CONFIGS.extend(
         make_base_libero_config(
             name="pi05_libero_online_best_of_n",
             rl_config=BestofNLearnerConfig(),
+        ),
+        make_base_molmo_config(
+            name="pi05_molmo_online_best_of_n",
+            rl_config=BestofNLearnerConfig(online_ratio=1.0),
         ),
         make_base_libero_config(
             name="pi05_libero_online_dsrl",

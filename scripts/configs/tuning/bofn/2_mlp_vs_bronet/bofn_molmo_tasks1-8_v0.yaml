@@ -1,7 +1,7 @@
 script: scripts/exp.py
-config_name: pi05_libero_online_best_of_n
+config_name: pi05_molmo_online_best_of_n
 project_name: vla-post-training
-group_name: bofn_tasks1-4_bronet-ablation_libero_v0
+group_name: bofn_tasks1-8_bronet-ablation_molmo_v0
 params:
   log_interval: [25]
   num_train_steps: [100000]
@@ -13,14 +13,14 @@ params:
     [10000, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
-    [libero, libero_90_82, [
-        libero_90_82,
+    [molmo, molmo_138, [
+        molmo_138,
     ]],
-    [libero, [
-        libero_90_79, libero_90_31, libero_90_82, libero_90_38,
+    [molmo, [
+        molmo_164, molmo_86, molmo_70, molmo_267, molmo_366, molmo_138, molmo_143, molmo_21,
       ],
       [
-        libero_90_79, libero_90_31, libero_90_82, libero_90_38,
+        molmo_164, molmo_86, molmo_70, molmo_267, molmo_366, molmo_138, molmo_143, molmo_21
     ]]
   ]
 
@@ -30,7 +30,8 @@ params:
   rl.critic.inference_start_step: [1]   # To speed up data collection at step 0
   rl.critic.pre_training_steps: [0]
   rl.critic.td_weight_schedule.switch_step: [999999]  # No switch
-  # TODO: Take the best one from the ../1_mc_vs_td_regression_vs_distributional/bofn_libero_tasks1-4_v0.yaml sweep
+  
+  # TODO: Take the best one from the ../1_mc_vs_td_regression_vs_distributional/bofn_molmo_tasks1-8_v0.yaml sweep
   !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
     [0, 0, False, 1],     # MC (regression)
     # [1, 1, False, 1],     # TD (regression)
@@ -38,7 +39,7 @@ params:
     # [0, 0, False, 201]    # MC with two-hot target → cross-entropy
   ]
 
-  rl.critic.use_bronet: [False]   # We ran True already
+  rl.critic.use_bronet: [False]
 
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
