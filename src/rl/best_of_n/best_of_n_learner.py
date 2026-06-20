@@ -345,7 +345,15 @@ class BestofNLearner(FilteredSFTLearner):
             # group_actions: [group_env_num * n_samples, horizon, dim]
 
             # 2. Build critic observation (normalize + pad state to match buffer preprocessing)
-            raw_state = np.asarray(processed_obs["observation/state"])
+            if "observation/state" in processed_obs:
+                raw_state = np.asarray(processed_obs["observation/state"])
+            else:
+                # Droid/molmo layout: assemble state the same way DroidInputs does.
+                joint = np.asarray(processed_obs["observation/joint_position"])
+                gripper = np.asarray(processed_obs["observation/gripper_position"])
+                if gripper.ndim == joint.ndim - 1:
+                    gripper = gripper[..., np.newaxis]
+                raw_state = np.concatenate([joint, gripper], axis=-1)
             state = np.asarray(self._state_normalize({"state": raw_state})["state"])
             if state.shape[-1] < self._transition_state_dim:
                 pad_width = [(0, 0)] * state.ndim

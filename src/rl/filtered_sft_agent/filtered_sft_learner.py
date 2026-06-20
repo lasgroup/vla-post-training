@@ -648,7 +648,7 @@ class FilteredSFTLearner(Agent):
             ep["action"], prefix = ep["action"]
             prefix = np.asarray(prefix, dtype=np.float32)
             prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
-            horizon = ep["observation"]["observation/state"].shape[0]
+            horizon = next(iter(ep["observation"].values())).shape[0]
             ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0
             )
@@ -723,7 +723,7 @@ class FilteredSFTLearner(Agent):
             actions = obs.pop("actions")
             return obs, actions
 
-        prefix_emb = _full_obs.pop(PREFIX_EMBEDDING_NAME, None)
+        prefix_emb = _full_obs.pop(self.obs_key_process_fn(f"observation/{PREFIX_EMBEDDING_NAME}"), None)
         actions_padded = np.concatenate([_actions, np.repeat(_actions[-1:], act_h, axis=0)], axis=0)
         _full_obs, actions_out = transform(
             {**_full_obs, "actions": actions_padded, "prompt": str(task_description)}
