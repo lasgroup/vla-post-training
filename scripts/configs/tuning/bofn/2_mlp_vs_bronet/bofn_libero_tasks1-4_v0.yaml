@@ -32,8 +32,8 @@ params:
   rl.critic.td_weight_schedule.switch_step: [999999]  # No switch
   # TODO: Take the best one from the ../1_mc_vs_td_regression_vs_distributional/bofn_libero_tasks1-4_v0.yaml sweep
   !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
-    [0, 0, False, 1],     # MC (regression)
-    # [1, 1, False, 1],     # TD (regression)
+    # [0, 0, False, 1],     # MC (regression)
+    [1, 1, False, 1],     # TD (regression)
     # [1, 1, True,  201],   # TD (C51, 201 bins)
     # [0, 0, False, 201]    # MC with two-hot target → cross-entropy
   ]
