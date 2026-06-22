@@ -352,6 +352,8 @@ class OnlineTrainConfig(TrainConfig):
     collect: CollectionConfig = CollectionConfig()
     rl: RLAlgorithmConfig = FilteredSFTLearnerConfig()
     max_runtime: int = 60 * 60 * 24
+    requeue_before_eval: bool = False
+    free_buffer_before_eval: bool = False
     default_prompt: str | None = None
     
     def __post_init__(self):

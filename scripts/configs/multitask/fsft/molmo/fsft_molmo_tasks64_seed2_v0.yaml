@@ -7,6 +7,8 @@ params:
   num_train_steps: [2_500]
   requeue_before_eval: [True]
   max_runtime: [25200]  # 7 hours
+  requeue_before_eval: [True]
+  free_buffer_before_eval: [True]
 
   collect.eval_interval: [2499]  # only eval at start and end
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [

@@ -63,7 +63,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
-from src.training.runtime_state import save_epoch_state
+from src.training.runtime_state import save_epoch_state, load_resume_state
 from src.training.utils import init_logging, Logger
 
 
@@ -118,6 +118,10 @@ def main(config: _config.OnlineTrainConfig):
                 )
 
         if (step > 0) and step % config.collect.eval_interval == 0:  # skip first eval
+            if config.free_buffer_before_eval:
+                save_epoch_state(agent, config, prepare_for_resume=True)
+                del agent._online_data_buffer
+
             # Molmo envs can hold onto GPU render memory, so keep eval envs
             # short-lived instead of reserving that memory for the whole run.
             eval_env_fn = make_env(
@@ -141,6 +145,9 @@ def main(config: _config.OnlineTrainConfig):
             logging.info(
                 f"Eval at step {step}: {', '.join(f'{k}={v:.4f}' for k, v in eval_info.items())}"
             )
+            if config.free_buffer_before_eval:
+                resume_state = load_resume_state(config)
+                agent._online_data_buffer.restore_shards(resume_state.replay_shard_dir, rng_state_json=resume_state.replay_rng_state_json)
 
         info = agent.update()
         infos.append(info)
@@ -162,9 +169,9 @@ def main(config: _config.OnlineTrainConfig):
         about_to_eval = (step + 1) % config.collect.eval_interval == 0
         runtime_exceeded = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
         out_of_time = runtime_exceeded and (about_to_collect or about_to_eval)
-        if about_to_collect or out_of_time:
+        if about_to_collect or about_to_eval or out_of_time:
             save_epoch_state(agent, config, prepare_for_resume=True)
-            if out_of_time:
+            if out_of_time or (about_to_eval and config.requeue_before_eval):
                 logging.info("Exiting at step %d for requeue.", step)
                 sys.exit(REQUEUE_EXIT_CODE)
 
