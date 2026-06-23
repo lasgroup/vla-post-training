@@ -1,6 +1,5 @@
 # ruff: noqa: F722
 import dataclasses
-import warnings
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -23,7 +22,6 @@ from src.rl.networks.rl_networks import (
     StateValue,
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
-from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
 
 
 CriticBatch = tuple[
@@ -37,13 +35,6 @@ CriticBatch = tuple[
 
 StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
 StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
-
-
-def _bro_pessimistic_reduce(values: jnp.ndarray, pessimism: float) -> jnp.ndarray:
-    """BRO ensemble reduction: mean - pessimism * half-range."""
-    mean = jnp.mean(values, axis=0)
-    spread = (jnp.max(values, axis=0) - jnp.min(values, axis=0)) / 2
-    return mean - pessimism * spread
 
 
 def _use_ema_critic(config: OnlineTrainConfig) -> bool:
@@ -243,13 +234,6 @@ def train_q_step(
     value_model.eval()
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
 
-    is_bronet = isinstance(q_model, BroNetStateActionCritic)
-    if is_bronet and config.rl.critic.num_value_bins > 1:
-        warnings.warn(
-            "BroNet critic with num_value_bins > 1 has not been tested",
-            stacklevel=2,
-        )
-
     step = q_state.step // config.rl.critic.num_updates_per_batch
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
@@ -257,39 +241,20 @@ def train_q_step(
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
 
-    if is_bronet:
-        bootstrap_target = _bro_pessimistic_reduce(
-            value_model(next_observation), 0.0
-        )
-    else:
-        bootstrap_target = summarize_critic_values(
-            value_model(next_observation), config, critic_reduction=config.rl.critic.reduction
-        )
+    bootstrap_target = summarize_critic_values(
+        value_model(next_observation), config, critic_reduction=config.rl.critic.reduction
+    )
 
     def loss_fn(q_model, observation, actions):
         td_weight = jnp.clip(config.rl.critic.td_weight_schedule.create()(step), 0.0, 1.0)
-        mc_weight = 1.0 - td_weight
-        if is_bronet:
-            q_values = q_model(observation, actions)
-            td_targets = jax.lax.stop_gradient(reward + discount * bootstrap_target)
-            td_losses = jnp.mean((q_values - td_targets[None]) ** 2, axis=1)
-            mc_losses = jnp.mean((q_values - mc_return[None]) ** 2, axis=1)
-            td_loss = jnp.mean(td_losses)
-            mc_loss = jnp.mean(mc_losses)
-            value_mean = jnp.mean(q_values)
-            loss = (
-                jax.lax.cond(td_weight > 0.0, lambda: td_weight * td_loss, lambda: jnp.zeros(()))
-                + jax.lax.cond(mc_weight > 0.0, lambda: mc_weight * mc_loss, lambda: jnp.zeros(()))
-            )
-        else:
-            q_logits = q_model(observation, actions)
-            td_targets = reward + discount * jax.lax.stop_gradient(bootstrap_target)
-            _lower, _upper = get_value_bounds(config)
-            q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
-            td_loss = -jnp.mean(q_dist.log_prob(td_targets))
-            mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
-            value_mean = jnp.mean(q_dist.mean())
-            loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        q_logits = q_model(observation, actions)
+        td_targets = reward + discount * jax.lax.stop_gradient(bootstrap_target)
+        _lower, _upper = get_value_bounds(config)
+        q_dist = make_value_distribution(q_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        td_loss = -jnp.mean(q_dist.log_prob(td_targets))
+        mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
+        value_mean = jnp.mean(q_dist.mean())
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
             "value_mean": value_mean,
             "td_loss": td_loss,
@@ -331,45 +296,19 @@ def train_value_step(
     actions = flatten_action_horizon(actions)
     mc_return = _as_scalar_batch(mc_return)
 
-    is_bronet = isinstance(value_model, BroNetStateValue)
-    if is_bronet and config.rl.critic.num_value_bins > 1:
-        warnings.warn(
-            "BroNet critic with num_value_bins > 1 has not been tested",
-            stacklevel=2,
-        )
-
-    if is_bronet:
-        bootstrap_target = _bro_pessimistic_reduce(
-            q_model(observation, actions), 0.0
-        )
-    else:
-        bootstrap_target = summarize_critic_values(
-            q_model(observation, actions), config, critic_reduction=config.rl.critic.reduction
-        )
+    bootstrap_target = summarize_critic_values(
+        q_model(observation, actions), config, critic_reduction=config.rl.critic.reduction
+    )
 
     def loss_fn(value_model, observation):
         td_weight = jnp.clip(config.rl.critic.td_weight_schedule.create()(step), 0.0, 1.0)
-        mc_weight = 1.0 - td_weight
-        if is_bronet:
-            v_values = value_model(observation)
-            td_targets = jax.lax.stop_gradient(bootstrap_target)
-            td_losses = jnp.mean((v_values - td_targets[None]) ** 2, axis=1)
-            mc_losses = jnp.mean((v_values - mc_return[None]) ** 2, axis=1)
-            td_loss = jnp.mean(td_losses)
-            mc_loss = jnp.mean(mc_losses)
-            value_mean = jnp.mean(v_values)
-            loss = (
-                jax.lax.cond(td_weight > 0.0, lambda: td_weight * td_loss, lambda: jnp.zeros(()))
-                + jax.lax.cond(mc_weight > 0.0, lambda: mc_weight * mc_loss, lambda: jnp.zeros(()))
-            )
-        else:
-            value_logits = value_model(observation)
-            _lower, _upper = get_value_bounds(config)
-            v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
-            mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
-            td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(bootstrap_target)))
-            value_mean = jnp.mean(v_dist.mean())
-            loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        value_logits = value_model(observation)
+        _lower, _upper = get_value_bounds(config)
+        v_dist = make_value_distribution(value_logits, config.rl.critic.num_value_bins, _lower, _upper, config.rl.critic.value_target_type)
+        mc_loss = -jnp.mean(v_dist.log_prob(mc_return))
+        td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(bootstrap_target)))
+        value_mean = jnp.mean(v_dist.mean())
+        loss = td_weight * td_loss + (1 - td_weight) * mc_loss
         return loss, {
             "value_mean": value_mean,
             "td_loss": td_loss,
