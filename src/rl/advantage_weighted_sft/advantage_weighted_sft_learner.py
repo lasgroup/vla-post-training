@@ -566,8 +566,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self.training_steps >= self._config.rl.critic.training_start_step
             and self.training_steps % self._config.rl.critic.update_interval == 0
         )
+        policy_window_open = (
+            self._config.rl.policy.training_end_step < 0
+            or self.training_steps < self._config.rl.policy.training_end_step
+        )
         update_policy = (
             self.training_steps >= self._config.rl.policy.training_start_step
+            and policy_window_open
             and self.training_steps % self._config.rl.policy.update_interval == 0
         )
         if not update_critic and not update_policy:

@@ -117,6 +117,7 @@ class RLAlgorithmConfig:
 class PolicyTrainingConfig:
     update_interval: int = 1
     training_start_step: int = 0
+    training_end_step: int = -1
 
 
 @dataclasses.dataclass(frozen=True)
