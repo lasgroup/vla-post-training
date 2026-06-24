@@ -299,6 +299,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return policy_observation, critic_observation, actions
 
+    @staticmethod
+    def _pad_last_dim(arr: np.ndarray, target_dim: int) -> np.ndarray:
+        """Zero-pad the last axis up to ``target_dim`` (no-op if already >= target_dim)."""
+        arr = np.asarray(arr)
+        if arr.shape[-1] >= target_dim:
+            return arr
+        pad_width = [(0, 0)] * arr.ndim
+        pad_width[-1] = (0, target_dim - arr.shape[-1])
+        return np.pad(arr, pad_width, mode="constant", constant_values=0.0)
+
     def sample_actions(self, observations, **kwargs):
         """Best-of-N collection: sample n_samples candidates per env and keep the highest-Q one.
 
@@ -352,6 +362,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
             if "observation/state" in processed_obs:
                 raw_state = np.asarray(processed_obs["observation/state"])
+                is_droid_layout = False
             else:
                 # Droid/molmo layout: assemble state the same way DroidInputs does.
                 joint = np.asarray(processed_obs["observation/joint_position"])
@@ -359,11 +370,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 if gripper.ndim == joint.ndim - 1:
                     gripper = gripper[..., np.newaxis]
                 raw_state = np.concatenate([joint, gripper], axis=-1)
-            state = np.asarray(self._state_normalize({"state": raw_state})["state"])
-            if state.shape[-1] < self._transition_state_dim:
-                pad_width = [(0, 0)] * state.ndim
-                pad_width[-1] = (0, self._transition_state_dim - state.shape[-1])
-                state = np.pad(state, pad_width, mode="constant", constant_values=0.0)
+                is_droid_layout = True
+
+            if is_droid_layout:
+                # pad-then-normalize (droid buffer order)
+                state = self._pad_last_dim(raw_state, self._transition_state_dim)
+                state = np.asarray(self._state_normalize({"state": state})["state"])
+            else:
+                # normalize-then-pad (libero buffer order)
+                state = np.asarray(self._state_normalize({"state": raw_state})["state"])
+                state = self._pad_last_dim(state, self._transition_state_dim)
             state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
             critic_obs: dict = {"state": state}
 
@@ -411,14 +427,30 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 jnp.asarray(prefix), n_samples, axis=0
             )
 
-            actions_norm = np.asarray(
-                self._action_normalize({"actions": np.asarray(group_actions)})["actions"]
-            )
+            # The candidate actions are absolute, unnormalized, robot-space actions
+            # (the policy _output_transform applies Unnormalize -> AbsoluteActions).
+            # The critic was trained on whatever the buffer stores, so we must replicate
+            # that domain's preprocessing order here:
+            #   - libero: normalize -> pad (no delta)
+            #   - droid/molmo: delta (abs - state, first 7 dims) -> pad -> normalize
+            # See FilteredSFTLearner._get_policy_transforms for the buffer pipeline.
             model_act_dim = self._config.model.action_dim
-            if actions_norm.shape[-1] < model_act_dim:
-                pad_width = [(0, 0)] * actions_norm.ndim
-                pad_width[-1] = (0, model_act_dim - actions_norm.shape[-1])
-                actions_norm = np.pad(actions_norm, pad_width, mode="constant", constant_values=0.0)
+            if is_droid_layout:
+                # Convert absolute -> delta to match DeltaActions(make_bool_mask(7, -1)):
+                # subtract the raw state from the first 7 dims, leaving the gripper absolute.
+                # Operate on a copy so group_actions stays absolute for the env (see below).
+                state_tiled = np.repeat(np.asarray(raw_state), n_samples, axis=0)
+                candidate_actions = np.array(group_actions, copy=True)
+                candidate_actions[..., :7] -= state_tiled[:, np.newaxis, :7]
+                candidate_actions = self._pad_last_dim(candidate_actions, model_act_dim)
+                actions_norm = np.asarray(
+                    self._action_normalize({"actions": candidate_actions})["actions"]
+                )
+            else:
+                actions_norm = np.asarray(
+                    self._action_normalize({"actions": np.asarray(group_actions)})["actions"]
+                )
+                actions_norm = self._pad_last_dim(actions_norm, model_act_dim)
             flat_actions = jnp.asarray(actions_norm.reshape(group_env_num * n_samples, -1))
             q_logits = q_model(critic_obs, flat_actions)
 
