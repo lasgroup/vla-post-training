@@ -460,6 +460,7 @@ def make_base_molmo_config(
         rl=rl_config,
         collect=CollectionConfig(
             domain="molmo",
+            max_episode_steps=450,
             resize_image_h=224,
             resize_image_w=224,
         )

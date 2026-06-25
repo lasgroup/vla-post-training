@@ -1,10 +1,11 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_best_of_n
 project_name: vla-post-training
-group_name: multitask_bofn_libero_v0
+group_name: multitask_tasks64_bofn_libero_v0_seed0
 params:
   log_interval: [25]
   num_train_steps: [100000]
+  max_runtime: [39600]  # 11 hours
   
   collect.env_num: [8]
   collect.eval_env_num: [8]
@@ -52,6 +53,7 @@ params:
   ]
 
   rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
 
   rl.buffer_capacity: [500000]
   rl.online_ratio: [1.0]
