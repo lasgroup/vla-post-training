@@ -29,15 +29,15 @@ All scripts are run via `uv run` (e.g. `uv run scripts/exp.py ...`), which autom
 
 ## GPU requirements
 
-Pi0.5 full fine-tuning requires at least **2× A100-80GB**. The train state (params + Adam optimizer + EMA) is ~50 GiB and must be sharded across GPUs via FSDP — it does not fit on a single GPU.
+Pi0.5 full fine-tuning requires at least **2× A100-80GB**. The train state (params + Adam optimizer + EMA) is ~50 GiB and must be sharded across GPUs via FSDP — it does not fit on a single GPU. EMA is also FSDP-sharded (element-wise update, no cross-device communication needed).
 
 | GPUs | fsdp_devices | Resident/GPU | Headroom | Batch size |
 |------|-------------|-------------|---------|------------|
 | 1 | 1 | ~50 GiB | OOM | — |
-| 2 | 2 | ~31 GiB | ~29 GiB | 128 (64/GPU) — *untested* |
-| 4 | 4 | ~22 GiB | ~38 GiB | 256 (64/GPU) — **confirmed working** |
+| 2 | 2 | ~25 GiB | ~55 GiB | 128 (64/GPU) — *untested* |
+| 4 | 4 | ~12.5 GiB | ~67 GiB | 256 (64/GPU) — **confirmed working** |
 
-The confirmed setup is 4 GPUs (half a standard Euler node) with batch_size=256. 2 GPUs at batch_size=128 should work based on the memory math but has not been tested yet.
+The confirmed setup is 4 GPUs (half a standard Euler node) with batch_size=256. 2 GPUs at batch_size=128 should work based on the memory math but has not been tested yet — use `fsft_multitask_libero_euler_test_2gpu.yaml` to validate.
 
 ## Submitting jobs
 
@@ -76,7 +76,7 @@ When calling `exp.py` directly (without the launcher) on multiple GPUs, pass `--
 
 ### Note on sweep size
 
-`fsft_multitask_libero_v0.yaml` runs 7 task conditions × 2 seeds = 14 jobs. At 4 GPUs each, this is 56 GPUs in parallel. If cluster quota is a concern, consider reducing `seed` to `[0]` first to validate, or exploring the 2-GPU option above.
+`fsft_multitask_libero_v0.yaml` runs 7 task conditions × 2 seeds = 14 jobs. At 4 GPUs each, this is 56 GPUs in parallel; at 2 GPUs (batch_size=128, once validated) this drops to 28 GPUs. If cluster quota is a concern, reduce `seed` to `[0]` first or use 2 GPUs.
 
 ## Asset management
 

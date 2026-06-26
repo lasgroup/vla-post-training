@@ -111,23 +111,6 @@ def _load_weights_and_validate(
     )
 
 
-def _batch_axis_sharding(pytree, mesh: jax.sharding.Mesh):
-    n = mesh.shape[sharding.BATCH_AXIS]
-    replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-
-    def shard(arr):
-        if n > 1 and arr.ndim >= 2:
-            for axis in np.argsort(arr.shape)[::-1]:
-                if arr.shape[axis] % n == 0:
-                    spec = [None] * arr.ndim
-                    spec[axis] = sharding.BATCH_AXIS
-                    return jax.sharding.NamedSharding(
-                        mesh, jax.sharding.PartitionSpec(*spec)
-                    )
-        return replicated
-
-    return jax.tree.map(shard, pytree)
-
 
 def init_train_state(
     config: OnlineTrainConfig,
@@ -304,8 +287,8 @@ class FilteredSFTLearner(Agent):
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
 
-        # shard the EMA across devices
-        self._ema_sharding = _batch_axis_sharding(self._train_state.ema_params, self._mesh)
+        # Shard EMA with the same FSDP sharding as params; update is element-wise so no all-gather needed.
+        self._ema_sharding = self._train_state_sharding.ema_params
         self._ema = jax.device_put(self._train_state.ema_params, self._ema_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=None, ema_decay=None)
         decay = self._config.ema_decay
