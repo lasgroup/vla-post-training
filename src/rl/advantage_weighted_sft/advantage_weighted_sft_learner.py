@@ -26,6 +26,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
     init_state_value_train_state,
     train_q_step,
     train_value_step,
+    _build_pi0_backbone_critic_defs,
 )
 from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
 from src.rl.networks.rl_networks import ObsType
@@ -54,10 +55,15 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             depth = config.rl.critic.bronet_depth
             num_qs = config.rl.critic.num_qs
             num_vs = config.rl.critic.num_vs
+            num_bins = config.rl.critic.num_value_bins
+            if config.rl.critic.use_distributional_critic:
+                assert num_bins > 1, (
+                    "use_distributional_critic=True requires num_value_bins > 1."
+                )
             def state_action_critic_def(observation, action, rngs):
-                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, rngs=rngs)
+                return BroNetStateActionCritic(observation=observation, action=action, hidden_dim=hidden_dim, depth=depth, num_qs=num_qs, num_bins=num_bins, rngs=rngs)
             def state_value_def(observation, rngs):
-                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, rngs=rngs)
+                return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, num_bins=num_bins, rngs=rngs)
         else:
             state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
 
@@ -118,6 +124,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._refresh_update_functions()
 
     def _refresh_update_functions(self):
+
+        self._train_state_sharding = sharding.fsdp_sharding(
+            self._train_state, self._mesh, log=False
+        )
 
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
             return self._update_critics(
@@ -216,9 +226,6 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         observation: dict[str, Any],
         policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
-        # ema_replicated = jax.device_put(self._ema, self._replicated_sharding)
-        # model = nnx.merge(policy_state.model_def, ema_replicated)
-        # model.eval()
         model = self._get_policy_model(policy_state)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
@@ -504,6 +511,22 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         }
 
     @at.typecheck
+    def _get_on_policy_action(
+            self,
+            online_observation: _model.Observation,
+            policy_state: training_utils.TrainState,
+            rng: at.KeyArrayLike,
+    ) -> _model.Actions:
+        model = self._get_policy_model(policy_state)
+        sampled_actions = model.sample_actions(
+            observation=online_observation,
+            rng=rng,
+            return_info_dict=False,
+            return_prefix_rep=False,
+        )
+        return sampled_actions
+
+    @at.typecheck
     def _update_critics(
         self,
         batch: dict[str, Any],
@@ -517,6 +540,17 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
+        if self._config.rl.train_on_policy_value_function:
+            # We replace the action from the batch with the on policy action
+            # This ensures that we train an on policy critic.
+            policy_sample_rng, rng = jax.random.split(rng, 2)
+            value_actions = self._get_on_policy_action(
+                online_observation=_model.Observation.from_dict(batch["observation"]),
+                policy_state=policy_state,
+                rng=policy_sample_rng,
+            )
+        else:
+            value_actions = batch["actions"]
         # Add prefix representation to the batch for the critic
         batch = self._online_batch_to_critic_batch(
             batch,
@@ -525,6 +559,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         # Update the state action critic state
         num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
+        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
             q_state, q_info = self._q_train_step(
@@ -538,7 +573,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 v_rng,
                 value_state,
                 q_state,
-                batch,
+                value_batch,
             )
 
         return q_state, value_state, q_info, value_info
