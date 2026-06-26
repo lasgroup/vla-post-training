@@ -2,14 +2,7 @@
 
 ## One-time environment setup
 
-Euler does not use containers, so dependencies are managed with conda + uv. The conda env provides Python 3.12 and build tools; `uv` then manages the actual project dependencies.
-
-```bash
-conda create -n vla-post-training python=3.12 cmake uv -c conda-forge -y
-conda activate vla-post-training
-```
-
-Clone with submodules:
+Clone with submodules, then run the setup script from the repo root:
 
 ```bash
 git clone --recurse-submodules <repo-url>
@@ -18,26 +11,22 @@ cd vla-post-training
 git submodule update --init --recursive
 ```
 
-Install all dependencies:
-
 ```bash
-uv sync
-uv pip install -e openpi/ -e molmospaces/
+./euler-install.sh
 ```
 
-All scripts are run via `uv run` (e.g. `uv run scripts/exp.py ...`), which automatically uses the project's `.venv` without needing to activate it. The launcher already does this; if calling scripts directly, prefix with `uv run`.
+This creates the `vla-post-training` conda env (Python 3.12 + cmake + uv), installs all dependencies into `.venv`, and registers the `openpi` and `molmospaces` submodules as editable installs. Re-running is safe — conda env creation is skipped if it already exists.
+
+All scripts must be run via `uv run python` (e.g. `uv run python scripts/exp.py ...`), which automatically uses the project's `.venv` without needing to activate it. This applies to the launcher too — `uv run python scripts/launcher.py ...`.
 
 ## GPU requirements
 
-Pi0.5 full fine-tuning requires at least **2× A100-80GB**. The train state (params + Adam optimizer + EMA) is ~50 GiB and must be sharded across GPUs via FSDP — it does not fit on a single GPU. EMA is also FSDP-sharded (element-wise update, no cross-device communication needed).
+Pi0.5 full fine-tuning requires **4× A100-80GB** (half a standard Euler node). The train state (params + Adam optimizer + EMA) is ~50 GiB and must be sharded across GPUs via FSDP. EMA is FSDP-sharded (element-wise update, no cross-device communication needed).
 
 | GPUs | fsdp_devices | Resident/GPU | Headroom | Batch size |
 |------|-------------|-------------|---------|------------|
 | 1 | 1 | ~50 GiB | OOM | — |
-| 2 | 2 | ~25 GiB | ~55 GiB | 256 (128/GPU) — *untested* |
 | 4 | 4 | ~12.5 GiB | ~67 GiB | 256 (64/GPU) — **confirmed working** |
-
-The confirmed setup is 4 GPUs (half a standard Euler node) with batch_size=256. With EMA sharding, 2 GPUs have ~55 GiB headroom so batch_size=256 (128/GPU) should also work — use `fsft_multitask_libero_euler_test_2gpu.yaml` to validate. If confirmed, the full sweep drops from 56 → 28 GPUs.
 
 ## Submitting jobs
 
@@ -45,11 +34,11 @@ Use `--mode euler`. The launcher checks that all required model checkpoints, tok
 
 ```bash
 # Dry run — preview sbatch commands without downloading or submitting
-./scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
+uv run python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
     --mode euler --num_gpus 4 --dry
 
 # Submit
-./scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
+uv run python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
     --mode euler --num_gpus 4
 ```
 
@@ -61,7 +50,7 @@ Results and checkpoints land in `/cluster/scratch/$USER/results/<project>_<group
 |------|---------|-------------|
 | `--mode euler` | — | Euler submission mode (generates sbatch scripts without `srun --environment`) |
 | `--gpu_type` | `a100_80gb` | GPU type for the `--gpus=<type>:<n>` sbatch directive |
-| `--num_gpus` | `1` | GPUs per job; use `4` for the confirmed setup, possibly `2` for lighter runs |
+| `--num_gpus` | `1` | GPUs per job; use `4` for the confirmed setup |
 | `--mem` | `8G` | Memory per CPU; total RAM = `mem × (8 × num_gpus)` |
 | `--duration` | `11:59:00` | SLURM time limit |
 | `--partition` | _(none)_ | SLURM partition. If unset, Euler's scheduler picks a default. Run `sinfo` on the login node to see available partitions. `gpupr.4h` (priority queue) is useful for short test runs. |
@@ -76,7 +65,7 @@ When calling `exp.py` directly (without the launcher) on multiple GPUs, pass `--
 
 ### Note on sweep size
 
-`fsft_multitask_libero_v0.yaml` runs 7 task conditions × 2 seeds = 14 jobs. At 4 GPUs each, this is 56 GPUs in parallel; at 2 GPUs (once validated) this drops to 28 GPUs with the same batch_size=256. If cluster quota is a concern, reduce `seed` to `[0]` first or use 2 GPUs.
+`fsft_multitask_libero_v0.yaml` runs 7 task conditions × 2 seeds = 14 jobs. At 4 GPUs each, this is 56 GPUs in parallel. If cluster quota is a concern, reduce `seed` to `[0]` first.
 
 ## Asset management
 
@@ -85,7 +74,7 @@ Model checkpoints and LIBERO scene assets are cached in `/cluster/scratch/$USER/
 To re-download manually (e.g. after reinstalling the venv, which wipes the LIBERO scenes from the hf-libero package directory):
 
 ```bash
-uv run scripts/download_assets.py --cache_dir /cluster/scratch/$USER/openpi_cache
+uv run python scripts/download_assets.py --cache_dir /cluster/scratch/$USER/openpi_cache
 ```
 
 ## Config sweeps
