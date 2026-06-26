@@ -12,6 +12,7 @@ import os
 import secrets
 import shlex
 import shutil
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 import yaml
@@ -25,6 +26,61 @@ DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
 REQUEUE_EXIT_CODE = 42
 RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unknown')}/results"
+
+# Euler (ETH) cluster settings
+_EULER_USER = os.environ.get("USER", "unknown")
+EULER_RESULTS_DIR = f"/cluster/scratch/{_EULER_USER}/results"
+EULER_CACHE_DIR = f"/cluster/scratch/{_EULER_USER}/openpi_cache"
+DEFAULT_EULER_GPU = "a100_80gb"
+DEFAULT_EULER_MEM_PER_CPU = "8G"
+DEFAULT_EULER_CPUS = 8
+DEFAULT_EULER_NUM_GPUS = 1
+
+# GCS assets required for training: (url, path relative to cache dir)
+_GCS_ASSETS = [
+    ("gs://big_vision/paligemma_tokenizer.model", "big_vision/paligemma_tokenizer.model"),
+    # LIBERO checkpoint (used by all pi05_libero_* configs)
+    ("gs://openpi-assets/checkpoints/pi05_libero/params", "openpi-assets/checkpoints/pi05_libero/params"),
+    ("gs://openpi-assets/checkpoints/pi05_libero/assets", "openpi-assets/checkpoints/pi05_libero/assets"),
+    # Molmo / DROID checkpoint (used by all pi05_molmo_* configs)
+    ("gs://openpi-assets/checkpoints/pi05_droid_jointpos/params", "openpi-assets/checkpoints/pi05_droid_jointpos/params"),
+    ("gs://openpi-assets/checkpoints/pi05_droid_jointpos/assets", "openpi-assets/checkpoints/pi05_droid_jointpos/assets"),
+]
+
+
+def _libero_assets_present() -> bool:
+    """Return True if LIBERO scene assets are installed in the hf-libero package dir."""
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.find_spec("libero.libero")
+    if spec is None or spec.origin is None:
+        return True  # libero not installed; nothing to check
+    scenes_dir = pathlib.Path(spec.origin).parent / "assets" / "scenes"
+    return scenes_dir.exists() and any(scenes_dir.iterdir())
+
+
+def ensure_assets(cache_dir: str) -> None:
+    """Check if all required assets are cached/installed; download any missing ones.
+
+    Checks both GCS assets (openpi checkpoints) and LIBERO scene assets (hf-libero
+    ships without them and downloads from lerobot/libero-assets on first use).
+    Runs on the calling machine (login node), not inside the submitted job.
+    """
+    missing_gcs = [url for url, rel in _GCS_ASSETS if not os.path.exists(os.path.join(cache_dir, rel))]
+    missing_libero = not _libero_assets_present()
+
+    if not missing_gcs and not missing_libero:
+        print(f"All assets present in {cache_dir}.")
+        return
+
+    if missing_gcs:
+        print(f"{len(missing_gcs)} GCS asset(s) missing from {cache_dir}, downloading now...")
+    if missing_libero:
+        print("LIBERO scene assets missing from hf-libero package, downloading now...")
+
+    download_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_assets.py")
+    subprocess.run([sys.executable, download_script, "--cache_dir", cache_dir], check=True)
 
 
 def generate_srun_command(
@@ -62,15 +118,30 @@ def generate_srun_command(
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
 
 
-def _write_sbatch_script(path: str, *, command: str, requeue: bool) -> None:
+def _write_sbatch_script(
+    path: str,
+    *,
+    command: str,
+    requeue: bool,
+    mode: str = "swiss-ai",
+    openpi_data_home: Optional[str] = None,
+) -> None:
     cwd = os.getcwd()
+    data_home_export = (
+        f"export OPENPI_DATA_HOME={shlex.quote(openpi_data_home)}\n" if openpi_data_home else ""
+    )
+    # Euler compute nodes have no persistent PYTHONPATH/venv preallocation setup like the
+    # swiss-ai container image does; these exports are only needed (and only tested) there.
+    euler_exports = (
+        f"export PYTHONPATH={shlex.quote(cwd)}:${{PYTHONPATH:-}}\n"
+        "export XLA_PYTHON_CLIENT_PREALLOCATE=false\n"
+    ) if mode == "euler" else ""
     if requeue:
         script = f"""#!/bin/bash
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
-
-child_status=0
+{euler_exports}{data_home_export}child_status=0
 {command} || child_status=$?
 
 if [[ "$child_status" -eq {REQUEUE_EXIT_CODE} ]]; then
@@ -90,8 +161,7 @@ exit "$child_status"
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
-
-exec {command}
+{euler_exports}{data_home_export}exec {command}
 """
 
     with open(path, "w", encoding="ascii") as f:
@@ -152,12 +222,16 @@ def generate_run_commands(
     project_name: str,
     group_name: str,
     duration: str = DEFAULT_DURATION,
-    partition: str = DEFAULT_PARTITION,
+    partition: Optional[str] = DEFAULT_PARTITION,
     account: str = DEFAULT_ACCOUNT,
     mode: str = "swiss-ai",
     dry: bool = False,
     prompt: bool = True,
     requeue: bool = False,
+    gpu_type: Optional[str] = None,
+    num_gpus: int = 1,
+    mem: Optional[str] = None,
+    openpi_data_home: Optional[str] = None,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -175,7 +249,7 @@ def generate_run_commands(
         prompt: If True, ask for confirmation before submitting.
     """
 
-    assert mode in ["swiss-ai", "local"], f"Unknown mode: {mode}"
+    assert mode in ["swiss-ai", "local", "euler"], f"Unknown mode: {mode}"
 
     # update combos with checkpoint_base_dir
     results_dir = os.path.join(result_dir, '_'.join([project_name, group_name]))
@@ -184,6 +258,9 @@ def generate_run_commands(
         combo["project_name"] = project_name
         combo["group_name"] = group_name
         combo["exp_name"] = auto_exp_name(project_name, combo, i)
+        # fsdp_devices defaults to 1 (replication); shard across all GPUs unless overridden in YAML.
+        if num_gpus > 1 and "fsdp_devices" not in combo:
+            combo["fsdp_devices"] = num_gpus
     
     if not dry:
         # create results directory, handling existing directory
@@ -213,9 +290,17 @@ def generate_run_commands(
 
     # create command list
     command_list = [generate_srun_command(script, config_name, flags=combo, mode=mode) for combo in combos]
-    if mode == "swiss-ai":
+    if mode in ("swiss-ai", "euler"):
 
-        bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
+        bsub_cmd = f"sbatch --time={duration} "
+        if mode != "euler":
+            bsub_cmd += f"--account={account} "
+        if partition:
+            bsub_cmd += f"--partition={partition} "
+        if mode == "euler" and gpu_type:
+            bsub_cmd += f"--gpus={gpu_type}:{num_gpus} "
+        if mode == "euler" and mem:
+            bsub_cmd += f"--mem-per-cpu={mem} --cpus-per-task={DEFAULT_EULER_CPUS * num_gpus} "
         if requeue:
             bsub_cmd += "--requeue --open-mode=append "
 
@@ -223,7 +308,13 @@ def generate_run_commands(
         for i, (cmd, combo) in enumerate(zip(command_list, combos)):
             script_path = os.path.join(combo["checkpoint_base_dir"], f"job_{i:04d}.sbatch.sh")
             if not dry:
-                _write_sbatch_script(script_path, command=cmd, requeue=requeue)
+                _write_sbatch_script(
+                    script_path,
+                    command=cmd,
+                    requeue=requeue,
+                    mode=mode,
+                    openpi_data_home=openpi_data_home,
+                )
             cluster_cmds.append(bsub_cmd + f"--output={combo['checkpoint_base_dir']}/slurm-%j.out " + shlex.quote(script_path))
         command_list = cluster_cmds
 
@@ -280,14 +371,7 @@ def dict_permutations(d: dict) -> List[dict]:
 
 def apply_requeue_flags(flags: Dict[str, Any]) -> Dict[str, Any]:
     updated = dict(flags)
-    overrides = {}
-    desired_values = {
-        "resume": True,
-        "overwrite": False,
-    }
-    for key, value in desired_values.items():
-        if updated.get(key) != value:
-            overrides[key] = (updated.get(key), value)
+    for key, value in {"resume": True, "overwrite": False}.items():
         updated[key] = value
     return updated
 
@@ -296,13 +380,30 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="configs/filtered_sft.yaml")
     parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
-    parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local"], help="Execution mode")
+    parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local", "euler"], help="Execution mode")
     parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")
-    parser.add_argument("--partition", default="normal", help="SLURM partition")
+    parser.add_argument("--partition", default=None, help="SLURM partition (default: 'normal' for swiss-ai, none for euler)")
+    parser.add_argument("--gpu_type", default=DEFAULT_EULER_GPU, help="GPU type for Euler mode (e.g. rtx_3090, a100_80gb)")
+    parser.add_argument("--num_gpus", type=int, default=DEFAULT_EULER_NUM_GPUS, help="Number of GPUs per job (Euler mode)")
+    parser.add_argument("--mem", default=None, help="Memory per CPU for Euler sbatch jobs (e.g. 8G, 16G); total = mem * cpus-per-task")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     parser.add_argument("--skip_requeue", action="store_true", help="Submit requeue-safe resumable jobs")
 
     args = parser.parse_args()
+
+    # Resolve cluster-specific defaults based on mode
+    if args.mode == "euler":
+        result_dir = EULER_RESULTS_DIR
+        partition = args.partition  # None means no --partition flag; Euler doesn't need one
+        mem = args.mem or DEFAULT_EULER_MEM_PER_CPU
+        openpi_data_home = EULER_CACHE_DIR
+        if not args.dry:
+            ensure_assets(EULER_CACHE_DIR)
+    else:
+        result_dir = RESULTS_DIR
+        partition = args.partition or DEFAULT_PARTITION
+        mem = args.mem  # not used for swiss-ai
+        openpi_data_home = None
 
     with open(args.config, "r") as f:
         config = config = yaml.load(f, Loader=yaml.FullLoader)
@@ -315,15 +416,20 @@ def main() -> None:
         combos,
         script=config["script"],
         config_name=config["config_name"],
-        result_dir=RESULTS_DIR,
+        result_dir=result_dir,
         project_name=config["project_name"],
         group_name=config["group_name"],
         mode=args.mode,
         duration=args.duration,
-        partition=args.partition,
+        partition=partition,
+        account=DEFAULT_ACCOUNT,
         dry=args.dry,
         prompt=not args.force,
-        requeue=not args.skip_requeue
+        requeue=not args.skip_requeue,
+        gpu_type=args.gpu_type if args.mode == "euler" else None,
+        num_gpus=args.num_gpus,
+        mem=mem if args.mode == "euler" else None,
+        openpi_data_home=openpi_data_home,
     )
 
 

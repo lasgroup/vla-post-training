@@ -129,7 +129,6 @@ def _batch_axis_sharding(pytree, mesh: jax.sharding.Mesh):
     return jax.tree.map(shard, pytree)
 
 
-@at.typecheck
 def init_train_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
@@ -335,16 +334,15 @@ class FilteredSFTLearner(Agent):
 
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
-        # Create policy for data collection
+        # Load onto CPU to avoid a second full model copy on GPU; drop references immediately after.
         policy_checkpoint_dir = self._config.weight_loader.params_path[
             : -len("/params")
         ]
-        self._policy = policy_config.create_trained_policy(
-            self._config,
-            policy_checkpoint_dir,
-        )
-        # This learner always calls `infer_with_model(...)` with the current train-state model.
-        # Drop policy-owned model references to avoid keeping an extra model copy in memory.
+        with jax.default_device(jax.devices("cpu")[0]):
+            self._policy = policy_config.create_trained_policy(
+                self._config,
+                policy_checkpoint_dir,
+            )
         self._drop_policy_model()
 
         # prepare transforms for preprocessing episode data into model input format
