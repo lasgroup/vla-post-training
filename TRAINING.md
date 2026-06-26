@@ -15,7 +15,13 @@ git submodule update --init --recursive
 ./euler-install.sh
 ```
 
-This creates the `vla-post-training` conda env (Python 3.12 + cmake + uv), installs all dependencies into `.venv`, and registers the `openpi` and `molmospaces` submodules as editable installs. Re-running is safe — conda env creation is skipped if it already exists.
+This creates the `vla-post-training` conda env (Python 3.12 + cmake + uv), installs all dependencies into `.venv`, and registers the `openpi` and `molmospaces` submodules as editable installs. 
+
+After the initial installation setup, you only need to activate the conda env with 
+
+```bash
+conda activate vla-post-training
+```
 
 All scripts must be run via `uv run python` (e.g. `uv run python scripts/exp.py ...`), which automatically uses the project's `.venv` without needing to activate it. This applies to the launcher too — `uv run python scripts/launcher.py ...`.
 
