@@ -18,7 +18,11 @@ import os
 import pathlib
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
+# openpi package lives in openpi/src/ — add it explicitly so this script works
+# even if the editable install was wiped by a subsequent `uv sync`.
+sys.path.insert(0, os.path.join(_REPO_ROOT, "openpi", "src"))
 
 ASSETS = [
     "gs://big_vision/paligemma_tokenizer.model",

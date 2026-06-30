@@ -75,12 +75,32 @@ When calling `exp.py` directly (without the launcher) on multiple GPUs, pass `--
 
 ## Asset management
 
+### LIBERO
+
 Model checkpoints and LIBERO scene assets are cached in `/cluster/scratch/$USER/openpi_cache`. The launcher downloads them automatically on first submission. Compute nodes have no internet access and will fail at startup if assets are missing.
 
 To re-download manually (e.g. after reinstalling the venv, which wipes the LIBERO scenes from the hf-libero package directory):
 
 ```bash
 uv run python scripts/download_assets.py --cache_dir /cluster/scratch/$USER/openpi_cache
+```
+
+### MolmoSpaces
+
+MolmoSpaces benchmark episodes and 3D scene assets are downloaded automatically by the launcher the first time you submit a molmo job (same as LIBERO). The launcher calls `scripts/install_molmo_assets.py`, which downloads everything to `molmospaces/assets/` inside the submodule (shared filesystem, visible to compute nodes). The download can take a while on first run.
+
+To download manually (e.g. to pre-warm or if the launcher run was interrupted):
+
+```bash
+uv run python scripts/install_molmo_assets.py
+```
+
+By default, assets land in `molmospaces/assets/`. To redirect to scratch (e.g. if home quota is limited):
+
+```bash
+export MLSPACES_ASSETS_DIR=/cluster/scratch/$USER/molmospaces_assets
+uv run python scripts/install_molmo_assets.py
+# Then set the same env var in your sbatch scripts or YAML params.
 ```
 
 ## Config sweeps
