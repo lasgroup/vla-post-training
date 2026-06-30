@@ -1,7 +1,7 @@
 script: scripts/exp.py
 config_name: pi05_molmo_online_filtered_sft
 project_name: vla-post-training
-group_name: multitask_fsft_molmo_v0
+group_name: multitask_fsft_molmo_tasks8_seed2_v0
 params:
   lr_schedule.value: [2.5e-5]
   num_train_steps: [2_500]
