@@ -1,0 +1,58 @@
+{
+  "dataset": {
+    "random": {
+      "candidate_count": 600,
+      "failures": 92,
+      "selected": 200,
+      "selection_method": "random",
+      "success_rate": 0.54,
+      "successes": 108,
+      "task_id": "libero_90_60"
+    },
+    "reward_filtered": {
+      "candidate_count": 600,
+      "failures": 0,
+      "selected": 200,
+      "selection_method": "reward",
+      "success_rate": 1.0,
+      "successes": 200,
+      "task_id": "libero_90_60"
+    }
+  },
+  "eval100_status": {
+    "random": {
+      "job_id": "2664835",
+      "latest_completed_rollouts": 15.0,
+      "latest_interim_success_rate": 0.533,
+      "state": "running"
+    },
+    "reward_filtered": {
+      "job_id": "2664836",
+      "latest_completed_rollouts": 30.0,
+      "latest_interim_success_rate": 1.0,
+      "state": "running"
+    }
+  },
+  "eval32": {
+    "random": {
+      "checkpoint_step": 4001,
+      "failures": 16,
+      "job_id": "2664691",
+      "mean_success_episode_length": 118.75,
+      "rollouts": 32,
+      "success_rate": 0.5,
+      "successes": 16,
+      "task_success_rate": 0.5
+    },
+    "reward_filtered": {
+      "checkpoint_step": 4001,
+      "failures": 0,
+      "job_id": "2664692",
+      "mean_success_episode_length": 131.1875,
+      "rollouts": 32,
+      "success_rate": 1.0,
+      "successes": 32,
+      "task_success_rate": 1.0
+    }
+  }
+}
