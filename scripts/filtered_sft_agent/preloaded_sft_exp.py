@@ -1,9 +1,9 @@
 # ruff: noqa: E402
 """Dataset-only filtered SFT from preloaded rollout pickles.
 
-This entrypoint intentionally does not create collection/evaluation environments and
-never calls collect_data(...). It trains only from episodes loaded via
---rl.preload_episodes_from_path.
+This entrypoint intentionally never calls collect_data(...). It trains only from
+episodes loaded via --rl.preload_episodes_from_path. Evaluation environments are
+created only when PRELOADED_SFT_FINAL_EVAL=1 or PRELOADED_SFT_PERIODIC_EVAL=1.
 """
 
 import json
@@ -58,6 +58,50 @@ def _to_float_dict(info: dict) -> dict[str, float]:
     return out
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _make_eval_env(config: _config.OnlineTrainConfig):
+    # MuJoCo/robosuite EGL device enumeration is not always the same as JAX's CUDA
+    # device count inside CSCS EDF/Pyxis containers. Default to one render device so
+    # vector env workers do not try invalid MUJOCO_EGL_DEVICE_ID values; override on
+    # systems where multiple EGL render devices are known to work.
+    num_render_devices = max(1, int(os.environ.get("MUJOCO_EGL_NUM_DEVICES", "1")))
+    eval_tasks = config.collect.eval_tasks
+    if isinstance(eval_tasks, str):
+        eval_tasks = [eval_tasks]
+    eval_env_fn = make_env(config, eval_tasks, num_devices=num_render_devices)
+    return filtered_sft_wrap_env(
+        eval_env_fn,
+        config=config,
+        env_num=config.collect.eval_env_num,
+    )
+
+
+def _run_eval(
+    *,
+    agent: FilteredSFTLearner,
+    eval_env,
+    config: _config.OnlineTrainConfig,
+    step: int,
+    metrics_path: Path,
+    event: str,
+) -> dict[str, float]:
+    eval_metrics = _to_float_dict(
+        evaluate_policy(
+            agent=agent,
+            env=eval_env,
+            config=config,
+            step=step,
+        )
+    )
+    logging.info("%s metrics at step %d: %s", event, step, eval_metrics)
+    wandb.log(eval_metrics if event == "eval" else {f"final/{k}": v for k, v in eval_metrics.items()}, step=step)
+    _write_jsonl(metrics_path, {"event": event, "step": int(step), **eval_metrics})
+    return eval_metrics
+
+
 def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info("Running dataset-only preloaded SFT on: %s", platform.node())
@@ -98,6 +142,22 @@ def main(config: _config.OnlineTrainConfig):
     )
 
     start_step = int(agent.training_steps)
+    periodic_eval_enabled = _env_flag("PRELOADED_SFT_PERIODIC_EVAL")
+    final_eval_enabled = _env_flag("PRELOADED_SFT_FINAL_EVAL")
+    eval_env = None
+    if periodic_eval_enabled or final_eval_enabled:
+        if config.collect.eval_interval <= 0 and periodic_eval_enabled:
+            raise ValueError("periodic eval requires --collect.eval_interval > 0")
+        logging.info(
+            "Creating evaluation env: periodic=%s final=%s interval=%d rollouts=%d env_num=%d",
+            periodic_eval_enabled,
+            final_eval_enabled,
+            int(config.collect.eval_interval),
+            int(config.collect.num_eval_rollouts),
+            int(config.collect.eval_env_num),
+        )
+        eval_env = _make_eval_env(config)
+
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
         initial=start_step,
@@ -107,76 +167,68 @@ def main(config: _config.OnlineTrainConfig):
 
     infos = []
     last_reduced_info = None
-    for step in pbar:
-        info = agent.update()
-        if not info:
-            raise RuntimeError(
-                f"agent.update returned empty info at step {step}; online buffer size={agent._online_data_buffer.size}"
-            )
-        infos.append(info)
-
-        if step % config.log_interval == 0:
-            all_keys = set().union(*(d.keys() for d in infos))
-            nan = jnp.array(float("nan"))
-            normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
-            stacked_infos = common_utils.stack_forest(normalized)
-            reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
-            reduced_info = _to_float_dict(reduced_info)
-            last_reduced_info = reduced_info
-            info_str = ", ".join(
-                f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
-                for k, v in reduced_info.items()
-            )
-            pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
-            _write_jsonl(metrics_path, {"event": "log", "step": int(step), **reduced_info})
-            infos = []
-
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            logging.info("Saving checkpoint at step %d", step)
-            agent.save_checkpoint(step=step)
-            # Runtime state is useful for requeue-safe launches, but keep this secondary to the model checkpoint.
-            try:
-                save_epoch_state(agent, config)
-            except Exception:
-                logging.exception("Failed to save runtime state; model checkpoint was still requested")
-
-    agent._checkpoint_manager.wait_until_finished()
-
     final_eval_metrics = None
-    if os.environ.get("PRELOADED_SFT_FINAL_EVAL", "0") == "1":
-        logging.info("Running final evaluation rollouts; this does not add data to the training buffer.")
-        # MuJoCo/robosuite EGL device enumeration is not always the same as JAX's CUDA
-        # device count inside CSCS EDF/Pyxis containers. Default to one render device so
-        # vector env workers do not try invalid MUJOCO_EGL_DEVICE_ID values; override on
-        # systems where multiple EGL render devices are known to work.
-        num_render_devices = max(1, int(os.environ.get("MUJOCO_EGL_NUM_DEVICES", "1")))
-        eval_env_fn = make_env(config, config.collect.eval_tasks, num_devices=num_render_devices)
-        eval_env = filtered_sft_wrap_env(
-            eval_env_fn,
-            config=config,
-            env_num=config.collect.eval_env_num,
-        )
-        try:
-            final_eval_metrics = _to_float_dict(
-                evaluate_policy(
-                    agent=agent,
-                    env=eval_env,
-                    config=config,
-                    step=int(config.num_train_steps - 1),
+    try:
+        for step in pbar:
+            info = agent.update()
+            if not info:
+                raise RuntimeError(
+                    f"agent.update returned empty info at step {step}; online buffer size={agent._online_data_buffer.size}"
                 )
+            infos.append(info)
+
+            if step % config.log_interval == 0:
+                all_keys = set().union(*(d.keys() for d in infos))
+                nan = jnp.array(float("nan"))
+                normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
+                stacked_infos = common_utils.stack_forest(normalized)
+                reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
+                reduced_info = _to_float_dict(reduced_info)
+                last_reduced_info = reduced_info
+                info_str = ", ".join(
+                    f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in reduced_info.items()
+                )
+                pbar.write(f"Step {step}: {info_str}")
+                wandb.log(reduced_info, step=step)
+                _write_jsonl(metrics_path, {"event": "log", "step": int(step), **reduced_info})
+                infos = []
+
+            if periodic_eval_enabled and eval_env is not None and step % config.collect.eval_interval == 0:
+                _run_eval(
+                    agent=agent,
+                    eval_env=eval_env,
+                    config=config,
+                    step=int(step),
+                    metrics_path=metrics_path,
+                    event="eval",
+                )
+
+            if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
+                logging.info("Saving checkpoint at step %d", step)
+                agent.save_checkpoint(step=step)
+                # Runtime state is useful for requeue-safe launches, but keep this secondary to the model checkpoint.
+                try:
+                    save_epoch_state(agent, config)
+                except Exception:
+                    logging.exception("Failed to save runtime state; model checkpoint was still requested")
+
+        agent._checkpoint_manager.wait_until_finished()
+
+        if final_eval_enabled:
+            if eval_env is None:
+                eval_env = _make_eval_env(config)
+            logging.info("Running final evaluation rollouts; this does not add data to the training buffer.")
+            final_eval_metrics = _run_eval(
+                agent=agent,
+                eval_env=eval_env,
+                config=config,
+                step=int(config.num_train_steps - 1),
+                metrics_path=metrics_path,
+                event="final_eval",
             )
-            logging.info("Final eval metrics: %s", final_eval_metrics)
-            wandb.log({f"final/{k}": v for k, v in final_eval_metrics.items()}, step=int(config.num_train_steps - 1))
-            _write_jsonl(
-                metrics_path,
-                {
-                    "event": "final_eval",
-                    "step": int(config.num_train_steps - 1),
-                    **final_eval_metrics,
-                },
-            )
-        finally:
+    finally:
+        if eval_env is not None:
             eval_env.close()
 
     summary = {

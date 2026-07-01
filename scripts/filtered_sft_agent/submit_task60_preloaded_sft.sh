@@ -21,6 +21,8 @@ LOG_INTERVAL="${LOG_INTERVAL:-50}"
 BUFFER_CAPACITY="${BUFFER_CAPACITY:-250000}"
 EVAL_ROLLOUTS="${EVAL_ROLLOUTS:-32}"
 EVAL_ENVS="${EVAL_ENVS:-1}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-300}"
+PERIODIC_EVAL="${PERIODIC_EVAL:-0}"
 RUN_TAG="${RUN_TAG:-$(date -u +%Y%m%d_%H%M%S)}"
 
 DATASET_BASE="${DATASET_BASE:-/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/final_task0_task60_200_20260701}"
@@ -85,6 +87,7 @@ export WANDB_DIR="$OUTPUT_ROOT/wandb"
 export MPLCONFIGDIR="$CACHE_ROOT/mpl-cache"
 export JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax-cache"
 export PRELOADED_SFT_FINAL_EVAL="1"
+export PRELOADED_SFT_PERIODIC_EVAL="$PERIODIC_EVAL"
 mkdir -p "\$XDG_CACHE_HOME" "\$UV_CACHE_DIR" "\$HF_HOME" "\$HF_DATASETS_CACHE" "\$WANDB_DIR" "\$MPLCONFIGDIR" "\$JAX_COMPILATION_CACHE_DIR"
 # Repair the known fsspec/OpenPI cache nesting where gs://.../params may land as params/params/*.
 OPENPI_PARAMS_PARENT="$CACHE_ROOT/openpi_assets/openpi-assets/checkpoints/pi05_libero/params"
@@ -95,6 +98,7 @@ fi
 echo "[\$(date --iso-8601=seconds)] host=\$(hostname) repo=\$(pwd -P)"
 echo "[\$(date --iso-8601=seconds)] label=$label episodes=$episodes_dir"
 echo "[\$(date --iso-8601=seconds)] checkpoint_base=$CHECKPOINT_BASE_DIR exp_name=$exp_name"
+echo "[\$(date --iso-8601=seconds)] eval_rollouts=$EVAL_ROLLOUTS eval_envs=$EVAL_ENVS eval_interval=$EVAL_INTERVAL periodic_eval=$PERIODIC_EVAL"
 
 srun --account="$ACCOUNT" --environment="$ENVIRONMENT" --ntasks=1 \
   "$VENV_PATH/bin/python" scripts/filtered_sft_agent/preloaded_sft_exp.py \
@@ -114,6 +118,7 @@ srun --account="$ACCOUNT" --environment="$ENVIRONMENT" --ntasks=1 \
     --rl.preload_episodes_from_path "$episodes_dir" \
     --collect.tasks libero_90_60 \
     --collect.eval_tasks libero_90_60 \
+    --collect.eval_interval "$EVAL_INTERVAL" \
     --collect.eval_env_num "$EVAL_ENVS" \
     --collect.num_eval_rollouts "$EVAL_ROLLOUTS"
 SBATCH
@@ -164,6 +169,8 @@ cat > "${OUTPUT_ROOT}/submission_manifest.json" <<EOF
   "gpus": ${GPUS},
   "eval_rollouts": ${EVAL_ROLLOUTS},
   "eval_envs": ${EVAL_ENVS},
+  "eval_interval": ${EVAL_INTERVAL},
+  "periodic_eval": ${PERIODIC_EVAL},
   "environment": "${ENVIRONMENT}",
   "account": "${ACCOUNT}",
   "partition": "${PARTITION}",
