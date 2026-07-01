@@ -104,12 +104,12 @@ def ensure_assets(cache_dir: str, config_name: str = "") -> None:
 
     if missing_gcs or missing_libero:
         download_script = os.path.join(scripts_dir, "download_assets.py")
-        subprocess.run(["uv", "run", "python", download_script, "--cache_dir", cache_dir], check=True)
+        subprocess.run([sys.executable, download_script, "--cache_dir", cache_dir], check=True)
 
     if missing_molmo:
         print("MolmoSpaces benchmark episodes missing, downloading now...")
         install_script = os.path.join(scripts_dir, "install_molmo_assets.py")
-        subprocess.run(["uv", "run", "python", install_script], check=True)
+        subprocess.run([sys.executable, install_script], check=True)
 
 
 def generate_srun_command(
@@ -132,17 +132,21 @@ def generate_srun_command(
     Returns:
         Full srun command string.
     """
-    tokens = [
-        "srun",
-        f"--account={account}",
-        f"--environment={environment}",
-    ] if mode == 'swiss-ai' else []
-    tokens += [
-        "uv",
-        "run",
-        script,
-        config_name,
-    ]
+    if mode == 'swiss-ai':
+        tokens = [
+            "srun",
+            f"--account={account}",
+            f"--environment={environment}",
+            "uv",
+            "run",
+            script,
+            config_name,
+        ]
+    elif mode == 'euler':
+        # plain `python` (conda env), not `uv run` which would wipe editable installs
+        tokens = ["python", script, config_name]
+    else:  # local
+        tokens = ["uv", "run", script, config_name]
     tokens.extend(flags_to_cli_tokens(flags))
     return " ".join(shlex.quote(str(tok)) for tok in tokens)
 
