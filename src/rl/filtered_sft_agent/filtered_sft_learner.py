@@ -2,8 +2,10 @@ import dataclasses
 import copy
 import functools
 import gc
+import glob
 import logging
 import os
+import pickle
 import weakref
 from typing import Any, Dict
 
@@ -690,11 +692,13 @@ class FilteredSFTLearner(Agent):
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
         if self._config.rl.save_episodes_to_path is not None:
-            import pickle
             if not hasattr(self, "n_saved_episodes"):
                 self.n_saved_episodes = 0
             with open(os.path.join(self._config.rl.save_episodes_to_path, f'episode_{self.n_saved_episodes}.pkl'), 'wb') as f:
-                pickle.dump(episode_data, f)
+                pickle.dump({
+                    "episode_data": episode_data,
+                    "task_description": task_description,
+                }, f)
             self.n_saved_episodes += 1
             # episode_data is a list of dicts with 
             #   observation (dict contrianing visual/proprioception)
@@ -706,6 +710,29 @@ class FilteredSFTLearner(Agent):
 
         if self.reward_model(episode_data, is_success):
             self._save_episode_in_buffer(episode_data, task_description)
+
+    def preload_episodes(self) -> int:
+        preload_path = self._config.rl.preload_episodes_from_path
+        if preload_path is None:
+            return
+        episode_files = sorted(glob.glob(os.path.join(preload_path, "episode_*.pkl")))
+        if not episode_files:
+            logging.warning("No episodes found to preload at %s", preload_path)
+            return
+        n_inserted = 0
+        for path in episode_files:
+            with open(path, "rb") as f:
+                payload = pickle.load(f)
+            episode_data = payload["episode_data"]
+            task_description = payload["task_description"]
+            self._save_episode_in_buffer(episode_data, task_description)
+            n_inserted += 1
+        logging.info(
+            "Preloaded %d/%d episode(s) into the online buffer (buffer size=%d).",
+            n_inserted,
+            len(episode_files),
+            self._online_data_buffer.size,
+        )
 
     def _save_episode_in_buffer(self, episode_data, task_description):
 

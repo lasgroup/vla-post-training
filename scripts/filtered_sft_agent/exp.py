@@ -60,6 +60,7 @@ def main(config: _config.OnlineTrainConfig):
     logging.info(f"Running on: {platform.node()}")
 
     agent = FilteredSFTLearner(config)
+    agent.preload_episodes()
     init_wandb(config, resuming=agent._resuming, enabled=config.wandb_enabled)
 
     num_devices = max(1, jax.device_count())
