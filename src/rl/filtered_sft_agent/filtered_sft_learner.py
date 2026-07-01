@@ -215,9 +215,12 @@ class FilteredSFTLearner(Agent):
             raise ValueError(
                 f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
             )
-        jax.config.update(
-            "jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser())
-        )
+        jax_cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR")
+        if not jax_cache_dir:
+            user = os.environ.get("USER", "unknown")
+            capstor_cache = epath.Path(f"/capstor/scratch/cscs/{user}/jax-cache")
+            jax_cache_dir = str(capstor_cache if capstor_cache.parent.exists() else epath.Path("/tmp/jax-cache"))
+        jax.config.update("jax_compilation_cache_dir", jax_cache_dir)
         self._rng = jax.random.key(self._config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
 
