@@ -725,6 +725,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
 
             self._train_state = policy_state
+            self._ema = self._ema_update_fn(self._ema, self._train_state.params)
             scale, bias = 1.0, 0.0
             normalizer_config = self._config.rl.normalizer_config
             if normalizer_config.method is not None:
