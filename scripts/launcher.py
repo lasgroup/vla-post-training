@@ -31,6 +31,8 @@ RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unkno
 _EULER_USER = os.environ.get("USER", "unknown")
 EULER_RESULTS_DIR = f"/cluster/scratch/{_EULER_USER}/results"
 EULER_CACHE_DIR = f"/cluster/scratch/{_EULER_USER}/openpi_cache"
+EULER_MOLMO_ASSETS_DIR = f"/cluster/scratch/{_EULER_USER}/molmo_assets"
+EULER_MOLMO_CACHE_DIR = f"/cluster/scratch/{_EULER_USER}/molmo_cache"
 
 # swiss-ai (CSCS) shared, pre-populated MolmoSpaces asset store
 SWISS_AI_MOLMO_ASSETS_DIR = "/capstor/store/cscs/swissai/a143/molmospaces/assets"
@@ -163,6 +165,11 @@ def _write_sbatch_script(
     data_home_export = (
         f"export OPENPI_DATA_HOME={shlex.quote(openpi_data_home)}\n" if openpi_data_home else ""
     )
+    mlspaces_exports = ""
+    for var in ("MLSPACES_ASSETS_DIR", "MLSPACES_CACHE_DIR"):
+        val = os.environ.get(var)
+        if val:
+            mlspaces_exports += f"export {var}={shlex.quote(val)}\n"
     # Euler compute nodes have no persistent PYTHONPATH/venv preallocation setup like the
     # swiss-ai container image does; these exports are only needed (and only tested) there.
     euler_exports = (
@@ -174,7 +181,7 @@ def _write_sbatch_script(
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
-{euler_exports}{data_home_export}child_status=0
+{euler_exports}{data_home_export}{mlspaces_exports}child_status=0
 {command} || child_status=$?
 
 if [[ "$child_status" -eq {REQUEUE_EXIT_CODE} ]]; then
@@ -194,7 +201,7 @@ exit "$child_status"
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
-{euler_exports}{data_home_export}exec {command}
+{euler_exports}{data_home_export}{mlspaces_exports}exec {command}
 """
 
     with open(path, "w", encoding="ascii") as f:
@@ -433,6 +440,8 @@ def main() -> None:
         partition = args.partition  # None means no --partition flag; Euler doesn't need one
         mem = args.mem or DEFAULT_EULER_MEM_PER_CPU
         openpi_data_home = EULER_CACHE_DIR
+        os.environ.setdefault("MLSPACES_ASSETS_DIR", EULER_MOLMO_ASSETS_DIR)
+        os.environ.setdefault("MLSPACES_CACHE_DIR", EULER_MOLMO_CACHE_DIR)
         if not args.dry:
             ensure_assets(EULER_CACHE_DIR, config_name=config.get("config_name", ""))
     else:
