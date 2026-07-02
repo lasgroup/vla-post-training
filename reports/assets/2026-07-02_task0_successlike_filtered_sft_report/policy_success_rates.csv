@@ -1,0 +1,5 @@
+policy,kind,checkpoint_step,eval_rollouts,successes,failures,success_rate,delta_vs_pretrained,mean_success_episode_length
+pretrained_reference,pretrained/no-SFT reference,0,100,12,88,0.12,0.0,256.75
+random_val150_full,SFT,4000,100,15,85,0.15,0.03,278.6666666666667
+reward_top150_pred_success,SFT,4000,100,23,77,0.23,0.11000000000000001,182.91304347826087
+reward_std_top150_pred_success,SFT,4000,100,43,57,0.43,0.31,147.67441860465115

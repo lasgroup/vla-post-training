@@ -1,0 +1,13 @@
+policy,episode,success,steps,frames,gif
+pretrained_reference,0,0,400,401,episode_00_success0.gif
+pretrained_reference,1,0,400,401,episode_01_success0.gif
+pretrained_reference,2,1,125,126,episode_02_success1.gif
+random_val150_full,0,0,400,401,episode_00_success0.gif
+random_val150_full,1,0,400,401,episode_01_success0.gif
+random_val150_full,2,0,400,401,episode_02_success0.gif
+reward_top150_pred_success,0,0,400,401,episode_00_success0.gif
+reward_top150_pred_success,1,0,400,401,episode_01_success0.gif
+reward_top150_pred_success,2,1,183,186,episode_02_success1.gif
+reward_std_top150_pred_success,0,0,400,401,episode_00_success0.gif
+reward_std_top150_pred_success,1,1,385,386,episode_01_success1.gif
+reward_std_top150_pred_success,2,1,111,116,episode_02_success1.gif

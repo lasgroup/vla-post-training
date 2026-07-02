@@ -1,0 +1,27 @@
+{
+  "episodes": [
+    {
+      "episode": 0,
+      "frames": 401,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_00_success0.gif",
+      "steps": 400,
+      "success": false
+    },
+    {
+      "episode": 1,
+      "frames": 401,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_01_success0.gif",
+      "steps": 400,
+      "success": false
+    },
+    {
+      "episode": 2,
+      "frames": 126,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_02_success1.gif",
+      "steps": 125,
+      "success": true
+    }
+  ],
+  "kind": "pretrained",
+  "label": "pretrained_reference"
+}

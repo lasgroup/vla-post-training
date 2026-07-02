@@ -1,0 +1,316 @@
+{
+  "datasets": [
+    {
+      "actual_failures": 140,
+      "actual_successes": 10,
+      "dataset": "random_val150_full",
+      "dataset_success_rate": 0.06666666666666667,
+      "description": "random full 150",
+      "episodes": 150,
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/random_val150_full/episodes",
+      "fn": null,
+      "fp": null,
+      "manifest_rows": 150,
+      "selected_manifest": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/random_val150_full/selected_manifest.jsonl",
+      "tn": null,
+      "tp": null
+    },
+    {
+      "actual_failures": 19,
+      "actual_successes": 6,
+      "dataset": "reward_top150_pred_success",
+      "dataset_success_rate": 0.24,
+      "description": "reward top150 predicted-success subset",
+      "episodes": 25,
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_top150_pred_success/episodes",
+      "fn": 0,
+      "fp": 19,
+      "manifest_rows": 25,
+      "selected_manifest": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_top150_pred_success/selected_manifest.jsonl",
+      "tn": 0,
+      "tp": 6
+    },
+    {
+      "actual_failures": 3,
+      "actual_successes": 5,
+      "dataset": "reward_std_top150_pred_success",
+      "dataset_success_rate": 0.625,
+      "description": "reward+std top150 predicted-success subset",
+      "episodes": 8,
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_std_top150_pred_success/episodes",
+      "fn": 0,
+      "fp": 3,
+      "manifest_rows": 8,
+      "selected_manifest": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_std_top150_pred_success/selected_manifest.jsonl",
+      "tn": 0,
+      "tp": 5
+    }
+  ],
+  "policies": [
+    {
+      "checkpoint_step": 0,
+      "delta_vs_pretrained": 0.0,
+      "display": "pretrained reference",
+      "eval_rollouts": 100,
+      "failures": 88,
+      "kind": "pretrained/no-SFT reference",
+      "mean_success_episode_length": 256.75,
+      "policy": "pretrained_reference",
+      "success_rate": 0.12,
+      "successes": 12
+    },
+    {
+      "checkpoint_step": 4000,
+      "delta_vs_pretrained": 0.03,
+      "display": "random_val150_full SFT",
+      "eval_rollouts": 100,
+      "failures": 85,
+      "kind": "SFT",
+      "mean_success_episode_length": 278.6666666666667,
+      "policy": "random_val150_full",
+      "success_rate": 0.15,
+      "successes": 15
+    },
+    {
+      "checkpoint_step": 4000,
+      "delta_vs_pretrained": 0.11000000000000001,
+      "display": "reward_top150_pred_success SFT",
+      "eval_rollouts": 100,
+      "failures": 77,
+      "kind": "SFT",
+      "mean_success_episode_length": 182.91304347826087,
+      "policy": "reward_top150_pred_success",
+      "success_rate": 0.23,
+      "successes": 23
+    },
+    {
+      "checkpoint_step": 4000,
+      "delta_vs_pretrained": 0.31,
+      "display": "reward_std_top150_pred_success SFT",
+      "eval_rollouts": 100,
+      "failures": 57,
+      "kind": "SFT",
+      "mean_success_episode_length": 147.67441860465115,
+      "policy": "reward_std_top150_pred_success",
+      "success_rate": 0.43,
+      "successes": 43
+    }
+  ],
+  "render_jobs": [
+    {
+      "dependency": "2665011",
+      "exp_name": "task0_random_val150_full_preloaded_sft_20260701_233851",
+      "job_id": "2666821",
+      "kind": "render",
+      "label": "random_val150_full",
+      "output_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full",
+      "policy_kind": "sft",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_random_val150_full-2666821.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_random_val150_full-2666821.out"
+    },
+    {
+      "dependency": "2665013",
+      "exp_name": "task0_reward_top150_pred_success_preloaded_sft_20260701_233851",
+      "job_id": "2666822",
+      "kind": "render",
+      "label": "reward_top150_pred_success",
+      "output_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_top150_pred_success",
+      "policy_kind": "sft",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_reward_top150_pred_success-2666822.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_reward_top150_pred_success-2666822.out"
+    },
+    {
+      "dependency": "2665014",
+      "exp_name": "task0_reward_std_top150_pred_success_preloaded_sft_20260701_233851",
+      "job_id": "2666823",
+      "kind": "render",
+      "label": "reward_std_top150_pred_success",
+      "output_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_std_top150_pred_success",
+      "policy_kind": "sft",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_reward_std_top150_pred_success-2666823.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_reward_std_top150_pred_success-2666823.out"
+    },
+    {
+      "dependency": "2665015",
+      "exp_name": "task0_pretrained_reference_20260701_233851",
+      "job_id": "2666824",
+      "kind": "render",
+      "label": "pretrained_reference",
+      "output_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference",
+      "policy_kind": "pretrained",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_pretrained_reference-2666824.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/render_pretrained_reference-2666824.out"
+    }
+  ],
+  "render_summaries": {
+    "pretrained_reference": {
+      "episodes": [
+        {
+          "episode": 0,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_00_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 1,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_01_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 2,
+          "frames": 126,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/pretrained_reference/episode_02_success1.gif",
+          "steps": 125,
+          "success": true
+        }
+      ],
+      "kind": "pretrained",
+      "label": "pretrained_reference"
+    },
+    "random_val150_full": {
+      "episodes": [
+        {
+          "episode": 0,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_00_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 1,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_01_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 2,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_02_success0.gif",
+          "steps": 400,
+          "success": false
+        }
+      ],
+      "kind": "sft",
+      "label": "random_val150_full"
+    },
+    "reward_std_top150_pred_success": {
+      "episodes": [
+        {
+          "episode": 0,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_std_top150_pred_success/episode_00_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 1,
+          "frames": 386,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_std_top150_pred_success/episode_01_success1.gif",
+          "steps": 385,
+          "success": true
+        },
+        {
+          "episode": 2,
+          "frames": 116,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_std_top150_pred_success/episode_02_success1.gif",
+          "steps": 111,
+          "success": true
+        }
+      ],
+      "kind": "sft",
+      "label": "reward_std_top150_pred_success"
+    },
+    "reward_top150_pred_success": {
+      "episodes": [
+        {
+          "episode": 0,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_top150_pred_success/episode_00_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 1,
+          "frames": 401,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_top150_pred_success/episode_01_success0.gif",
+          "steps": 400,
+          "success": false
+        },
+        {
+          "episode": 2,
+          "frames": 186,
+          "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/reward_top150_pred_success/episode_02_success1.gif",
+          "steps": 183,
+          "success": true
+        }
+      ],
+      "kind": "sft",
+      "label": "reward_top150_pred_success"
+    }
+  },
+  "run_root": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851",
+  "submission_manifest": {
+    "account": "a0220",
+    "batch_size": 256,
+    "environment": "vla-post-training-marco-reward",
+    "eval_envs": 1,
+    "eval_interval": 500,
+    "eval_rollouts": 100,
+    "gpus": 4,
+    "num_train_steps": 4001,
+    "partition": "normal",
+    "periodic_eval": 0,
+    "pretrained_time_limit": "02:00:00",
+    "repo_head": "3001576e3d089c49aca0e2487a9163f3ec71f73a",
+    "repo_root": "/users/dsimoes/worktrees/vla-post-training/marco/reward",
+    "run_root": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851",
+    "run_tag": "20260701_233851",
+    "task_id": "libero_90_0",
+    "train_time_limit": "06:00:00"
+  },
+  "submitted_jobs": [
+    {
+      "checkpoint_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/checkpoints/pi05_libero_online_filtered_sft/task0_random_val150_full_preloaded_sft_20260701_233851",
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/random_val150_full/episodes",
+      "exp_name": "task0_random_val150_full_preloaded_sft_20260701_233851",
+      "job_id": "2665011",
+      "kind": "sft",
+      "label": "random_val150_full",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_random_val150_full_preloaded_sft_20260701_233851-2665011.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_random_val150_full_preloaded_sft_20260701_233851-2665011.out"
+    },
+    {
+      "checkpoint_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/checkpoints/pi05_libero_online_filtered_sft/task0_reward_top150_pred_success_preloaded_sft_20260701_233851",
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_top150_pred_success/episodes",
+      "exp_name": "task0_reward_top150_pred_success_preloaded_sft_20260701_233851",
+      "job_id": "2665013",
+      "kind": "sft",
+      "label": "reward_top150_pred_success",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_reward_top150_pred_success_preloaded_sft_20260701_233851-2665013.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_reward_top150_pred_success_preloaded_sft_20260701_233851-2665013.out"
+    },
+    {
+      "checkpoint_dir": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/checkpoints/pi05_libero_online_filtered_sft/task0_reward_std_top150_pred_success_preloaded_sft_20260701_233851",
+      "episodes_dir": "/capstor/scratch/cscs/dsimoes/vlm-rm/filtered_sft_exports/task0_validation150_reward_std_20260701/success_like_datasets/reward_std_top150_pred_success/episodes",
+      "exp_name": "task0_reward_std_top150_pred_success_preloaded_sft_20260701_233851",
+      "job_id": "2665014",
+      "kind": "sft",
+      "label": "reward_std_top150_pred_success",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_reward_std_top150_pred_success_preloaded_sft_20260701_233851-2665014.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_reward_std_top150_pred_success_preloaded_sft_20260701_233851-2665014.out"
+    },
+    {
+      "exp_name": "task0_pretrained_reference_20260701_233851",
+      "job_id": "2665015",
+      "kind": "pretrained",
+      "label": "pretrained_reference",
+      "metrics_path": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/pretrained_reference_metrics.json",
+      "stderr": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_pretrained_reference_20260701_233851-2665015.err",
+      "stdout": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/logs/task0_pretrained_reference_20260701_233851-2665015.out"
+    }
+  ]
+}

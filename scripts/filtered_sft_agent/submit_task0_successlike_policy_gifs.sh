@@ -12,12 +12,24 @@ TASK_ID=${TASK_ID:-libero_90_0}
 CHECKPOINT_BASE_DIR=${CHECKPOINT_BASE_DIR:-$RUN_ROOT/checkpoints}
 LOG_DIR=${RUN_ROOT}/logs
 SBATCH_DIR=${LOG_DIR}/sbatch
-RENDER_SCRIPT=${RENDER_SCRIPT:-scripts/filtered_sft_agent/render_policy_gifs.py}
+RENDER_SCRIPT=${RENDER_SCRIPT:-$RUN_ROOT/scripts/render_task0_policy_gifs.py}
 RENDER_EPISODES=${RENDER_EPISODES:-3}
 RENDER_FRAME_STRIDE=${RENDER_FRAME_STRIDE:-4}
+RENDER_SKIP_DEPENDENCY=${RENDER_SKIP_DEPENDENCY:-0}
 SFT_RENDER_TIME_LIMIT=${SFT_RENDER_TIME_LIMIT:-03:00:00}
 PRETRAINED_RENDER_TIME_LIMIT=${PRETRAINED_RENDER_TIME_LIMIT:-02:00:00}
-mkdir -p "$SBATCH_DIR" "$RUN_ROOT/gifs"
+mkdir -p "$SBATCH_DIR" "$RUN_ROOT/gifs" "$(dirname "$RENDER_SCRIPT")"
+if [[ ! -f "$RENDER_SCRIPT" ]]; then
+  cp "$REPO_ROOT/scripts/filtered_sft_agent/render_policy_gifs.py" "$RENDER_SCRIPT"
+fi
+
+sbatch_dependency_args() {
+  local dep=$1
+  if [[ "$RENDER_SKIP_DEPENDENCY" == "1" ]]; then
+    return 0
+  fi
+  printf '%s\n' "--dependency=afterok:$dep"
+}
 
 test -f "$RUN_ROOT/submitted_jobs.jsonl" || { echo "Missing $RUN_ROOT/submitted_jobs.jsonl" >&2; exit 1; }
 cd "$REPO_ROOT"
@@ -90,7 +102,7 @@ SBATCH
   chmod +x "$script_path"
   local job_id
   job_id=$(sbatch --parsable \
-    --dependency="afterok:$dep" \
+    $(sbatch_dependency_args "$dep") \
     --account="$ACCOUNT" \
     --partition="$PARTITION" \
     --time="$SFT_RENDER_TIME_LIMIT" \
@@ -147,7 +159,7 @@ SBATCH
   chmod +x "$script_path"
   local job_id
   job_id=$(sbatch --parsable \
-    --dependency="afterok:$dep" \
+    $(sbatch_dependency_args "$dep") \
     --account="$ACCOUNT" \
     --partition="$PARTITION" \
     --time="$PRETRAINED_RENDER_TIME_LIMIT" \

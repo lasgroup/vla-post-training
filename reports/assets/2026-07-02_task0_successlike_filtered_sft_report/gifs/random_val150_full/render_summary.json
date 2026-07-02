@@ -1,0 +1,27 @@
+{
+  "episodes": [
+    {
+      "episode": 0,
+      "frames": 401,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_00_success0.gif",
+      "steps": 400,
+      "success": false
+    },
+    {
+      "episode": 1,
+      "frames": 401,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_01_success0.gif",
+      "steps": 400,
+      "success": false
+    },
+    {
+      "episode": 2,
+      "frames": 401,
+      "gif": "/capstor/scratch/cscs/dsimoes/vla-post-training/preloaded_sft_task0_successlike_20260701_233851/gifs/random_val150_full/episode_02_success0.gif",
+      "steps": 400,
+      "success": false
+    }
+  ],
+  "kind": "sft",
+  "label": "random_val150_full"
+}
