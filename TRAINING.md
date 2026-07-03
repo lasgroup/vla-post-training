@@ -15,15 +15,15 @@ git submodule update --init --recursive
 ./euler-install.sh
 ```
 
-This creates the `vla-post-training` conda env (Python 3.12 + cmake + uv), installs all dependencies into `.venv`, and registers the `openpi` and `molmospaces` submodules as editable installs. 
+This creates the `vla-post-training` conda env (Python 3.12) and installs all dependencies into it, including `openpi` and `molmospaces` as editable installs.
 
-After the initial installation setup, you only need to activate the conda env with 
+After the initial setup, activate the conda env with
 
 ```bash
 conda activate vla-post-training
 ```
 
-All scripts must be run via `uv run python` (e.g. `uv run python scripts/exp.py ...`), which automatically uses the project's `.venv` without needing to activate it. This applies to the launcher too — `uv run python scripts/launcher.py ...`.
+Run all scripts with plain `python` (e.g. `python scripts/exp.py ...`, `python scripts/launcher.py ...`) — **not** `uv run`.
 
 ## GPU requirements
 
@@ -40,11 +40,11 @@ Use `--mode euler`. The launcher checks that all required model checkpoints, tok
 
 ```bash
 # Dry run — preview sbatch commands without downloading or submitting
-uv run python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
+python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
     --mode euler --num_gpus 4 --dry
 
 # Submit
-uv run python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
+python scripts/launcher.py --config scripts/configs/tuning/fsft_multitask_libero_v0.yaml \
     --mode euler --num_gpus 4
 ```
 
@@ -82,25 +82,17 @@ Model checkpoints and LIBERO scene assets are cached in `/cluster/scratch/$USER/
 To re-download manually (e.g. after reinstalling the venv, which wipes the LIBERO scenes from the hf-libero package directory):
 
 ```bash
-uv run python scripts/download_assets.py --cache_dir /cluster/scratch/$USER/openpi_cache
+python scripts/download_assets.py --cache_dir /cluster/scratch/$USER/openpi_cache
 ```
 
 ### MolmoSpaces
 
-MolmoSpaces benchmark episodes and 3D scene assets are downloaded automatically by the launcher the first time you submit a molmo job (same as LIBERO). The launcher calls `scripts/install_molmo_assets.py`, which downloads everything to `molmospaces/assets/` inside the submodule (shared filesystem, visible to compute nodes). The download can take a while on first run.
+MolmoSpaces benchmark episodes and 3D scene assets are downloaded automatically by the launcher the first time you submit a molmo job (same as LIBERO), and land in `/cluster/scratch/$USER/molmo_assets` and `/cluster/scratch/$USER/molmo_cache`. This can take a while on first run.
 
-To download manually (e.g. to pre-warm or if the launcher run was interrupted):
-
-```bash
-uv run python scripts/install_molmo_assets.py
-```
-
-By default, assets land in `molmospaces/assets/`. To redirect to scratch (e.g. if home quota is limited):
+To download manually (e.g. to pre-warm, or if the launcher run was interrupted):
 
 ```bash
-export MLSPACES_ASSETS_DIR=/cluster/scratch/$USER/molmospaces_assets
-uv run python scripts/install_molmo_assets.py
-# Then set the same env var in your sbatch scripts or YAML params.
+python scripts/install_molmo_assets.py
 ```
 
 ## Config sweeps
@@ -126,3 +118,7 @@ This submits 4 jobs. Task IDs support range syntax (`libero_90_22-56` → tasks 
 **Assets missing on compute node** — run `download_assets.py` on the login node (see above). The LIBERO scene assets live inside the `hf-libero` package directory and are wiped by `uv sync`.
 
 **JIT compilation takes a long time** — compilation of pi0.5 takes ~10–15 minutes on first run. This is normal; subsequent runs load a compiled cache.
+
+**`ModuleNotFoundError` for an `openpi`/`molmospaces` import** — re-run `./euler-install.sh` (idempotent) and make sure `conda activate vla-post-training` was run first.
+
+**`No module named 'src'`** — you ran a script directly instead of through the launcher. Run `export PYTHONPATH="$(pwd):${PYTHONPATH:-}"` first, or use the launcher instead.
