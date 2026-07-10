@@ -4,14 +4,14 @@ project_name: vla-post-training
 group_name: multitask_tasks4-16_bofn_libero_v0_seed2
 params:
   log_interval: [25]
-  num_train_steps: [100000]
-  max_runtime: [39600]  # 11 hours
-  
+  num_train_steps: [500000]
+  max_runtime: [36000]  # 10 hours
+
   collect.env_num: [8]
   collect.eval_env_num: [8]
-  collect.eval_interval: [99999]
+  collect.eval_interval: [499999]
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
-    [10000, 20],
+    [50000, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
     [libero, [

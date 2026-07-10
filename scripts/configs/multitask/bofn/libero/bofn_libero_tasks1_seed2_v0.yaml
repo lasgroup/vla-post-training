@@ -6,7 +6,7 @@ params:
   log_interval: [25]
   num_train_steps: [100000]
   max_runtime: [39600]  # 11 hours
-  
+
   collect.env_num: [8]
   collect.eval_env_num: [8]
   collect.eval_interval: [99999]
@@ -52,7 +52,7 @@ params:
   rl.critic.inference_start_step: [1]   # To speed up data collection at step 0
   rl.critic.pre_training_steps: [0]
   rl.critic.td_weight_schedule.switch_step: [999999]  # No switch
-  
+
   !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
     [1, 1, False, 1],     # TD (regression)
   ]
