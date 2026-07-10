@@ -3,7 +3,7 @@
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
 #SBATCH --job-name=awr_libero
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=120G
@@ -23,9 +23,14 @@ SEED="${SEED:-0}"
 TASK="${TASK:-libero_90_44}"          # matches scripts/configs/awr.yaml
 PROJECT_NAME="${PROJECT_NAME:-openpi}"          # matches awr.yaml's wandb project
 GROUP_NAME="${GROUP_NAME:-awr_bon_recipe_babel}" # awr.yaml's group + _babel suffix
-FSDP="${FSDP:-1}"                     # shard train state across N GPUs; keep == --gres=gpu:N.
-                                      # NOTE: FSDP>1 (NCCL) currently crashes on
-                                      # these Blackwell cards -- see NCCL block below.
+FSDP="${FSDP:-1}"                     # shard train state across N GPUs (fsdp axis).
+                                      # With 2 GPUs: FSDP=2 -> (data=1,fsdp=2) shards
+                                      # params but NOT activations; FSDP=1 with both
+                                      # GPUs visible -> (data=2,fsdp=1) data-parallel,
+                                      # splits the batch/activations instead.
+BATCH_SIZE="${BATCH_SIZE:-128}"       # global batch_size (config default 256). 128
+                                      # data-parallel across 2x96GB fits; drop to 64
+                                      # if the policy update OOMs. Empty -> config default.
 
 # Stable experiment name -> stable checkpoint dir so requeue resumes instead of
 # starting over (do NOT put a timestamp here).
@@ -73,19 +78,29 @@ export NCCL_CUMEM_ENABLE="${NCCL_CUMEM_ENABLE:-0}"
 export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
-# NOTE (2026-07-09): Multi-GPU (FSDP>1) is currently broken on these Blackwell
-# RTX PRO 6000 cards. The bundled NCCL (2.26.2+cuda12.2 from jaxlib 0.5.3) hits
-# an illegal memory access on a basic cudaHostAlloc during clique init on the
-# cuda12.9 driver -- it dies at critic-init (update_critic.py) with a cuSolver
-# orgqr / CUDA_ERROR_ILLEGAL_ADDRESS. NCCL_CUMEM_ENABLE=0 and P2P/SHM disable do
-# NOT help. Until jax/jaxlib+NCCL are upgraded to a cuda12.9-capable build, run
-# single-GPU (FSDP=1), which avoids NCCL entirely. Verified working.
+# NOTE (2026-07-09): The Blackwell RTX PRO 6000 (sm_120) crash at critic-init was
+# NOT an NCCL bug -- NCCL collectives work fine. The real cause was cuSolver
+# `orgqr` (the QR in orthogonal weight init) faulting on sm_120, which then
+# poisoned the CUDA context and made the *following* NCCL alloc report an illegal
+# access. Fixed by running orthogonal init on the host CPU via jax.pure_callback
+# (see src/rl/networks/constants.py). NCCL_CUMEM_ENABLE=0 is kept as a belt-and-
+# suspenders guard. Set NCCL_DEBUG=INFO to debug collectives.
+#
+# GPU/parallelism on this 2-GPU node (each card 96 GB):
+#   FSDP=1 + 2 GPUs -> (data=2, fsdp=1) DATA-PARALLEL: splits the batch/activations
+#     across GPUs (params replicated). This is the intended config here.
+#   FSDP=2 + 2 GPUs -> (data=1, fsdp=2): shards params but NOT activations, so the
+#     batch-256 policy update still OOMs. Needs >=4 GPUs to shard both axes.
+# The policy update is activation-bound, so we data-parallel (FSDP=1) with a
+# reduced BATCH_SIZE (see below) to fit a 96 GB card.
 
-# Pin JAX to the first $FSDP visible GPU(s) when the launcher didn't (e.g. running
-# via bare `bash` after ssh-ing onto the node, where CUDA_VISIBLE_DEVICES is unset).
-# With FSDP=1 this keeps JAX on one device and skips NCCL init altogether.
+# Expose NUM_GPUS devices to JAX when the launcher didn't set CUDA_VISIBLE_DEVICES
+# (e.g. bare `bash` after ssh-ing onto the node). sbatch sets it itself, so this
+# only fires for manual runs. Decoupled from FSDP so data-parallel (FSDP=1) still
+# sees every allocated GPU.
+NUM_GPUS="${NUM_GPUS:-2}"
 if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
-    export CUDA_VISIBLE_DEVICES="$(seq -s, 0 $((FSDP - 1)))"
+    export CUDA_VISIBLE_DEVICES="$(seq -s, 0 $((NUM_GPUS - 1)))"
 fi
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"
@@ -147,6 +162,11 @@ ARGS=(
   --rl.critic.inference_start_step 1
   --rl.critic.value_target_type one_hot
 )
+
+# Optional global batch_size override (data-parallel / memory tuning).
+if [ -n "${BATCH_SIZE:-}" ]; then
+  ARGS+=(--batch_size "$BATCH_SIZE")
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   printf 'uv run scripts/exp.py'
