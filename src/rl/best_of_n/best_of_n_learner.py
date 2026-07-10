@@ -71,6 +71,19 @@ class BestofNLearner(FilteredSFTLearner):
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
             self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
 
+        # When prefixes are cached (store_prefix_rep) and the critic is not retrained on
+        # freshly resampled on-policy actions (train_on_policy_value_function), nothing
+        # ever reads the stored images: critic updates consume only `state` + the cached
+        # prefix, and the policy is frozen. Drop images from the online buffer entirely,
+        # cutting its footprint ~45x and making shard save/restore cheap.
+        self._buffer_obs_drop_keys: tuple[str, ...] = ()
+        if config.collect.store_prefix_rep and not config.rl.train_on_policy_value_function:
+            self._buffer_obs_drop_keys = ("image",)
+            logging.info(
+                "Best-of-N: prefixes are cached and critics are not trained on-policy; "
+                "dropping images from the online replay buffer to save memory."
+            )
+
         super().__init__(config)
 
         data_config = self._data_loader.data_config()
@@ -192,6 +205,8 @@ class BestofNLearner(FilteredSFTLearner):
         if self._prefix_embed_dim is not None:
             zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
             dummy["observations"][PREFIX_EMBEDDING_NAME] = zeros
+        for k in self._buffer_obs_drop_keys:
+            dummy["observations"].pop(k, None)
         return dummy
 
     def _recompute_prefix_embedding(

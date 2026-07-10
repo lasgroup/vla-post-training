@@ -92,10 +92,15 @@ class ShardedReplayBuffer:
         if txn_treedef != self._storage_treedef:
             raise ValueError("Insert transition structure does not match buffer structure")
 
-        num_obs = int(obs_leaves[0].shape[0])
         num_new = int(obs_index.shape[0])
         if num_new <= 0:
             return
+        # Number of unique observations to store. Derive it from the linking indices
+        # (which reference exactly 0..num_obs-1) rather than a leaf's leading dim: the
+        # observation tree can hold broadcast/shared leaves (e.g. a per-episode tokenized
+        # prompt, or scalar image masks) that are not per-observation, so no single leaf
+        # is a reliable count once per-obs leaves like images are dropped.
+        num_obs = int(max(int(obs_index.max()), int(next_obs_index.max()))) + 1
         if num_obs > self.max_capacity:
             raise ValueError(
                 f"Single insert writes {num_obs} observations into a ring of capacity "
