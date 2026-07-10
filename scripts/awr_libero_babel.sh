@@ -1,28 +1,4 @@
 #!/bin/bash
-# AWR (advantage-weighted SFT) online post-training of pi05 on LIBERO, on the
-# babel cluster. Single-seed, single-run launcher for scripts/configs/awr.yaml.
-#
-# This is the babel analogue of the SwissAI/CSCS launcher.py workflow
-# (scripts/launcher.py + scripts/configs/awr.yaml). Instead of going through
-# srun --environment=<enroot container>, we run directly inside the project's
-# uv venv (.venv). It mirrors the launcher's requeue behaviour: scripts/exp.py
-# exits with code 42 when it wants to be requeued (either because max_runtime
-# was exceeded, or right before an eval if --requeue_before_eval is set), and
-# we resubmit via `scontrol requeue` while reusing the same checkpoint dir so
-# the run resumes (resume=True, overwrite=False) from where it left off.
-#
-# Modeled directly on scripts/bofn_libero_babel.sh (the working best_of_n
-# babel launcher) -- see that script for more background on the env vars.
-#
-# Usage:
-#   sbatch scripts/awr_libero_babel.sh                # submit with defaults (seed 0, libero_90_44)
-#   SEED=1 TASK=libero_90_59 sbatch scripts/awr_libero_babel.sh
-#   DRY_RUN=1 bash scripts/awr_libero_babel.sh         # print args, no run
-#
-# GPU sizing: the pi05 train state (~50 GiB: params + AdamW moments + EMA)
-# plus this config's critic (BRONet, hidden_dim=1024, its own AdamW state) is
-# a fixed cost that does not fit a 48 GB card, so we need a 96 GB GPU. Set
-# FSDP>1 (and --gres=gpu:N to match) to shard the state across GPUs instead.
 #SBATCH --partition=maxlab
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
@@ -30,10 +6,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=240G
-#SBATCH --time=11:59:00
-#SBATCH --requeue
-#SBATCH --open-mode=append
+#SBATCH --mem=120G
+#SBATCH --time=48:00:00
 #SBATCH --output=/home/mananaga/logs/%j/.out
 #SBATCH --error=/home/mananaga/logs/%j/.out
 
@@ -49,15 +23,15 @@ SEED="${SEED:-0}"
 TASK="${TASK:-libero_90_44}"          # matches scripts/configs/awr.yaml
 PROJECT_NAME="${PROJECT_NAME:-openpi}"          # matches awr.yaml's wandb project
 GROUP_NAME="${GROUP_NAME:-awr_bon_recipe_babel}" # awr.yaml's group + _babel suffix
-FSDP="${FSDP:-1}"                     # shard train state across N GPUs; keep == --gres=gpu:N
+FSDP="${FSDP:-1}"                     # shard train state across N GPUs; keep == --gres=gpu:N.
+                                      # NOTE: FSDP>1 (NCCL) currently crashes on
+                                      # these Blackwell cards -- see NCCL block below.
 
 # Stable experiment name -> stable checkpoint dir so requeue resumes instead of
 # starting over (do NOT put a timestamp here).
 EXP_NAME="${EXP_NAME:-${CONFIG_NAME}_${TASK}_seed${SEED}}"
 STORE_ROOT="${STORE_ROOT:-/data/user_data/mananaga/vla-post-training}"
 CKPT_BASE_DIR="${CKPT_BASE_DIR:-${STORE_ROOT}/checkpoints/${GROUP_NAME}}"
-
-REQUEUE_EXIT_CODE=42
 
 # ----------------------------------------------------------------------------
 # Environment
@@ -99,6 +73,21 @@ export NCCL_CUMEM_ENABLE="${NCCL_CUMEM_ENABLE:-0}"
 export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
 export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
+# NOTE (2026-07-09): Multi-GPU (FSDP>1) is currently broken on these Blackwell
+# RTX PRO 6000 cards. The bundled NCCL (2.26.2+cuda12.2 from jaxlib 0.5.3) hits
+# an illegal memory access on a basic cudaHostAlloc during clique init on the
+# cuda12.9 driver -- it dies at critic-init (update_critic.py) with a cuSolver
+# orgqr / CUDA_ERROR_ILLEGAL_ADDRESS. NCCL_CUMEM_ENABLE=0 and P2P/SHM disable do
+# NOT help. Until jax/jaxlib+NCCL are upgraded to a cuda12.9-capable build, run
+# single-GPU (FSDP=1), which avoids NCCL entirely. Verified working.
+
+# Pin JAX to the first $FSDP visible GPU(s) when the launcher didn't (e.g. running
+# via bare `bash` after ssh-ing onto the node, where CUDA_VISIBLE_DEVICES is unset).
+# With FSDP=1 this keeps JAX on one device and skips NCCL init altogether.
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    export CUDA_VISIBLE_DEVICES="$(seq -s, 0 $((FSDP - 1)))"
+fi
+
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"
 
 # ----------------------------------------------------------------------------
@@ -117,7 +106,7 @@ ARGS=(
   --seed "$SEED"
   --fsdp_devices "$FSDP"
 
-  # requeue-safe: start fresh the first time, resume after a requeue
+  # resume-safe if you manually re-submit after a failure; harmless otherwise
   --resume
   --no-overwrite
 
@@ -125,7 +114,7 @@ ARGS=(
   --save_interval 100000
   --num_train_steps 100000
   --lr_schedule.value 2.5e-5
-  --max_runtime 39600            # 11h; scripts/exp.py self-exits (code 42) before the SLURM wall-clock hits
+  --max_runtime 169200            # ~47h; keep above --time so exp.py never self-exits early
 
   # data collection
   --collect.tasks "$TASK"
@@ -169,20 +158,4 @@ fi
 echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 echo "[awr] checkpoints -> ${CKPT_BASE_DIR}/${CONFIG_NAME}/${EXP_NAME}"
 
-# ----------------------------------------------------------------------------
-# Run with requeue handling (mirrors launcher.py's sbatch wrapper).
-# ----------------------------------------------------------------------------
-child_status=0
-uv run scripts/exp.py "${ARGS[@]}" || child_status=$?
-
-if [[ "$child_status" -eq "$REQUEUE_EXIT_CODE" ]]; then
-  echo "[$(date --iso-8601=seconds)] Job ${SLURM_JOB_ID:-?} requested requeue." >&2
-  if [[ -n "${SLURM_JOB_ID:-}" ]] && scontrol requeue "${SLURM_JOB_ID}"; then
-    echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${SLURM_JOB_ID}." >&2
-    exit 0
-  fi
-  echo "[$(date --iso-8601=seconds)] Failed to requeue (no SLURM_JOB_ID or scontrol error)." >&2
-  exit "$child_status"
-fi
-
-exit "$child_status"
+exec uv run scripts/exp.py "${ARGS[@]}"
