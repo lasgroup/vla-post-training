@@ -35,11 +35,13 @@ def _orthogonal_cpu(scale: float):
     return init
 
 
+# The cuSolver `orgqr` fault on sm_120 (Blackwell) that motivated `_orthogonal_cpu`
+# is fixed by the jax 0.6.0 / CUDA 12.9 upgrade -- direct GPU orthogonal init is
+# verified orthogonal on sm_120. The pure_callback workaround also fails to lower
+# under jax 0.6.0 ("incorrect layout" on the callback operand), so use the direct
+# path. Keep `_orthogonal_cpu` above as a fallback for older jaxlib/GPUs.
 def default_init(scale: float = math.sqrt(2.0)):
-    return _orthogonal_cpu(scale)
-
-# def default_init(scale: float = math.sqrt(2.0)):
-#     return jax.nn.initializers.orthogonal(scale)
+    return jax.nn.initializers.orthogonal(scale)
 
 def xavier_init():
     return jax.nn.initializers.xavier_normal()

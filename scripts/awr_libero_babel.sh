@@ -28,7 +28,7 @@ FSDP="${FSDP:-1}"                     # shard train state across N GPUs (fsdp ax
                                       # params but NOT activations; FSDP=1 with both
                                       # GPUs visible -> (data=2,fsdp=1) data-parallel,
                                       # splits the batch/activations instead.
-BATCH_SIZE="${BATCH_SIZE:-128}"       # global batch_size (config default 256). 128
+BATCH_SIZE="${BATCH_SIZE:-64}"       # global batch_size (config default 256). 128
                                       # data-parallel across 2x96GB fits; drop to 64
                                       # if the policy update OOMs. Empty -> config default.
 
