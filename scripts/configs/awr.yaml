@@ -27,16 +27,16 @@ params:
   rl.buffer_capacity: [250000]
 
   # --- default AWR ---
-  rl.advantage_weight_type: [exp]             # (1) weights = exp(adv/beta)
-  rl.advantage_combination: [reduced]         # (4)+(5) adv = reduce(Q) - reduce(V)
-  rl.critic.per_critic_value_target: [False]  # (2) all V_i share reduced Q target
-  rl.critic.q_bootstrap_reduction: [null]     # (3) Q target uses rl.critic.reduction
+  # rl.advantage_weight_type: [exp]             # (1) weights = exp(adv/beta)
+  # rl.advantage_combination: [reduced]         # (4)+(5) adv = reduce(Q) - reduce(V)
+  # rl.critic.per_critic_value_target: [False]  # (2) all V_i share reduced Q target
+  # rl.critic.q_bootstrap_reduction: [null]     # (3) Q target uses rl.critic.reduction
 
   # --- AWR++ ---
-  # rl.advantage_weight_type: [relu]            # (1) weights = max(adv, 0), no exp/beta/clip
-  # rl.advantage_combination: [conservative]    # (4)+(5) per-critic A_i = Q_i - V_i, combined conservatively
-  # rl.critic.per_critic_value_target: [True]   # (2) V_i regresses to Q_i
-  # rl.critic.q_bootstrap_reduction: [mean]     # (3) Q target = mean_j V_j(s')
+  rl.advantage_weight_type: [relu]            # (1) weights = max(adv, 0), no exp/beta/clip
+  rl.advantage_combination: [conservative]    # (4)+(5) per-critic A_i = Q_i - V_i, combined conservatively
+  rl.critic.per_critic_value_target: [True]   # (2) V_i regresses to Q_i
+  rl.critic.q_bootstrap_reduction: [mean]     # (3) Q target = mean_j V_j(s')
 
   rl.policy.update_interval: [10]
   rl.policy.training_start_step: [900]
