@@ -150,6 +150,9 @@ class CriticTrainingConfig:
     use_bronet: bool = False
     bronet_hidden_dim: int = 512
     bronet_depth: int = 2
+    # --- conservative twin-critic AWR knobs (defaults reproduce current behavior) ---
+    q_bootstrap_reduction: str | None = None  # V-ensemble reduction for Q target; None -> `reduction`
+    per_critic_value_target: bool = False  # True: V_i regresses to Q_i (needs num_vs == num_qs)
 
 
 # Define hyperparameter structures for your algorithms
@@ -175,6 +178,9 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
     awr_loss_weight: float = 1.0
+    # --- conservative twin-critic AWR knobs (defaults reproduce current behavior) ---
+    advantage_weight_type: str = "exp"  # "exp": exp(adv/beta) weights; "relu": max(adv, 0) weights
+    advantage_combination: str = "reduced"  # "reduced": reduce(Q)-reduce(V); "conservative": per-critic A_i combine
 
 
 @dataclasses.dataclass(frozen=True)
