@@ -19,12 +19,12 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Default SLURM settings matching existing bash scripts
-DEFAULT_ACCOUNT = "a0220"
+DEFAULT_ACCOUNT = "a143"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
 REQUEUE_EXIT_CODE = 42
-RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unknown')}/results"
+RESULTS_DIR = f"/capstor/store/cscs/swissai/a143/{os.environ.get('USER', 'unknown')}/results"
 
 
 def generate_srun_command(

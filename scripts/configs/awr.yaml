@@ -1,37 +1,42 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_aw_sft
-project_name: awr_sweep
-group_name: awr_sweep
+project_name: openpi
+group_name: awr_bon_recipe
 params:
-  log_interval: [2000]
-  lr_schedule.value: [2.5e-5]
+  seed: [0]
   num_train_steps: [100000]
+  lr_schedule.value: [2.5e-5]
+  log_interval: [25]
+  save_interval: [100000]
+  max_runtime: [39600]  # 11 hours
 
- 
-  rl.discount: [0.995]
-  collect.collect_interval: [2000]
-  collect.num_eval_rollouts: [8]
-  collect.num_initial_rollouts: [0]
-  collect.num_rollouts: [1]
-  !!python/tuple [collect.tasks, collect.eval_tasks]: [
-      [libero_90_44, libero_90_44],     # "Turn on the stove"
-      [libero_90_59, libero_90_59],     # "Pick up the tomato sauce and put it in the tray"
+  collect.tasks: [libero_90_44]
+  collect.eval_tasks: [libero_90_44]
+  collect.store_prefix_rep: [True]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
+    [10000, 20],
   ]
 
-  rl.buffer_capacity: [250000]
-  rl.critic.pre_training_steps: [900]
-  rl.critic.num_updates_per_batch: [1]
-  rl.crtic.batch_size: [1024]
-  rl.online_ratio: [1.0]
-  rl.policy.training_start_step: [900]
-  rl.policy.update_interval: [1]
-  rl.policy.reset_params_to_ema_period: [500]
-  rl.store_success_episodes_only: [False]
-  rl.critic.td_weight_schedule.switch_step: [1_000_000]
-  rl.critic.td_weight_schedule.init_value: [1]
-  rl.critic.td_weight_schedule.end_value: [1]
-  rl.critic.use_ema: [True]
-  rl.use_mc_returns: [False]
-  rl.critic.use_bronet: [True]
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  collect.eval_interval: [99999]
 
-  seed: [0, 1, 2]
+  rl.beta: [0.05]
+  rl.discount: [0.995]
+  rl.online_ratio: [1.0]
+  rl.buffer_capacity: [250000]
+
+  rl.policy.update_interval: [10]
+  rl.policy.training_start_step: [900]
+
+  !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
+    [1, 1, False, 1],     # TD (regression)
+  ]
+
+  rl.critic.batch_size: [1024]
+  rl.critic.pre_training_steps: [0]
+  rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
+  rl.critic.inference_start_step: [1]
+  rl.critic.value_target_type: [one_hot]
+  rl.critic.td_weight_schedule.switch_step: [999999]
