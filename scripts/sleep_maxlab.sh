@@ -3,7 +3,7 @@
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
 #SBATCH --job-name=awr_libero
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=120G

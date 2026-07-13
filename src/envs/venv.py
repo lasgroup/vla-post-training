@@ -493,15 +493,26 @@ class SubprocEnvWorker(EnvWorker):
         return self.parent_remote.recv()
 
     def close_env(self) -> None:
+        # Bounded teardown: a worker wedged in a C-level EGL/GL call must never
+        # be able to hang the job (which drains the Slurm node). Poll/join with
+        # timeouts and escalate SIGTERM -> SIGKILL.
         try:
             self.parent_remote.send(["close", None])
             # mp may be deleted so it may raise AttributeError
-            self.parent_remote.recv()
-            self.process.join()
-        except (BrokenPipeError, EOFError, AttributeError):
+            if self.parent_remote.poll(5):
+                self.parent_remote.recv()
+        except (BrokenPipeError, EOFError, AttributeError, OSError):
             pass
-        # ensure the subproc is terminated
-        self.process.terminate()
+        try:
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()  # SIGTERM
+                self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.kill()  # SIGKILL - releases GPU/EGL context
+                self.process.join(timeout=5)
+        except (AttributeError, OSError):
+            pass
 
     def check_success(self):
         self.parent_remote.send(["check_success", None])

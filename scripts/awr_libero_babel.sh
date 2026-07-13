@@ -3,10 +3,10 @@
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
 #SBATCH --job-name=awr_libero
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=120G
+#SBATCH --mem=200G
 #SBATCH --time=48:00:00
 #SBATCH --output=/home/mananaga/logs/%j/.out
 #SBATCH --error=/home/mananaga/logs/%j/.out
@@ -36,7 +36,7 @@ export NCCL_IB_DISABLE=1
 export NCCL_DEBUG=WARN
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export MUJOCO_EGL_DEVICE_ID="${CUDA_VISIBLE_DEVICES%%,*}"
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"

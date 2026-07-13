@@ -1,0 +1,159 @@
+================================================================================
+MuJoCo/EGL offscreen-render crash + node-drain — repro & fix brief
+================================================================================
+Repo:   /home/mananaga/vla-post-training
+Script: scripts/awr_libero_babel.sh   (job = pi05_libero_online_aw_sft, LIBERO)
+Goal for the debug session:
+  1. REPRODUCE the MuJoCo offscreen-framebuffer crash on a debug node.
+  2. Confirm the fixes below actually prevent (a) the crash and (b) the hang
+     that drains the Slurm node.
+
+--------------------------------------------------------------------------------
+1. WHAT FAILED (observed in real run, job 9201694 on babel-m9-16)
+--------------------------------------------------------------------------------
+Training ran fine to step 10000. At step 10000 an online-collection phase
+started (config.collect.collect_interval=10000) and rollout envs tried to build
+their MuJoCo/EGL offscreen render context. It crashed with:
+
+  File ".../robosuite/utils/binding_utils.py", line 112,
+        in _set_mujoco_context_and_buffers
+    self.con = mujoco.MjrContext(self.model._model,
+                                 mujoco.mjtFontScale.mjFONTSCALE_150)
+  mujoco.FatalError: Offscreen framebuffer is not complete, error 0x8cdd
+
+  -> 0x8cdd == GL_FRAMEBUFFER_UNSUPPORTED
+
+Cascade after the crash:
+  - ConnectionResetError: [Errno 104] Connection reset by peer   (render worker died)
+  - OpenGL.raw.EGL._errors.EGLError: err = EGL_NOT_INITIALIZED    (EGL teardown failed)
+  - Job HUNG. Manual scancel took 319s to reap:
+      slurmstepd: *** JOB 9201694 ... CANCELLED ...
+      slurmstepd: *** STEPD TERMINATED ... DUE TO JOB NOT ENDING WITH SIGNALS ***
+      slurmstepd: Container ... has 4 processes, giving up after 319 sec
+  - This unkillable-step hang is what DRAINS the node (admins must recover it).
+
+Note: separate runs (job 9197912 @120G) died of host-RAM OUT_OF_MEMORY at the
+step-10000 checkpoint. That is a DIFFERENT failure, already mitigated by
+--mem=200G. This brief is ONLY about the MuJoCo/EGL crash + drain.
+
+--------------------------------------------------------------------------------
+2. SUSPECTED ROOT CAUSE
+--------------------------------------------------------------------------------
+(a) VRAM exhaustion on the render GPUs.
+    - scripts/awr_libero_babel.sh sets XLA_PYTHON_CLIENT_MEM_FRACTION=0.95, so
+      JAX preallocates 95% of EVERY visible GPU.
+    - src/envs/libero.py:106 sets render_gpu_device_id = rank % num_devices, i.e.
+      offscreen renderers are spread across ALL GPUs (env_num=8 + eval_env_num=8
+      = up to 16 EGL contexts) -- the SAME GPUs JAX filled to 95%.
+    - MuJoCo/robosuite then cannot allocate the offscreen framebuffer -> 0x8cdd.
+    - Intermittent: only bites when collection runs (step 10000), not at startup.
+
+(b) Possible EGL device-id mismatch under Slurm (secondary hypothesis).
+    - Shell sets MUJOCO_EGL_DEVICE_ID = first CUDA_VISIBLE_DEVICES index; robosuite
+      instead uses render_gpu_device_id (rank % num_devices). Under Slurm's GPU
+      remapping the EGL device index need not match the CUDA index.
+
+--------------------------------------------------------------------------------
+3. RELEVANT CODE LOCATIONS
+--------------------------------------------------------------------------------
+  scripts/awr_libero_babel.sh
+      L29  export MUJOCO_GL=egl
+      L30  export PYOPENGL_PLATFORM=egl
+      L32  __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+      L37  export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95      <-- too high
+      L39  CUDA_VISIBLE_DEVICES fallback
+      L40  MUJOCO_EGL_DEVICE_ID = first visible GPU
+
+  src/envs/libero.py
+      L21  OffScreenRenderEnv(**args)                      (robosuite/LIBERO offscreen env)
+      L104-106  env_fn(rank): args["render_gpu_device_id"] = rank % num_devices
+      L43  env recreated on task change (env.close() + new OffScreenRenderEnv)
+
+  src/envs/venv.py   (multiprocessing vector env)
+      L209 _worker(): each env runs in a daemon Process; MuJoCo FatalError is
+           caught by `except Exception`, prints, closes pipe, exits.
+      L495-504 close_env():  <-- THE HANG. Unbounded recv() + join(), no timeout;
+           process.terminate() only after join() returns, so a wedged worker
+           (stuck in a C-level EGL/GL call) blocks teardown forever.
+      L892 close(): loops close() over all workers.
+
+  src/rl/dsrl/dsrl_env.py  L471 dsrl_wrap_env() builds the DSRLVectorEnv used for
+      collection. No try/except guards the collection phase.
+
+--------------------------------------------------------------------------------
+4. HOW TO REPRODUCE ON A DEBUG NODE (fast, without full training)
+--------------------------------------------------------------------------------
+Idea: skip the 1-hour training and directly build the LIBERO offscreen envs
+under the SAME env vars, ideally with a JAX process hogging most of the VRAM so
+the framebuffer allocation fails the same way.
+
+Suggested steps for the debug-node agent:
+  a) Get an interactive GPU node (multi-GPU ideally, to mirror the real run):
+       srun -p debug --gres=gpu:2 --cpus-per-task=16 --mem=100G --time=1:00:00 --pty bash
+  b) cd /home/mananaga/vla-post-training ; source the same env setup used by the
+     runscript (PYTHONPATH etc). See scripts/awr_libero_babel.sh L23-40 and the
+     babel-env-setup memory note. Use `uv run` like the runscript does.
+  c) Export the render env vars exactly as the script does:
+       MUJOCO_GL=egl, PYOPENGL_PLATFORM=egl,
+       __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+  d) Reproduce the framebuffer failure. Two ways:
+       (i) Minimal: in a python shell, build several LIBERO OffScreenRenderEnv /
+           the project's env_fn (src/envs/libero.py make_env_libero) with
+           env_num >= 8 and camera_heights/widths = config.collect.env_resolution,
+           on render_gpu_device_id spread across the GPUs, and call reset()+render.
+      (ii) To force the VRAM-exhaustion path, first allocate a big JAX array that
+           pins ~90-95% of each GPU (mimicking XLA_PYTHON_CLIENT_MEM_FRACTION=0.95),
+           THEN create the offscreen envs. Expect: mujoco.FatalError 0x8cdd.
+  e) Reproduce the HANG: after triggering the crash, call env.close() on the
+     SubprocVectorEnv and confirm the process hangs in close_env() (unbounded
+     recv()/join()). This is the drain mechanism.
+
+If the crash does NOT reproduce with headroom but DOES reproduce when VRAM is
+pinned to 95%, that confirms root cause (a).
+
+--------------------------------------------------------------------------------
+5. PROPOSED FIXES (validate these on the debug node)
+--------------------------------------------------------------------------------
+FIX 1 (PRIORITY - prevents the node drain): make env teardown bounded so a wedged
+       worker can NEVER hang the job. Replace src/envs/venv.py close_env()
+       (L495-504) with bounded poll/join + SIGTERM->SIGKILL escalation:
+
+    def close_env(self) -> None:
+        try:
+            self.parent_remote.send(["close", None])
+            if self.parent_remote.poll(5):
+                self.parent_remote.recv()
+        except (BrokenPipeError, EOFError, AttributeError, OSError):
+            pass
+        try:
+            self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.terminate()      # SIGTERM
+                self.process.join(timeout=5)
+            if self.process.is_alive():
+                self.process.kill()           # SIGKILL - releases GPU/EGL context
+                self.process.join(timeout=5)
+        except (AttributeError, OSError):
+            pass
+
+    Validate: after the crash, env.close() must return within ~15s/worker and
+    leave no stray GPU processes (check nvidia-smi / `ps`).
+
+FIX 2 (prevents the crash): give EGL framebuffers VRAM headroom on the shared
+       GPUs. In scripts/awr_libero_babel.sh:
+           export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75   # was 0.95 (tune lower if needed)
+
+FIX 3 (Slurm safety net): add to #SBATCH header so Slurm signals before hard-kill:
+           #SBATCH --signal=B:TERM@120
+
+--------------------------------------------------------------------------------
+6. ACCEPTANCE CRITERIA
+--------------------------------------------------------------------------------
+  [ ] Reproduced mujoco.FatalError 0x8cdd on the debug node.
+  [ ] Confirmed it is tied to VRAM headroom (fails at 0.95, passes at ~0.75).
+  [ ] Confirmed the unbounded close_env() hang, and that FIX 1 bounds teardown
+      to <~15s/worker with no leaked GPU processes.
+  [ ] With FIX 1+2 in place: crash either does not occur, or if it does, the job
+      exits cleanly WITHOUT leaving unkillable processes (i.e. would not drain
+      the node).
+================================================================================
