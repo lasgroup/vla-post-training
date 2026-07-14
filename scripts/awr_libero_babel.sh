@@ -34,7 +34,12 @@ export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.js
 export NCCL_CUMEM_ENABLE=0
 export NCCL_IB_DISABLE=1
 export NCCL_DEBUG=WARN
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
+# Leave real VRAM headroom on the shared GPUs so MuJoCo/EGL offscreen framebuffers
+# can allocate during the step-10000 collection phase. At 0.95 (~4.8GB free/GPU)
+# the framebuffer alloc wedges the driver (D-state, unkillable -> node drain);
+# 0.75 leaves ~24GB/GPU, far more than the ~8 render CUDA contexts need. Tune lower
+# if the crash still bites.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export MUJOCO_EGL_DEVICE_ID="${CUDA_VISIBLE_DEVICES%%,*}"
@@ -50,9 +55,8 @@ exec uv run scripts/exp.py \
   --exp_name "$EXP_NAME" \
   --checkpoint_base_dir "$CKPT_BASE_DIR" \
   --seed 0 \
-  --fsdp_devices 1 \
-  --resume \
-  --no-overwrite \
+  --fsdp_devices 4 \
+  --overwrite \
   --log_interval 25 \
   --save_interval 100000 \
   --num_train_steps 100000 \
@@ -83,4 +87,4 @@ exec uv run scripts/exp.py \
   --rl.critic.bronet_hidden_dim 1024 \
   --rl.critic.inference_start_step 1 \
   --rl.critic.value_target_type one_hot \
-  --batch_size 64
+  --batch_size 128
