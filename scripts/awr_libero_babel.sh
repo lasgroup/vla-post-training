@@ -14,7 +14,7 @@
 set -euo pipefail
 
 PROJECT_DIR=/home/mananaga/vla-post-training
-STORE_ROOT=/data/user_data/mananaga/vla-post-training
+STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
 EXP_NAME=pi05_libero_online_aw_sft_libero_90_44_seed0
 CKPT_BASE_DIR=$STORE_ROOT/checkpoints/awr_bon_recipe_babel
 
