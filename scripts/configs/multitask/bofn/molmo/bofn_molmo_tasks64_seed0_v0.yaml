@@ -4,14 +4,14 @@ project_name: vla-post-training
 group_name: multitask_tasks64_bofn_molmo_v0_seed0
 params:
   log_interval: [25]
-  num_train_steps: [100000]
-  max_runtime: [39600]  # 11 hours
+  num_train_steps: [500000]
+  max_runtime: [14400]  # 4h: only one 64-task collection cycle (~5-7h, growing) fits per 12h wall
 
   collect.env_num: [8]
   collect.eval_env_num: [8]
-  collect.eval_interval: [99999]
+  collect.eval_interval: [499999]
   !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
-    [10000, 20],
+    [50000, 20],
   ]
   !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
     [molmo, [
@@ -53,7 +53,7 @@ params:
   rl.critic.use_bronet: [True]
   rl.critic.bronet_hidden_dim: [1024]
 
-  rl.buffer_capacity: [500000]
+  rl.buffer_capacity: [1000000]
   rl.online_ratio: [1.0]
 
   seed: [0]

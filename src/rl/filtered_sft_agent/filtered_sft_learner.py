@@ -735,6 +735,11 @@ class FilteredSFTLearner(Agent):
         obs_index = np.arange(n_windows, dtype=np.int64)
         next_obs_index = obs_index + act_h
         _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
+        # Subclasses (e.g. Best-of-N with cached prefixes) may declare observation keys
+        # that are never read during training; drop them so what we store matches the
+        # buffer schema built by _make_buffer_dummy_data. Base class declares none.
+        for k in getattr(self, "_buffer_obs_drop_keys", ()):
+            _full_obs.pop(k, None)
         buf = target_buffer if target_buffer is not None else self._online_data_buffer
         buf.insert(
             {

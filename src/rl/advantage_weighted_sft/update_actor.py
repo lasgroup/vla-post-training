@@ -2,6 +2,7 @@
 from src.training.config import OnlineTrainConfig, AdvantageWeightedSFTLearnerConfig
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
+    critic_values_per_head,
     flatten_action_horizon,
     summarize_critic_values,
 )
@@ -58,20 +59,30 @@ def train_step(
         value_critic.eval()
         # 2. Compute the advantage weights OUTSIDE the value_and_grad trace
         critic_actions = flatten_action_horizon(actions)
-        value = summarize_critic_values(value_critic(critic_observation), config)  # (B,)
-        q_value = summarize_critic_values(
-            state_action_critic(critic_observation, critic_actions), config
-        )  # (B,)
-        advantage = q_value - value  # (B, )
-    score = advantage / scale
-    score = score / _awr_beta(config)
-    assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
-    score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
-
-    score = jnp.exp(score)
-    score = score / config.rl.advantage_scale  # Normalize advantage w.r.t scale
-    score = jnp.clip(score, min=1e-6)
-
+        if config.rl.advantage_combination == "conservative":
+            # (4)+(5) per-critic A_i = Q_i - V_i, combined as max(min_i A_i, 0) + min(0, max_i A_i).
+            assert config.rl.critic.num_qs == config.rl.critic.num_vs, "conservative advantage needs num_qs == num_vs"
+            adv_heads = (
+                critic_values_per_head(state_action_critic(critic_observation, critic_actions), config)
+                - critic_values_per_head(value_critic(critic_observation), config)
+            )  # (n, B)
+            advantage = jnp.maximum(jnp.min(adv_heads, axis=0), 0.0) + jnp.minimum(jnp.max(adv_heads, axis=0), 0.0)
+        else:
+            value = summarize_critic_values(value_critic(critic_observation), config)  # (B,)
+            q_value = summarize_critic_values(
+                state_action_critic(critic_observation, critic_actions), config
+            )  # (B,)
+            advantage = q_value - value  # (B, )
+    # (1) relu: non-exponentiated max(adv, 0) weights; exp: standard AWR weights.
+    if config.rl.advantage_weight_type == "relu":
+        score = jax.nn.relu(advantage / scale)
+    else:
+        score = advantage / scale
+        score = score / _awr_beta(config)
+        score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
+        score = jnp.exp(score)
+        score = score / config.rl.advantage_scale  # Normalize advantage w.r.t scale
+        score = jnp.clip(score, min=1e-6)
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)

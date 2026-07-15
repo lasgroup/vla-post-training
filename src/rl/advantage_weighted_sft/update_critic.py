@@ -86,6 +86,16 @@ def summarize_critic_values(
     return _as_scalar_batch(expected_values)
 
 
+def critic_values_per_head(
+    critic_logits: at.ArrayLike,
+    config: OnlineTrainConfig,
+) -> at.Float[at.Array, "n b"]:
+    """Per-head expected values (no reduction across the ensemble)."""
+    lower, upper = get_value_bounds(config)
+    dist = make_value_distribution(critic_logits, config.rl.critic.num_value_bins, lower, upper)
+    return dist.mean()  # (num_heads, b)
+
+
 @at.typecheck
 def flatten_action_horizon(values: ActionType) -> at.Float[at.Array, "b a"]:
     return values.reshape((values.shape[0], -1))
@@ -241,8 +251,10 @@ def train_q_step(
     mc_return = _as_scalar_batch(mc_return)
     actions = flatten_action_horizon(actions)
 
+    # (3) Q_i backs up on the reduced V ensemble; `mean` gives the mean target.
+    q_backup_reduction = config.rl.critic.q_bootstrap_reduction or config.rl.critic.reduction
     bootstrap_target = summarize_critic_values(
-        value_model(next_observation), config, critic_reduction=config.rl.critic.reduction
+        value_model(next_observation), config, critic_reduction=q_backup_reduction
     )
 
     def loss_fn(q_model, observation, actions):
@@ -296,9 +308,14 @@ def train_value_step(
     actions = flatten_action_horizon(actions)
     mc_return = _as_scalar_batch(mc_return)
 
-    bootstrap_target = summarize_critic_values(
-        q_model(observation, actions), config, critic_reduction=config.rl.critic.reduction
-    )
+    # (2) per-critic target pairs V_i with Q_i; else all V_i share the reduced Q target.
+    if config.rl.critic.per_critic_value_target:
+        assert config.rl.critic.num_vs == config.rl.critic.num_qs, "per_critic_value_target needs num_vs == num_qs"
+        bootstrap_target = critic_values_per_head(q_model(observation, actions), config)  # (n, b)
+    else:
+        bootstrap_target = summarize_critic_values(
+            q_model(observation, actions), config, critic_reduction=config.rl.critic.reduction
+        )
 
     def loss_fn(value_model, observation):
         td_weight = jnp.clip(config.rl.critic.td_weight_schedule.create()(step), 0.0, 1.0)

@@ -74,6 +74,10 @@ exec uv run scripts/exp.py \
   --rl.discount 0.995 \
   --rl.online_ratio 1.0 \
   --rl.buffer_capacity 250000 \
+  --rl.advantage_weight_type relu \
+  --rl.advantage_combination conservative \
+  --rl.critic.per_critic_value_target \
+  --rl.critic.q_bootstrap_reduction mean \
   --rl.policy.update_interval 10 \
   --rl.policy.training_start_step 900 \
   --rl.critic.td_weight_schedule.init_value 1 \

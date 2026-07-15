@@ -3,7 +3,7 @@ config_name: pi05_libero_online_aw_sft
 project_name: openpi
 group_name: awr_bon_recipe
 params:
-  seed: [0, 1, 2]
+  seed: [0]
   num_train_steps: [100000]
   lr_schedule.value: [2.5e-5]
   log_interval: [25]
@@ -25,6 +25,18 @@ params:
   rl.discount: [0.995]
   rl.online_ratio: [1.0]
   rl.buffer_capacity: [250000]
+
+  # --- default AWR ---
+  # rl.advantage_weight_type: [exp]             # (1) weights = exp(adv/beta)
+  # rl.advantage_combination: [reduced]         # (4)+(5) adv = reduce(Q) - reduce(V)
+  # rl.critic.per_critic_value_target: [False]  # (2) all V_i share reduced Q target
+  # rl.critic.q_bootstrap_reduction: [null]     # (3) Q target uses rl.critic.reduction
+
+  # --- AWR++ ---
+  rl.advantage_weight_type: [relu]            # (1) weights = max(adv, 0), no exp/beta/clip
+  rl.advantage_combination: [conservative]    # (4)+(5) per-critic A_i = Q_i - V_i, combined conservatively
+  rl.critic.per_critic_value_target: [True]   # (2) V_i regresses to Q_i
+  rl.critic.q_bootstrap_reduction: [mean]     # (3) Q target = mean_j V_j(s')
 
   rl.policy.update_interval: [10]
   rl.policy.training_start_step: [900]
