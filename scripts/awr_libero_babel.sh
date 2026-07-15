@@ -87,4 +87,4 @@ exec uv run scripts/exp.py \
   --rl.critic.bronet_hidden_dim 1024 \
   --rl.critic.inference_start_step 1 \
   --rl.critic.value_target_type one_hot \
-  --batch_size 128
+  --batch_size 256
