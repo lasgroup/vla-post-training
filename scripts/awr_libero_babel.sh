@@ -35,9 +35,6 @@ export NCCL_CUMEM_ENABLE=0
 export NCCL_IB_DISABLE=1
 export NCCL_DEBUG=WARN
 # Leave real VRAM headroom on the shared GPUs so MuJoCo/EGL offscreen framebuffers
-# can allocate during the step-10000 collection phase. At 0.95 (~4.8GB free/GPU)
-# the framebuffer alloc wedges the driver (D-state, unkillable -> node drain);
-# 0.75 leaves ~24GB/GPU, far more than the ~8 render CUDA contexts need. Tune lower
 # if the crash still bites.
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 

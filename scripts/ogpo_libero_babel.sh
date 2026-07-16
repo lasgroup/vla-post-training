@@ -15,7 +15,7 @@ set -euo pipefail
 
 PROJECT_DIR=/home/mananaga/vla-post-training
 STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
-EXP_NAME=pi05_libero_online_ogpo_sft_libero_90_59_seed1
+EXP_NAME=pi05_libero_online_ogpo_sft_libero_90_44_seed0
 CKPT_BASE_DIR=$STORE_ROOT/checkpoints/ogpo_sweep_babel
 
 cd "$PROJECT_DIR"
@@ -35,9 +35,6 @@ export NCCL_CUMEM_ENABLE=0
 export NCCL_IB_DISABLE=1
 export NCCL_DEBUG=WARN
 # Leave real VRAM headroom on the shared GPUs so MuJoCo/EGL offscreen framebuffers
-# can allocate during the collection phase. At 0.95 (~4.8GB free/GPU) the
-# framebuffer alloc wedges the driver (D-state, unkillable -> node drain);
-# 0.75 leaves ~24GB/GPU, far more than the render CUDA contexts need. Tune lower
 # if the crash still bites.
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
@@ -48,47 +45,49 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"
 
 echo "[ogpo] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 
-# OGPO: PPO on flow policies with on-policy SDE log-probs and a BC anchor on the
-# same on-policy batch. Params mirror scripts/configs/ogpo.yaml (v1: G=1 with a
-# V-baseline advantage, adv = Q - V). --save_interval / --max_runtime are babel
-# scaffolding not present in the sweep yaml.
 exec uv run scripts/exp.py \
   pi05_libero_online_ogpo_sft \
   --project_name ogpo_sweep \
   --group_name ogpo_sweep_babel \
   --exp_name "$EXP_NAME" \
   --checkpoint_base_dir "$CKPT_BASE_DIR" \
-  --seed 1 \
+  --seed 0 \
   --fsdp_devices 4 \
   --overwrite \
   --log_interval 25 \
-  --save_interval 10000 \
-  --num_train_steps 10000 \
+  --save_interval 100000 \
+  --num_train_steps 100000 \
   --lr_schedule.value 2.5e-5 \
-  --batch_size 256 \
-  --ema_decay 0.995 \
   --max_runtime 169200 \
-  --collect.tasks libero_90_59 \
-  --collect.eval_tasks libero_90_59 \
-  --collect.collect_interval 300 \
-  --collect.eval_interval 300 \
-  --collect.num_rollouts 1 \
-  --collect.num_initial_rollouts 5 \
-  --collect.num_eval_rollouts 8 \
-  --collect.env_num 1 \
-  --collect.eval_env_num 1 \
-  --rl.buffer_capacity 250000 \
+  --collect.tasks libero_90_44 \
+  --collect.eval_tasks libero_90_44 \
+  --collect.store_prefix_rep \
+  --collect.collect_interval 10000 \
+  --collect.num_rollouts 20 \
+  --collect.env_num 8 \
+  --collect.eval_env_num 8 \
+  --collect.eval_interval 99999 \
+  --rl.beta 0.05 \
+  --rl.discount 0.995 \
   --rl.online_ratio 1.0 \
-  --rl.store_success_episodes_only \
+  --rl.buffer_capacity 250000 \
+  --rl.policy.update_interval 10 \
   --rl.policy.training_start_step 900 \
-  --rl.policy.update_interval 1 \
-  --rl.critic.pre_training_steps 900 \
-  --rl.critic.num_updates_per_batch 10 \
-  --rl.critic.td_weight_schedule.switch_step 1000000 \
-  --rl.critic.no-use_ema \
+  --rl.critic.td_weight_schedule.init_value 1 \
+  --rl.critic.td_weight_schedule.end_value 1 \
+  --rl.critic.td_weight_schedule.switch_step 999999 \
+  --rl.critic.no-use_distributional_critic \
+  --rl.critic.num_value_bins 1 \
+  --rl.critic.batch_size 1024 \
+  --rl.critic.pre_training_steps 0 \
+  --rl.critic.use_bronet \
+  --rl.critic.bronet_hidden_dim 1024 \
+  --rl.critic.inference_start_step 1 \
   --rl.group_num_samples 1 \
   --rl.clip_epsilon 0.01 \
   --rl.bc_coeff 1.0 \
   --rl.num_sde_steps 10 \
   --rl.noise_level 0.3 \
   --rl.adv_strategy subtract_v
+  --rl.critic.value_target_type one_hot \
+  --batch_size 256
