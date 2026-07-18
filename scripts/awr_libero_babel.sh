@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_DIR=/home/mananaga/vla-post-training
 STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
 EXP_NAME=pi05_libero_online_aw_sft_libero_90_44_seed0
-CKPT_BASE_DIR=$STORE_ROOT/checkpoints/awr_bon_recipe_babel
+CKPT_BASE_DIR=$STORE_ROOT/checkpoints/awr_multitask
 
 cd "$PROJECT_DIR"
 
@@ -59,8 +59,8 @@ exec uv run scripts/exp.py \
   --num_train_steps 100000 \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
-  --collect.tasks libero_90_44 \
-  --collect.eval_tasks libero_90_44 \
+  --collect.tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
+  --collect.eval_tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
   --collect.store_prefix_rep \
   --collect.collect_interval 10000 \
   --collect.num_rollouts 20 \
