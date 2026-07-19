@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=200G
+#SBATCH --mem=400G
 #SBATCH --time=48:00:00
 #SBATCH --output=/home/mananaga/logs/%j/.out
 #SBATCH --error=/home/mananaga/logs/%j/.out
@@ -45,6 +45,11 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"
 
 echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 
+# --rl.advantage_weight_type relu \
+# --rl.advantage_combination conservative \
+# --rl.critic.per_critic_value_target \
+# --rl.critic.q_bootstrap_reduction mean \
+
 exec uv run scripts/exp.py \
   pi05_libero_online_aw_sft \
   --project_name openpi \
@@ -71,10 +76,6 @@ exec uv run scripts/exp.py \
   --rl.discount 0.995 \
   --rl.online_ratio 1.0 \
   --rl.buffer_capacity 250000 \
-  --rl.advantage_weight_type relu \
-  --rl.advantage_combination conservative \
-  --rl.critic.per_critic_value_target \
-  --rl.critic.q_bootstrap_reduction mean \
   --rl.policy.update_interval 10 \
   --rl.policy.training_start_step 900 \
   --rl.critic.td_weight_schedule.init_value 1 \
