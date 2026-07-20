@@ -44,9 +44,9 @@ import wandb
 
 
 # Defaults for the current OGPO debug run. Override any of these from CLI.
-DEFAULT_ENTITY = "RL-experiments"
-DEFAULT_PROJECT = "libero_59"
-DEFAULT_RUN_NAME = "libero_59_20260525-174526_e04a0c_seed1"
+DEFAULT_ENTITY = "diverse-data-synthesis"
+DEFAULT_PROJECT = "ogpo_sweep"
+DEFAULT_RUN_NAME = "pi05_libero_online_ogpo_sft_libero_90_44_seed0"
 
 
 # Metrics the OGPO actor/critic emit. Wildcards are matched against the
@@ -121,26 +121,39 @@ def _select_metric_columns(columns: Iterable[str],
 def _fetch_history(run: "wandb.apis.public.Run",
                    metrics: list[str],
                    max_samples: int) -> pd.DataFrame:
-    """Pull history for the requested metrics + _step in one call.
+    """Pull history for the requested metrics, one metric per request.
 
-    ``run.history(keys=..., samples=N)`` is a single HTTP round trip,
-    server-side projected to the requested columns, and returns a pandas
-    DataFrame directly. ``samples`` is an upper bound — pass it large
-    enough (default 100k) and you get every row for runs smaller than
-    that, exactly.
+    ``run.history(keys=[a, b])`` inner-joins: it only returns steps where
+    *every* requested key is non-null. Metrics logged on different cadences
+    (``actor/*`` every log_interval vs ``eval/*`` every eval_interval) have
+    an empty intersection, so a single multi-key call returns zero rows.
+    Fetch each metric separately and outer-merge on ``_step`` instead.
     """
-    df = run.history(
-        keys=["_step", *metrics],
-        samples=max_samples,
-        pandas=True,
-        x_axis="_step",
-    )
-    if "_step" not in df.columns:
+    frames: list[pd.DataFrame] = []
+    for metric in metrics:
+        try:
+            d = run.history(keys=[metric], samples=max_samples,
+                            pandas=True, x_axis="_step")
+        except Exception as exc:  # pragma: no cover - tolerate API quirks
+            print(f"[warn] history for {metric!r} failed ({exc}); skipping.",
+                  file=sys.stderr)
+            continue
+        if "_step" not in d.columns or metric not in d.columns:
+            continue
+        d = d[["_step", metric]].dropna(subset=["_step"])
+        if d.empty:
+            continue
+        d["_step"] = d["_step"].astype(int)
+        frames.append(d.drop_duplicates(subset=["_step"]))
+
+    if not frames:
         raise RuntimeError(
-            "Returned history has no _step column. Was W&B logging skipped?"
+            "No metric returned any history rows. Was W&B logging skipped?"
         )
-    df = df.dropna(subset=["_step"]).reset_index(drop=True)
-    df["_step"] = df["_step"].astype(int)
+
+    df = frames[0]
+    for other in frames[1:]:
+        df = df.merge(other, on="_step", how="outer")
     return df.sort_values("_step").reset_index(drop=True)
 
 

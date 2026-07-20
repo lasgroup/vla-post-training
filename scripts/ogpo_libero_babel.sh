@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_DIR=/home/mananaga/vla-post-training
 STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
 EXP_NAME=pi05_libero_online_ogpo_sft_libero_90_44_seed0
-CKPT_BASE_DIR=$STORE_ROOT/checkpoints/ogpo_sweep_babel
+CKPT_BASE_DIR=$STORE_ROOT/checkpoints/ogpo_sweep_babel_1
 
 cd "$PROJECT_DIR"
 
@@ -87,7 +87,7 @@ exec uv run scripts/exp.py \
   --rl.clip_epsilon 0.01 \
   --rl.bc_coeff 1.0 \
   --rl.num_sde_steps 10 \
-  --rl.noise_level 0.3 \
-  --rl.adv_strategy subtract_v
+  --rl.noise_level 0.02 \
+  --rl.adv_strategy subtract_v \
   --rl.critic.value_target_type one_hot \
   --batch_size 256
