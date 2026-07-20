@@ -6,6 +6,7 @@ This learner inherits the dual-critic + EMA + checkpointing plumbing from
 ``src/rl/ogpo/update_actor.py``. v1 is strictly on-policy
 (``online_ratio == 1.0``) with no success buffer and no offline data path.
 """
+import dataclasses
 import functools
 
 import jax
@@ -104,10 +105,20 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         if update_policy:
             policy_batch = self._online_batch_to_sft_batch(online_batch)
             policy_rng, self._rng = jax.random.split(self._rng, 2)
+            # The PPO ratio needs the EMA as the "old" policy, but the EMA is
+            # offloaded outside of data collection. Put it back on the train
+            # state for the update only. ema_decay stays None so the train
+            # step's own EMA update stays off and does not double-count with
+            # the learner-side update below.
+            policy_train_state = self._train_state
+            if rl_config.use_ema_as_old_policy:
+                policy_train_state = dataclasses.replace(
+                    policy_train_state, ema_params=self._ema
+                )
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     policy_batch,
-                    self._train_state,
+                    policy_train_state,
                     self._state_action_critic_state,
                     self._value_state,
                     policy_rng,
@@ -115,7 +126,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     None,        # is_success: unused by OGPO v1
                     1.0,         # scale: unused by OGPO v1
                 )
-            self._train_state = policy_state
+            self._train_state = dataclasses.replace(policy_state, ema_params=None)
             self._ema = self._ema_update_fn(self._ema, self._train_state.params)
             actor_info = {f"actor/{k}": v for k, v in actor_info.items()}
 

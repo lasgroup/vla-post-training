@@ -46,11 +46,43 @@ This explains every symptom without any of the other hypotheses:
 | `q_mc_loss` falling 539→474 | Q converging to the *fixed* behavior policy's returns |
 | AWR `value_loss` 18.31, `q_grad_norm` → 980 | AWR's EMA updates → data shifts → critic chases |
 
-**Caveat:** on `ogpo_ablations` *nobody* updated the EMA (the hotfix postdates
-that branch). So the "working" OGPO run was also collecting with frozen weights,
-and its 0.5 → 0.625 may be SFT base-rate noise on `libero_90_59` rather than real
-improvement. **Do not treat the `ogpo_ablations` config as a known-good target.**
-This bug predates the merge; what changed is that AWR got fixed and pulled ahead.
+### Why `ogpo_ablations` worked — the actual regression mechanism
+
+**OGPO's train step has always had its own EMA update**, `ogpo/update_actor.py:269-275`,
+present on *both* branches:
+
+```python
+if policy_state.ema_decay is not None:
+    new_state = dataclasses.replace(new_state, ema_params=jax.tree.map(
+        lambda old, new: policy_state.ema_decay * old + (1.0 - policy_state.ema_decay) * new,
+        policy_state.ema_params, new_full_params))
+```
+
+On `ogpo_ablations`, `ema_params`/`ema_decay` **stayed in the train state during
+training** — the null at that branch's line 343 is inside a *resume-only* block
+("Temporarily disabling EMA after resume; will re-enable after first update",
+re-enabled at 805-812). So `ema_decay is not None` held and **this block ran on
+every policy update.** The EMA was live and collection used it.
+
+The current branch's `filtered_sft_learner.py:311` offloads
+`ema_params=None, ema_decay=None` for *all* updates. That silently disables the
+train step's own EMA update. **This is the regression.** The `ogpo_ablations`
+run really was improving; do not dismiss it.
+
+### The same offload broke a SECOND thing: the PPO trust region
+
+`ogpo/update_actor.py:80-81`:
+```python
+if rl.use_ema_as_old_policy and policy_state.ema_params is not None:
+    old_params = policy_state.ema_params
+```
+
+- Old branch: `ema_params` present → `old_params` = a real EMA → genuine trust
+  region. Measured: `ratio_std = 2.28e-3`, `clipfrac = 0.0056`.
+- Current branch: `ema_params is None` → `old_params = params` → `ratio ≡ 1`,
+  `clipfrac ≡ 0`, `approx_kl ≈ 1e-8`. Exactly what was measured.
+
+Both regressions trace to the same offload refactor.
 
 ## Reference points
 
@@ -139,8 +171,11 @@ Each of these was proposed and then disproven this session.
    `normalize_act_space_dimension` (`ogpo.py:206-207, 2516-2519`); its total
    divisor is `(K+1)·H·D` vs our `K·H·D` (its `act_dim = action_dim ×
    horizon_length` already folds in H). Equivalent.
-3. **`use_ema_as_old_policy` inert / `ratio ≡ 1`** — `ogpo_ablations:343` also
-   offloads `ema_params` during updates. `ratio ≡ 1` is *normal* for this code.
+3. ~~**`use_ema_as_old_policy` inert / `ratio ≡ 1` is normal**~~ — **THIS
+   RETRACTION WAS ITSELF WRONG.** `ogpo_ablations:343` nulls `ema_params` only
+   in the *resume* path, not during normal updates. The old branch had a live
+   EMA old-policy and a real trust region. `ratio ≡ 1` is a **regression**, not
+   normal. See "the same offload broke a SECOND thing" above. Fixed 2026-07-20.
 4. **Reward flip `use_time_to_success_as_reward` False→True** — AWR uses the
    same default and works; AWR's critic is *also* pinned near −200.
    (−1/(1−0.995) = −200 is just the never-succeeds value under this reward.)
@@ -324,10 +359,19 @@ A dense `collect_interval` catches that in ~2k steps.
 
 ## Ranked next steps (reordered after the ROOT CAUSE finding)
 
+0. **Evaluate an existing checkpoint's `params` (not `ema_params`).**
+   `save_checkpoint` (`filtered_sft_learner.py:580-587`) writes both, so the
+   trained weights from the 100k-step run are **not lost** — they are in
+   `params` under `$STORE_ROOT/checkpoints/ogpo_sweep_babel`. This answers
+   "did OGPO learn anything at all?" without rerunning. If the trained policy
+   beats SFT, most of the tuning concern in this log evaporates.
 1. **Re-run with just the three learner fixes**, changing nothing else. Every
    hyperparameter conclusion in this log was measured on a policy that was never
    acting in the environment, so they all need re-measuring first. Add
    `--collect.eval_interval 1000` so the result is visible.
+   NOTE: the script currently carries `--rl.noise_level 0.02` (was 0.3). That
+   confounds the baseline — revert it to `0.3` for the first run if you want a
+   clean read on the EMA fix alone.
 2. **Only then** revisit the tuning knobs, in this order:
    - `td_weight_schedule.init_value 0` + `pre_training_steps 900` — puts
      successful trajectories into the critic loss at all (with `td_weight=1`
@@ -370,12 +414,79 @@ batch fed in and the surrounding bookkeeping differed.
   - samples an independent critic batch of `rl.critic.batch_size`
     (falls back to the policy batch size when unset)
   - **`self._ema = self._ema_update_fn(self._ema, self._train_state.params)`**
-    after the policy update
+    after the policy update — fixes *collection* acting on stale weights
+  - **restores the PPO trust region**: attaches `self._ema` as `ema_params` on
+    the train state for the policy update only, then strips it back to `None`:
+    ```python
+    policy_train_state = self._train_state
+    if rl_config.use_ema_as_old_policy:
+        policy_train_state = dataclasses.replace(policy_train_state, ema_params=self._ema)
+    ...
+    self._train_state = dataclasses.replace(policy_state, ema_params=None)
+    ```
+    `ema_decay` deliberately stays `None`, so the train step's own EMA block
+    (`update_actor.py:269`) does **not** run and cannot double-count with the
+    learner-side update. Stripping `ema_params` afterwards preserves the
+    invariant asserted at `filtered_sft_learner.py:763`.
+
+    Expect `actor/ratio_std` and `actor/clipfrac` to become non-zero for the
+    first time — that is the check that this landed. Memory cost: one extra
+    (sharded) copy of the policy params live during OGPO's already heavy actor
+    update. This is what the offload refactor was avoiding.
 
 All syntax-checked only — **none of this has been run.** Watch for OOM on the
 first critic update: `store_prefix_rep=True` means 256 → 1024 quadruples the
 per-step sampling, and OGPO's actor update is already the memory-heavy one.
 `--rl.critic.batch_size 512` is the fallback.
+
+### Post-fix line-by-line verification of `update()`
+
+| step | AWR | OGPO | |
+|---|---|---|---|
+| `_maybe_reset_critic_optimizers()` | 603 | 45 | identical |
+| `training_steps += 1` | 605 | 47 | identical |
+| `update_critic` gate | 606-609 | 48-51 | identical |
+| `update_policy` gate | 610-613 | 52-55 | identical |
+| early return if neither | 614-619 | 57-62 | identical |
+| policy batch size | 621-623 | 65 | equivalent (`online_ratio` pinned to 1.0) |
+| `critic_batch_size` | 626 | 76 | identical |
+| buffer-too-small | 627 → offline fallback | 66-71 → early return | **differs, intentional** |
+| `use_mc_returns` gate | 628-629 | — | n/a for OGPO |
+| sample critic + policy batches | 636-637 | 77-82 | identical |
+| critic update | 638-655 | 85-102 | identical |
+| `mc_return` / `is_success` | 656-662 | passes `None` | by design |
+| `_online_batch_to_sft_batch` | 663 | 105 | identical |
+| online/offline mixing | 664-712 | — | equivalent (pinned 1.0) |
+| **policy update call** | 713-726 | 104-117 | **the intended difference** |
+| `_train_state = policy_state` | 728 | 118 | identical |
+| EMA update | 729 | 119 | identical (after fix) |
+| **normalizer update** | 730-751 | — | **differs, see below** |
+| `actor_info` prefixing | 752 | 120 | identical |
+| info assembly + `np.asarray` | 754-763 | 122-130 | identical |
+
+### Two remaining deliberate differences
+
+**1. Buffer-too-small.** AWR falls back to offline SFT data; OGPO returns early
+(v1 asserts `online_ratio == 1.0` and has no offline path). Never triggers in
+practice — the step-0 collection yields ~7.5k transitions, far above the 256
+threshold, before `policy.training_start_step 900`.
+
+**2. Advantage normalizer — NOT wired for OGPO.** AWR computes `scale`/`bias`
+from advantage quantiles (730-751), EMA-smooths them into
+`self._normalizer_state`, and feeds `scale` into the *next* policy update
+(line 715). OGPO hardcodes `1.0`, and `ogpo/update_actor.py:72` does
+`del mc_return, is_success, scale` — so `scale` is discarded regardless.
+
+This matters: it is exactly the advantage normalization considered as a fix for
+the advantage collapse. AWR's machinery (`normalizer_config.method` ∈
+`quantile | standard_normal | min_max`, with `min_scale` clipping) is
+**EMA-smoothed across steps**, so it is strictly safer than a per-batch
+`advantage / advantage.std()` — which would amplify batch noise when the
+advantage is mostly critic noise.
+
+Wiring it is two edits: use `scale` in `ogpo/update_actor.py` instead of
+deleting it, and copy AWR's normalizer block into `ogpo_learner.py`.
+**Deliberately deferred** until after a clean post-EMA-fix baseline.
 
 ## Open question
 
