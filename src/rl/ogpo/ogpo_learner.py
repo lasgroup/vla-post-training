@@ -42,6 +42,8 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         rl_config = self._config.rl
         assert isinstance(rl_config, OGPOSFTLearnerConfig)
 
+        self._maybe_reset_critic_optimizers()
+
         self.training_steps += 1
         update_critic = (
             self.training_steps >= rl_config.critic.training_start_step
@@ -68,6 +70,15 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 )
             }
 
+        # Critics are small MLPs so a larger batch than the policy is cheap and
+        # improves TD stability. Sampled independently so the TD update is not
+        # computed on the same data as the PPO update.
+        critic_batch_size = rl_config.critic.batch_size or online_batch_size
+        critic_online_batch = (
+            self._online_data_buffer.sample(batch_size=critic_batch_size)
+            if update_critic
+            else None
+        )
         online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
 
         critic_info, actor_info = {}, {}
@@ -76,7 +87,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             with sharding.set_mesh(self._mesh):
                 q_state, value_state, q_info, value_info = (
                     self._update_critics_jitted(
-                        online_batch,
+                        critic_online_batch,
                         self._state_action_critic_state,
                         self._value_state,
                         self._train_state,

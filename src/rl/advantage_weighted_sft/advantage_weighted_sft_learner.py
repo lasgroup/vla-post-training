@@ -573,33 +573,34 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return policy_state, info
 
+    def _maybe_reset_critic_optimizers(self):
+        """Reset q/value optimizer state and re-seed their EMA when critic pre-training ends."""
+        if self._config.rl.critic.pre_training_steps != self.training_steps:
+            return
+
+        q_opt_state = self._state_action_critic_state.tx.init(
+            nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
+        )
+        self._state_action_critic_state = dataclasses.replace(
+            self._state_action_critic_state,
+            opt_state=q_opt_state,
+            ema_params=jax.tree.map(
+                jnp.copy, self._state_action_critic_state.params
+            ),
+        )
+
+        v_opt_state = self._value_state.tx.init(
+            nnx.filter_state(self._value_state.params, nnx.Param)
+        )
+        self._value_state = dataclasses.replace(
+            self._value_state,
+            opt_state=v_opt_state,
+            ema_params=jax.tree.map(jnp.copy, self._value_state.params),
+        )
+
     @at.typecheck
     def update(self) -> dict:
-        if self._config.rl.critic.pre_training_steps == self.training_steps:
-            # Reset optimizer state of the value and q function
-            q_opt_state = self._state_action_critic_state.tx.init(
-                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
-            )
-            new_ema_state_action_critic_params = jax.tree.map(
-                jnp.copy, self._state_action_critic_state.params
-            )
-            self._state_action_critic_state = dataclasses.replace(
-                self._state_action_critic_state,
-                opt_state=q_opt_state,
-                ema_params=new_ema_state_action_critic_params,
-            )
-            del new_ema_state_action_critic_params, q_opt_state
-
-            v_opt_state = self._value_state.tx.init(
-                nnx.filter_state(self._value_state.params, nnx.Param)
-            )
-            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
-            self._value_state = dataclasses.replace(
-                self._value_state,
-                opt_state=v_opt_state,
-                ema_params=new_ema_value_params,
-            )
-            del new_ema_value_params, v_opt_state
+        self._maybe_reset_critic_optimizers()
 
         self.training_steps += 1
         update_critic = (
