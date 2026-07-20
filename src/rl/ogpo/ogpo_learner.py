@@ -116,6 +116,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     1.0,         # scale: unused by OGPO v1
                 )
             self._train_state = policy_state
+            self._ema = self._ema_update_fn(self._ema, self._train_state.params)
             actor_info = {f"actor/{k}": v for k, v in actor_info.items()}
 
         info = (

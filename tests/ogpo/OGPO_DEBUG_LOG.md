@@ -12,6 +12,46 @@ same critic config, climbs to 65% (collection) / 46.9% (eval).
 OGPO previously reached 62% — but on `libero_90_59`, a *harder* task, on
 branch `origin/manan/ogpo_ablations`.
 
+## ROOT CAUSE (found late in the session — read this first)
+
+**OGPO never updated its EMA, and data collection uses the EMA. So OGPO
+collected every rollout for 100k steps with the frozen, untrained SFT weights.**
+
+```
+filtered_sft_learner.py:310   self._ema = device_put(train_state.ema_params)   ← init ONLY
+awr_learner.py:729            self._ema = self._ema_update_fn(self._ema, ...)  ← AWR updates
+filtered_sft_learner.py:814   self._ema = self._ema_update_fn(self._ema, ...)  ← base updates
+ogpo_learner.py               nothing — OGPO overrides update() and called neither
+```
+
+Collection reads it: `start_data_collection` (`filtered_sft_learner.py:763-765`)
+attaches `self._ema` to `train_state.ema_params`, and `_sample_action`
+(`:486-491`) prefers `ema_params` over `params`. `ema_decay=0.999` is set, so
+`ema_params` is never `None` and the live policy is never used.
+`evaluate_policy` also calls `agent.start_data_collection()` (`collect.py:39`),
+so **eval measured the SFT policy too** — OGPO's trained policy was never
+evaluated at all.
+
+Origin: commit `32d5bc5 hotfix: ema parameters are not updated in awr update`
+(2026-07-01) — **one file, one line**, applied to
+`advantage_weighted_sft_learner.py`. OGPO overrides `update()` and was missed.
+
+This explains every symptom without any of the other hypotheses:
+
+| observation | explanation |
+|---|---|
+| `success_rate` flat 5–10% for 100k steps | SFT base rate; acting policy never changed |
+| buffer distribution static | same policy generating data throughout |
+| `value_loss` → 0.037, `q_grad_norm` decaying | critic converged on a static distribution |
+| `q_mc_loss` falling 539→474 | Q converging to the *fixed* behavior policy's returns |
+| AWR `value_loss` 18.31, `q_grad_norm` → 980 | AWR's EMA updates → data shifts → critic chases |
+
+**Caveat:** on `ogpo_ablations` *nobody* updated the EMA (the hotfix postdates
+that branch). So the "working" OGPO run was also collecting with frozen weights,
+and its 0.5 → 0.625 may be SFT base-rate noise on `libero_90_59` rather than real
+improvement. **Do not treat the `ogpo_ablations` config as a known-good target.**
+This bug predates the merge; what changed is that AWR got fixed and pulled ahead.
+
 ## Reference points
 
 | what | where |
@@ -282,29 +322,64 @@ critic noise (`advantage_std 0.023` vs critic drift ~3.0) rather than signal,
 cutting `bc_coeff` lets noise drive the policy and success can fall *below* 5%.
 A dense `collect_interval` catches that in ~2k steps.
 
-## Ranked next steps
+## Ranked next steps (reordered after the ROOT CAUSE finding)
 
-1. **Critic recipe restore** — the only thing that differs between a config that
-   learned and one that didn't:
-   ```
-   --rl.critic.td_weight_schedule.init_value 0 \
-   --rl.critic.pre_training_steps 900 \
-   --rl.critic.num_updates_per_batch 10 \
-   --rl.critic.no-use_ema \
-   --rl.critic.inference_start_step 100 \
-   --rl.discount 0.99 \
-   ```
-2. **`noise_level 0.02`** (done) — fixes a verified divergence from official and
-   should make `clip_epsilon = 0.01` live for the first time. Will *not* by
-   itself fix the regression (working run used 0.3).
-3. **`bc_coeff`** — only after reading `clipfrac` from step 2.
-4. **`adv_strategy vanilla` + `group_num_samples` > 1** — the structurally
-   correct fix for the advantage collapse; 8 or 16 if 32 is too expensive.
-5. Fix the dormant `preprocess_observation` asymmetry and the RNG reuse.
+1. **Re-run with just the three learner fixes**, changing nothing else. Every
+   hyperparameter conclusion in this log was measured on a policy that was never
+   acting in the environment, so they all need re-measuring first. Add
+   `--collect.eval_interval 1000` so the result is visible.
+2. **Only then** revisit the tuning knobs, in this order:
+   - `td_weight_schedule.init_value 0` + `pre_training_steps 900` — puts
+     successful trajectories into the critic loss at all (with `td_weight=1`
+     the MC term is multiplied by `1 - td_weight = 0`).
+   - `noise_level` (already 0.02) — read `actor/clipfrac`; target the 0.005–0.2
+     band. Saturating near 1 → raise it to 0.05.
+   - `bc_coeff` — only after reading `clipfrac`. Note `noise_level` and
+     `bc_coeff` multiply: `∇pg ∝ 1/σ²`, so 0.3 → 0.02 already gives ~225×
+     more PG gradient on its own.
+   - `adv_strategy vanilla` + `group_num_samples` > 1 — the structurally correct
+     fix for a collapsed advantage; 8 or 16 if 32 is too expensive.
+3. Fix the dormant `preprocess_observation` asymmetry and the RNG reuse.
+
+**Do not tune anything before step 1 completes.** The measurements this log is
+built on describe a frozen SFT policy, not OGPO.
+
+## Structural differences found between the OGPO and AWR learners
+
+`OGPOAgentLearner` inherits everything from `AdvantageWeightedSFTLearner` and
+only swaps the actor train step — but it **overrides `update()`**, and three
+things that live in AWR's `update()` were silently lost.
+
+| # | difference | status |
+|---|---|---|
+| 1 | **EMA never updated** — see ROOT CAUSE above | **FIXED** |
+| 2 | `rl.critic.batch_size` ignored; critic reused the actor's 256-sample batch instead of an independent 1024 one | **FIXED** |
+| 3 | `pre_training_steps` critic-optimizer reset never ran | **FIXED** |
+
+The critic *functions* (`train_q_step`, `train_value_step`) are byte-identical
+between the two — OGPO calls the inherited `_update_critics_jitted`. Only the
+batch fed in and the surrounding bookkeeping differed.
+
+### Code changes made 2026-07-20
+
+- `advantage_weighted_sft_learner.py` — extracted the `pre_training_steps`
+  optimizer reset into `_maybe_reset_critic_optimizers()`. Pure refactor; AWR
+  behavior unchanged.
+- `ogpo_learner.py`:
+  - calls `self._maybe_reset_critic_optimizers()`
+  - samples an independent critic batch of `rl.critic.batch_size`
+    (falls back to the policy batch size when unset)
+  - **`self._ema = self._ema_update_fn(self._ema, self._train_state.params)`**
+    after the policy update
+
+All syntax-checked only — **none of this has been run.** Watch for OOM on the
+first critic update: `store_prefix_rep=True` means 256 → 1024 quadruples the
+per-step sampling, and OGPO's actor update is already the memory-heavy one.
+`--rl.critic.batch_size 512` is the fallback.
 
 ## Open question
 
-Why does AWR's critic learn on this task while OGPO's does not, given identical
-critic code, identical critic config, and OGPO actually starting with *more*
-collected successes? Not resolved. This is the most informative thing left to
-chase — a critic that ignores demonstrably available signal is the deeper anomaly.
+Largely closed by the ROOT CAUSE finding. The remaining unknown is simply
+**what OGPO actually does once the EMA is live** — no run has ever measured its
+trained policy. Re-run before drawing any further conclusions; most of the
+tuning analysis in this log was performed on a policy that was never acting.
