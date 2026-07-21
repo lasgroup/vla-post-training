@@ -36,7 +36,9 @@ if mp.current_process().name != "MainProcess":
 
 os.environ["JAX_LOG_COMPILES"] = "1"
 os.environ["JAX_LOG_COMPILATION_CACHE"] = "1"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
+# setdefault (not assignment): on Babel the launcher lowers this to leave real
+# VRAM headroom for MuJoCo/EGL offscreen framebuffers on the shared GPUs.
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 
 import gc
 import platform
