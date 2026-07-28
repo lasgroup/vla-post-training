@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_DIR=/home/mananaga/VLA/manan_babel/vla-post-training
 STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
 EXP_NAME=pi05_libero_online_filtered_sft_multitask4_cfg_seed0
-CKPT_BASE_DIR=$STORE_ROOT/checkpoints/fsft_multitask
+CKPT_BASE_DIR=$STORE_ROOT/checkpoints/fsft_multitask_cfg
 
 cd "$PROJECT_DIR"
 
