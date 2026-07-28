@@ -346,6 +346,14 @@ class FilteredSFTLearner(Agent):
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
+        self._cfg_scale = float(getattr(self._config.rl, "cfg_scale", 1.0))
+        self._cfg_guide_collection = bool(getattr(self._config.rl, "cfg_guide_collection", False))
+        if self._cfg_scale != 1.0:
+            logging.info(
+                "Classifier-free guidance enabled (cfg_scale=%.3f, collection=%s)",
+                self._cfg_scale,
+                "guided" if self._cfg_guide_collection else "unguided",
+            )
 
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
@@ -569,6 +577,16 @@ class FilteredSFTLearner(Agent):
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
 
+    def _set_guidance(self, *, evaluation: bool):
+        """Arm CFG for the next sampling phase: evaluation always, collection only
+        when asked for. Absent from `_sample_kwargs` means plain conditional
+        sampling, so no extra forward pass is traced."""
+        enabled = self._cfg_scale != 1.0 and (evaluation or self._cfg_guide_collection)
+        sample_kwargs = {k: v for k, v in self._policy._sample_kwargs.items() if k != "cfg_scale"}
+        if enabled:
+            sample_kwargs["cfg_scale"] = self._cfg_scale
+        self._policy._sample_kwargs = sample_kwargs
+
     def _online_batch_to_sft_batch(
         self, online_batch: Dict[str, Any]
     ) -> tuple[_model.Observation, _model.Actions]:
@@ -756,10 +774,11 @@ class FilteredSFTLearner(Agent):
         if target_buffer is None:
             self._collection_success_episodes += 1
 
-    def start_data_collection(self, step: int | None = None):
+    def start_data_collection(self, step: int | None = None, *, evaluation: bool = False):
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
+        self._set_guidance(evaluation=evaluation)
         assert self._train_state.ema_params is None, "EMA parameters should be offloaded except during data collection."
         ema_rep = jax.device_put(self._ema, self._replicated_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)

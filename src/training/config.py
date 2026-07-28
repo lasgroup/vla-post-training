@@ -159,6 +159,17 @@ class CriticTrainingConfig:
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy: PolicyTrainingConfig = PolicyTrainingConfig()
+    # Classifier-free guidance on the language conditioning. The unconditional
+    # branch masks the prompt tokens out of the prefix attention; images stay
+    # conditioned in both branches. 1.0 disables CFG (plain conditional sampling).
+    cfg_scale: float = 1.0
+    # By default guidance applies to evaluation only. Guiding collection too feeds
+    # guided actions back in as BC targets, so each round is guided on top of a
+    # policy already distilled from guided data.
+    cfg_guide_collection: bool = False
+    # Probability of dropping the prompt from a training sample, so the same
+    # weights learn the unconditional branch.
+    cfg_dropout_prob: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

@@ -36,7 +36,7 @@ def evaluate_policy(
     for t in config.collect.eval_tasks:
         repeated_task_ids.extend([t] * num_rollouts_per_task)
     num_rollouts = num_rollouts_per_task * len(config.collect.eval_tasks)
-    agent.start_data_collection()
+    agent.start_data_collection(evaluation=True)
 
     with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
 
