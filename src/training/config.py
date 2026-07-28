@@ -162,11 +162,24 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     # Classifier-free guidance on the language conditioning. The unconditional
     # branch masks the prompt tokens out of the prefix attention; images stay
     # conditioned in both branches. 1.0 disables CFG (plain conditional sampling).
-    cfg_scale: float = 1.0
+    # A list sweeps evaluation over each scale in turn (include 1.0 for the
+    # unguided baseline); metrics are then reported per scale.
+    cfg_scale: list[float] | float = 1.0
     # By default guidance applies to evaluation only. Guiding collection too feeds
     # guided actions back in as BC targets, so each round is guided on top of a
     # policy already distilled from guided data.
     cfg_guide_collection: bool = False
+
+    def __post_init__(self):
+        scales = [self.cfg_scale] if isinstance(self.cfg_scale, (int, float)) else list(self.cfg_scale)
+        if not scales:
+            raise ValueError("rl.cfg_scale must not be empty.")
+        object.__setattr__(self, "cfg_scale", [float(s) for s in scales])
+        if self.cfg_guide_collection and len(scales) > 1:
+            raise ValueError(
+                "rl.cfg_guide_collection needs a single rl.cfg_scale: collection cannot "
+                f"be guided at {len(scales)} scales at once (got {scales})."
+            )
     # Probability of dropping the prompt from a training sample, so the same
     # weights learn the unconditional branch.
     cfg_dropout_prob: float = 0.0

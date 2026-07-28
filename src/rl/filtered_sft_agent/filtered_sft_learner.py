@@ -346,12 +346,13 @@ class FilteredSFTLearner(Agent):
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
-        self._cfg_scale = float(getattr(self._config.rl, "cfg_scale", 1.0))
+        self._cfg_scales = [float(s) for s in getattr(self._config.rl, "cfg_scale", [1.0])]
+        self._cfg_scale = self._cfg_scales[0]
         self._cfg_guide_collection = bool(getattr(self._config.rl, "cfg_guide_collection", False))
-        if self._cfg_scale != 1.0:
+        if any(s != 1.0 for s in self._cfg_scales):
             logging.info(
-                "Classifier-free guidance enabled (cfg_scale=%.3f, collection=%s)",
-                self._cfg_scale,
+                "Classifier-free guidance enabled (cfg_scale=%s, collection=%s)",
+                self._cfg_scales,
                 "guided" if self._cfg_guide_collection else "unguided",
             )
 
@@ -576,6 +577,15 @@ class FilteredSFTLearner(Agent):
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
+
+    @property
+    def cfg_scales(self) -> list[float]:
+        """Guidance scales to evaluate at. More than one sweeps the eval."""
+        return list(self._cfg_scales)
+
+    def set_cfg_scale(self, scale: float) -> None:
+        """Select the scale the next sampling phase is armed with."""
+        self._cfg_scale = float(scale)
 
     def _set_guidance(self, *, evaluation: bool):
         """Arm CFG for the next sampling phase: evaluation always, collection only

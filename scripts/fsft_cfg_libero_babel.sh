@@ -49,12 +49,19 @@ echo "[fsft-cfg] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 # language conditioning:
 #   rl.cfg_dropout_prob  fraction of training samples whose prompt is masked out,
 #                        so the same weights also learn the unconditional branch.
-#   rl.cfg_scale         guidance weight at sampling time. 1.0 = plain conditional
+#   rl.cfg_scale         guidance weight(s) at sampling time. 1.0 = plain conditional
 #                        sampling. Costs ~2x the action expert forward per step.
+#                        The list sweeps the step-4999 eval over each scale in turn,
+#                        reporting eval/cfg<scale>/success_rate per scale. 1.0 stays
+#                        in the list -- that is the unguided baseline, measured on
+#                        the same weights. Each extra scale is a full eval
+#                        (num_eval_rollouts x eval_tasks = 128 episodes), and guided
+#                        scales run ~2x slower per denoising step, so budget time.
 # Guidance applies to evaluation only: collection stays identical in distribution to
 # fsft_libero_babel.sh, so the eval delta isolates the decode-time effect. Add
 # --rl.cfg_guide_collection to also guide collection (the data-quality flywheel) --
-# but that feeds guided actions back as BC targets, compounding over rounds.
+# but that feeds guided actions back as BC targets, compounding over rounds, and it
+# requires a single scale.
 # Note tasks 79 and 82 share a prompt, so guidance cannot separate those two.
 
 exec uv run scripts/exp.py \
@@ -82,5 +89,5 @@ exec uv run scripts/exp.py \
   --rl.online_ratio 1.0 \
   --rl.buffer_capacity 500000 \
   --rl.cfg_dropout_prob 0.1 \
-  --rl.cfg_scale 1.5 \
+  --rl.cfg_scale 1.0 1.5 2.0 3.0 \
   --batch_size 256

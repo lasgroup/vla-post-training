@@ -66,7 +66,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
-from src.training.collect import evaluate_policy
+from src.training.collect import evaluate_policy_sweep
 from src.training.utils import init_logging, init_wandb
 
 
@@ -103,7 +103,7 @@ def main(config: _config.OnlineTrainConfig):
         env_num=config.collect.eval_env_num,
     )
     try:
-        metrics = evaluate_policy(agent=agent, env=eval_env, config=config, step=step)
+        metrics = evaluate_policy_sweep(agent=agent, env=eval_env, config=config, step=step)
     finally:
         eval_env.close()
 
@@ -111,17 +111,27 @@ def main(config: _config.OnlineTrainConfig):
         wandb.log(metrics, step=step)
 
     # Console report: overall first, then per-task success rates sorted by task.
+    # Keys are "eval/success_rate[/<task>]", or "eval/cfg<scale>/success_rate[/<task>]"
+    # once the guidance sweep has run — group by whatever sits in between.
     logging.info(f"=== Eval at step {step} ===")
-    overall = metrics.get("eval/success_rate")
-    if overall is not None:
-        logging.info(f"overall success_rate: {overall:.4f}")
-    per_task = {
-        k.removeprefix("eval/success_rate/"): v
-        for k, v in metrics.items()
-        if k.startswith("eval/success_rate/")
-    }
-    for task in sorted(per_task):
-        logging.info(f"  {task}: {per_task[task]:.4f}")
+    groups: dict[str, dict] = {}
+    for key, value in metrics.items():
+        rest = key.removeprefix("eval/")
+        if rest == "success_rate" or rest.endswith("/success_rate"):
+            groups.setdefault(rest[: -len("success_rate")].rstrip("/"), {})["overall"] = value
+        elif "success_rate/" in rest:
+            group, _, task = rest.partition("success_rate/")
+            groups.setdefault(group.rstrip("/"), {}).setdefault("tasks", {})[task] = value
+
+    for group in sorted(groups):
+        if group:
+            logging.info(f"[{group}]")
+        overall = groups[group].get("overall")
+        if overall is not None:
+            logging.info(f"overall success_rate: {overall:.4f}")
+        per_task = groups[group].get("tasks", {})
+        for task in sorted(per_task):
+            logging.info(f"  {task}: {per_task[task]:.4f}")
 
     # Persist a JSON summary next to the checkpoint dir for offline inspection.
     out_path = config.checkpoint_dir / f"eval_metrics_step{step}.json"

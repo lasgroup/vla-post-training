@@ -1,5 +1,6 @@
 from typing import Any
 import jax
+import logging
 import numpy as np
 from src.envs.venv import BaseVectorEnv
 from src.rl.agent import Agent
@@ -111,6 +112,36 @@ def evaluate_policy(
         metrics["eval/mean_success_episode_length"] = np.mean(successful_episode_lengths)
     metrics["eval/total_collected_episodes"] = agent.total_collected_episodes
     metrics.update({f"eval/success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
+    return metrics
+
+
+def _tag_metrics(metrics: dict[str, Any], scale: float) -> dict[str, Any]:
+    """Re-key `eval/<rest>` as `eval/cfg<scale>/<rest>` so scales don't collide."""
+    tag = f"cfg{scale:g}"
+    return {
+        f"eval/{tag}/{k.removeprefix('eval/')}" if k.startswith("eval/") else f"{tag}/{k}": v
+        for k, v in metrics.items()
+    }
+
+
+def evaluate_policy_sweep(
+    agent: Agent, env: BaseVectorEnv, config, step: int
+) -> dict[str, Any]:
+    """Evaluate once per guidance scale, reusing the same envs.
+
+    With a single scale (the default) this is `evaluate_policy` with untouched
+    metric names. Agents without CFG support fall through to one plain eval.
+    """
+    scales = getattr(agent, "cfg_scales", [1.0])
+    if len(scales) == 1:
+        return evaluate_policy(agent=agent, env=env, config=config, step=step)
+
+    metrics = {}
+    for scale in scales:
+        agent.set_cfg_scale(scale)
+        logging.info("Evaluating at cfg_scale=%g (%d of %d)", scale, scales.index(scale) + 1, len(scales))
+        metrics.update(_tag_metrics(evaluate_policy(agent=agent, env=env, config=config, step=step), scale))
+    agent.set_cfg_scale(scales[0])
     return metrics
 
 
