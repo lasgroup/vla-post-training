@@ -149,9 +149,24 @@ def _resolve_run(api: wandb.Api, entity: str, project: str, run_name: str,
         if not live:
             raise ValueError("--select running: no matching run is running.")
         chosen = max(live, key=lambda r: r.created_at)
-    else:  # latest: newest run that actually logged something
-        with_data = [r for r in matches if steps(r) >= 0] or matches
-        chosen = max(with_data, key=lambda r: r.created_at)
+    else:
+        # latest: newest run that actually logged something. A crashed run can
+        # transiently report no _step while its summary re-syncs, so probe the
+        # history rather than trusting the summary — otherwise selection
+        # silently falls through to an older run between two invocations.
+        chosen = None
+        for r in sorted(matches, key=lambda r: r.created_at, reverse=True):
+            if steps(r) >= 0:
+                chosen = r
+                break
+            try:
+                if not r.history(samples=1, pandas=True).empty:
+                    chosen = r
+                    break
+            except Exception:  # pragma: no cover - tolerate API quirks
+                continue
+        if chosen is None:
+            chosen = max(matches, key=lambda r: r.created_at)
     print(f"[info] --select {select} -> {chosen.id}", file=sys.stderr)
     return chosen
 
