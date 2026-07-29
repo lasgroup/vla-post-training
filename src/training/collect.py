@@ -21,9 +21,18 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
+# Offset so eval episodes don't replay the initial states collection just saw
+# at the same step (eval_tasks and tasks usually overlap).
+_EVAL_SEED_OFFSET = 1_000_000
+
+
 def evaluate_policy(
     agent: Agent, env: BaseVectorEnv, config, step: int
 ):
+    # Seed the eval envs so repeated evals at the same step (e.g. one per
+    # guidance scale) start from identical initial states and are comparable.
+    env.seed(config.seed + _EVAL_SEED_OFFSET + step)
+
     num_rollouts_per_task = config.collect.num_eval_rollouts
     total_episodes = 0
     total_successes = 0
@@ -136,9 +145,17 @@ def evaluate_policy_sweep(
     if len(scales) == 1:
         return evaluate_policy(agent=agent, env=env, config=config, step=step)
 
+    # Rewind the agent PRNG before each scale as well, so the scales differ only
+    # in guidance: same initial states (via evaluate_policy's env.seed) and the
+    # same action noise. Without this the comparison is unpaired and the
+    # per-scale spread is dominated by rollout noise.
+    rng_state = agent.rng_state_json() if hasattr(agent, "rng_state_json") else None
+
     metrics = {}
     for scale in scales:
         agent.set_cfg_scale(scale)
+        if rng_state is not None:
+            agent.set_rng_state_json(rng_state)
         logging.info("Evaluating at cfg_scale=%g (%d of %d)", scale, scales.index(scale) + 1, len(scales))
         metrics.update(_tag_metrics(evaluate_policy(agent=agent, env=env, config=config, step=step), scale))
     agent.set_cfg_scale(scales[0])

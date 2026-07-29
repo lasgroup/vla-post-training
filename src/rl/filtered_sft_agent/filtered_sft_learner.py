@@ -177,6 +177,14 @@ def init_train_state(
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
     if resume:
+        # jax.eval_shape leaves carry no sharding, and orbax refuses to
+        # deserialize into abstract arrays whose sharding is None. Attach the
+        # fsdp shardings that restore_state is about to read.
+        train_state_shape = jax.tree.map(
+            lambda x, s: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=s),
+            train_state_shape,
+            state_sharding,
+        )
         return train_state_shape, state_sharding
 
     partial_params = _load_weights_and_validate(
