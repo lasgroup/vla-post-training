@@ -190,42 +190,66 @@ def score_chain_under_model(
     data — only ``model`` carries gradients. This is the IS-ratio numerator
     in OGPO's PPO surrogate.
 
-    Implementation: compute the PaliGemma prefix **once** here and reuse the
-    resulting KV cache for all ``num_steps`` suffix-only forwards. This
-    keeps activation memory at ~1× the prefix forward instead of
-    ``num_steps``× — critical for OGPO's PPO update to fit in GPU memory
-    (the naive 10× unrolled-prefix path blows up to >100 GB on B=256).
+    Implementation: compute the PaliGemma prefix **once** here (OUTSIDE the
+    scan) and reuse the resulting KV cache across all ``K`` suffix-only
+    forwards, which run under a single ``lax.scan`` over the rescoring
+    steps. Scanning (not a Python loop) keeps activation memory at ~1× the
+    prefix forward AND lets reverse-mode AD accumulate the K weight-gradient
+    contributions into one carry accumulator instead of K materialized fp32
+    partials — the jit-2 memory fix (see
+    docs/plans/ogpo-memory/analysis-jit2-forensics.md; the naive unrolled
+    path sized a >100 GiB grad arena that OOM'd on the target GPU).
 
-    Returns ``[num_steps, B, H]``. Sum across the first axis to get the
-    joint log-prob per (B, H) entry, then sum across H (or leave as-is and
-    let the loss broadcast).
+    Returns ``[K, B, H]``. Sum across the first axis to get the joint
+    log-prob per (B, H) entry, then sum across H (or leave as-is and let the
+    loss broadcast).
     """
-    num_steps = x_chain.shape[0]
-
-    # ONE prefix forward; gradients still flow through the cache when the
-    # PaliGemma backbone is unfrozen.
+    # ONE prefix forward, computed OUTSIDE the scan and closed over its body:
+    # the KV-cache cotangent is therefore summed across the K steps FIRST (one
+    # small [L,B,T,K,H] accumulator) and mapped to the Gemma prefix-weight
+    # gradient by a SINGLE backward through compute_prefix_cache — instead of K
+    # full Gemma-weight cotangents. This is the jit-2 arena fix; see
+    # docs/plans/ogpo-memory/analysis-jit2-forensics.md.
     kv_cache, prefix_mask = compute_prefix_cache(model, observation)
 
-    # We unroll the loop in Python rather than ``jax.lax.scan`` because nnx
-    # modules carry hidden mutable state that scan does not handle cleanly,
-    # and because ``num_steps`` is small (10 by default). XLA still
-    # de-duplicates the shared prefix-side activations because they all
-    # come from a single ``compute_prefix_cache`` call upstream.
-    per_step = []
-    for k in range(num_steps):
+    # We scan (NOT a Python loop) over the K rescoring steps so reverse-mode AD
+    # accumulates the K weight-gradient contributions in ONE carry instead of
+    # materializing 11 full fp32 stacked Gemma-weight cotangents simultaneously
+    # — the ~99 GiB batch-invariant jit-2 temp arena that OOM'd Phase-I
+    # acceptance (docs/plans/ogpo-memory/analysis-jit2-forensics.md;
+    # benchmark-results.md).
+    #
+    # The old "nnx hidden mutable state" objection does not apply: this forward
+    # reads no rng and writes no nnx state — dropout=0.0 (gemma.py:295 -> no
+    # Dropout module), the suffix llm runs at its default deterministic=True
+    # (gemma.py:398; the rescoring path threads no ``deterministic``), and
+    # self.deterministic is set-but-never-read. So ``model`` is a pure read-only
+    # constant of the scan, exactly as in pi0.Pi0.sample_actions' lax.scan over
+    # stochastic_step (pi0.py:408-448).
+    def _score_step(carry, step):
+        x_t, x_next, time = step
         lp_k, _ = get_dist_and_log_prob_with_cache(
             model,
-            x_t=x_chain[k],
-            sample=x_next_chain[k],
-            time=times[k],
+            x_t=x_t,
+            sample=x_next,
+            time=time,
             observation=observation,
             kv_cache=kv_cache,
             prefix_mask=prefix_mask,
             dt=dt,
             noise_level=noise_level,
         )
-        per_step.append(lp_k)
-    return jnp.stack(per_step, axis=0)
+        return carry, lp_k
+
+    # Empty carry: there is no sequential dependence between rescoring steps.
+    # The memory win is in the BACKWARD pass — differentiating this lax.scan
+    # accumulates the K per-step cotangents w.r.t. the closed-over weights into
+    # ONE carry accumulator (collapsing the 11x fp32 grad partials the Python
+    # loop materialized).
+    _, per_step = jax.lax.scan(
+        _score_step, init=None, xs=(x_chain, x_next_chain, times)
+    )
+    return per_step  # [K, B, H] — identical shape/dtype to jnp.stack(..., axis=0)
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
     train_value_step,
 )
 from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
+from src.rl.ema_utils import compose_full_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
@@ -346,7 +347,17 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
 
-        policy_model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
+        # G4: compose the full policy model (frozen leaves from live params) — best-of-N collection
+        # needs a full model even after the EMA is sliced trainable-only (Phase E). Collection-only, so
+        # ema_params is always attached here (no None fallback today).
+        policy_model = nnx.merge(
+            self._train_state.model_def,
+            compose_full_params(
+                self._train_state.params,
+                self._train_state.ema_params,
+                self._config.trainable_filter,
+            ),
+        )
         policy_model.eval()
 
         for task, indices in task_to_indices.items():
@@ -726,7 +737,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 )
 
             self._train_state = policy_state
-            self._ema = self._ema_update_fn(self._ema, self._train_state.params)
+            # _ema_update_fn now maps over the trainable-only tree; slice the params arg to match.
+            self._ema = self._ema_update_fn(
+                self._ema,
+                nnx.filter_state(self._train_state.params, self._config.trainable_filter),
+            )
             scale, bias = 1.0, 0.0
             normalizer_config = self._config.rl.normalizer_config
             if normalizer_config.method is not None:

@@ -14,6 +14,16 @@ Implements the canonical "vanilla" OGPO policy-extraction branch
   5. Add a CFM BC anchor on the actions stored in the *un-expanded* online
      batch (size B). No success filter, no static demos.
 
+The single ``train_step`` is split into sequential jit bodies
+(``sample_and_advantage`` → ``loss_and_grad_pg`` → ``bc_grad_accumulate`` →
+``optimizer_tail`` + ``policy_param_norm``) so each transient is bounded in its
+own arena; the retained ``train_step`` composes them for the built-but-uncalled
+base mono jit and the split-vs-mono equivalence test. The loss backward itself is
+two passes (``loss_and_grad_pg`` for the PPO surrogate, ``bc_grad_accumulate`` for
+the BC anchor accumulated into the donated PPO grads) so the two full fp32 weight-
+gradient trees and their activation sets are never co-resident — the jit-2 arena
+fix (docs/plans/ogpo-memory/analysis-jit2-forensics.md).
+
 The PaliGemma backbone is expected to be frozen via ``config.freeze_filter``;
 this train step does not assume anything about which parameters are
 trainable beyond ``config.trainable_filter``.
@@ -35,12 +45,14 @@ from src.rl.advantage_weighted_sft.update_critic import (
     flatten_action_horizon,
     summarize_critic_values,
 )
+from src.rl.ema_utils import compose_full_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.ogpo.sampling import (
     sample_chain_with_logprob,
     score_chain_under_model,
     sum_log_prob,
 )
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig, OGPOSFTLearnerConfig
 
 
@@ -58,27 +70,42 @@ def _group_baseline(adv: jax.Array, B: int, G: int, strategy: str) -> jax.Array:
 
 
 @at.typecheck
-def train_step(
+def sample_and_advantage(
     config: OnlineTrainConfig,
-    rng: at.KeyArrayLike,
-    policy_state: training_utils.TrainState,
-    state_action_critic_state: training_utils.TrainState,
-    value_state: training_utils.TrainState,
-    batch: tuple[_model.Observation, ObsType, _model.Actions],
-    mc_return: at.Array | None = None,
-    is_success: at.Array | None = None,
-    scale: at.Array | float = 1.0,
-) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    del mc_return, is_success, scale  # OGPO uses Q-V advantages; AWR-style MC normalization unused.
-
+    rng: at.KeyArrayLike,                                   # = policy_rng
+    policy_state: training_utils.TrainState,               # UNDONATED (model_def, params, step)
+    state_action_critic_state: training_utils.TrainState,  # UNDONATED
+    value_state: training_utils.TrainState,                # UNDONATED
+    policy_observation: _model.Observation,                # un-expanded (B); carries images
+    critic_prefix: at.Float[at.Array, "b embed"] | None,   # None => recompute; WP-C sidecar otherwise
+    ema: nnx.State,                                         # explicit _ema_sharding input (full OR trainable-only)
+) -> tuple[
+    at.Float[at.Array, "k b ah ad"],   # x_chain
+    at.Float[at.Array, "k b ah ad"],   # x_next_chain
+    at.Float[at.Array, "k b"],         # times
+    at.Float[at.Array, ""],            # dt
+    at.Float[at.Array, " b"],          # old_lp (already / log_prob_norm)
+    at.Float[at.Array, " b"],          # advantage (stop-grad'd)
+    dict[str, at.Array],               # sampler_aux
+]:
     assert isinstance(config.rl, OGPOSFTLearnerConfig)
     rl = config.rl
+    G = rl.group_num_samples
+    num_steps = rl.num_sde_steps
+    noise_level = rl.noise_level
 
-    policy_observation, critic_observation, actions_demo = batch
+    # Reproduce the mono jit's arity-3 split verbatim so sample_rng=[0] matches;
+    # score_rng/bc_rng are jit-2's slots, kept here as dead slots so the keystream
+    # is bit-identical (do NOT re-split to arity 2 — that would shift bc_rng, G1).
+    sample_rng, score_rng, bc_rng = jax.random.split(rng, 3)
+    del score_rng, bc_rng
 
-    # Build the "old" (EMA) policy — purely for sampling, no gradient.
-    if rl.use_ema_as_old_policy and policy_state.ema_params is not None:
-        old_params = policy_state.ema_params
+    # The "old" (sampling) model composes the EMA trainable leaves over the live
+    # frozen leaves: frozen params are optimizer fixed points, so sourcing them
+    # from `policy_state.params` is bit-identical and lets the EMA drop its frozen
+    # duplicate (compose_full_params tolerates a full or trainable-only ema).
+    if rl.use_ema_as_old_policy:
+        old_params = compose_full_params(policy_state.params, ema, config.trainable_filter)
     else:
         old_params = policy_state.params
     old_model = nnx.merge(
@@ -86,17 +113,29 @@ def train_step(
     )
     old_model.eval()
 
+    # Critic observation. The recompute lives behind the `critic_prefix is None`
+    # static branch so WP-C can supply the buffer's EMA-computed sidecar instead;
+    # the None branch reproduces the mono jit's recompute under current params.
+    if critic_prefix is None:
+        current_model = nnx.merge(policy_state.model_def, policy_state.params)
+        current_model.eval()
+        prefix_rep = current_model.get_prefix_rep(policy_observation)
+        prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+        prefix = jnp.mean(
+            prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1])), axis=1
+        )
+    else:
+        prefix = critic_prefix
+    critic_observation = {
+        "state": policy_observation.state,
+        PREFIX_EMBEDDING_NAME: prefix,
+    }
+
     # Critics are frozen w.r.t. this train_step.
     state_action_critic = create_critic(state_action_critic_state, config)
     state_action_critic.eval()
     value_critic = create_critic(value_state, config)
     value_critic.eval()
-
-    G = rl.group_num_samples
-    num_steps = rl.num_sde_steps
-    noise_level = rl.noise_level
-
-    sample_rng, score_rng, bc_rng = jax.random.split(rng, 3)
 
     # Expand observations to B*G copies for group rollouts.
     def _expand(x):
@@ -157,11 +196,69 @@ def train_step(
     advantage = advantage.reshape(-1)  # [B*G]
     advantage = jax.lax.stop_gradient(advantage)
 
-    # --- 3. PPO loss + BC anchor (gradient sink). ----------------------
+    # q_mean/v_mean/advantage_* live here because they reduce q_value/v_value/
+    # advantage — kept out of loss_fn's aux (jit-2) and the old info dict.
+    sampler_aux = {
+        "q_mean": jnp.mean(q_value),
+        "v_mean": jnp.mean(v_value),
+        "advantage_mean": jnp.mean(advantage),
+        "advantage_max":  jnp.max(advantage),
+        "advantage_min":  jnp.min(advantage),
+        "advantage_std":  jnp.std(advantage),
+        "advantage_q_up":  jnp.quantile(advantage, 0.95),
+        "advantage_q_low": jnp.quantile(advantage, 0.05),
+        "advantage_median": jnp.median(advantage),
+    }
+    return x_chain, x_next_chain, times, dt, old_lp, advantage, sampler_aux
+
+
+@at.typecheck
+def loss_and_grad_pg(
+    config: OnlineTrainConfig,
+    policy_state: training_utils.TrainState,    # UNDONATED (model_def, params-current)
+    policy_observation: _model.Observation,     # un-expanded (rescore expands internally)
+    x_chain: at.Float[at.Array, "k b ah ad"],
+    x_next_chain: at.Float[at.Array, "k b ah ad"],
+    times: at.Float[at.Array, "k b"],
+    dt: at.Float[at.Array, ""],
+    old_lp: at.Float[at.Array, " b"],
+    advantage: at.Float[at.Array, " b"],
+) -> tuple[nnx.State, at.Float[at.Array, ""], dict[str, at.Array]]:
+    # jit-2a: the PPO surrogate ONLY (no BC anchor). Emits the scan-accumulated
+    # weight gradients (grads_pg) plus pg_loss and the PPO aux. The BC anchor's
+    # separate full fp32 grad tree — which co-resided with this scan accumulator
+    # in the single-jit `loss_and_grad` and forced the ~78.7 GiB jit-2 need (see
+    # docs/plans/ogpo-memory/analysis-jit2-forensics.md) — is now emitted in the
+    # SEPARATE jit-2b (`bc_grad_accumulate`), which accumulates it INTO these
+    # donated grads. The two backward passes' activation sets are therefore never
+    # co-resident: this jit holds only the rescoring scan's activations, jit-2b
+    # only the BC forward/backward's.
+    #
+    # No `rng`: the PPO path (score_chain_under_model + surrogate) reads no rng.
+    # bc_rng is derived from the SAME policy_rng in jit-2b (arity-3 split, [2]),
+    # so dropping rng here does not shift the BC keystream (G1).
+    assert isinstance(config.rl, OGPOSFTLearnerConfig)
+    rl = config.rl
+    noise_level = rl.noise_level
+
+    # Re-derive log_prob_norm from x_chain.shape (not passed across the boundary)
+    # so new_lp/old_lp share the exact per-dim divisor.
+    K, _, H, D = x_chain.shape
+    log_prob_norm = jnp.float32(1.0)
+    if rl.normalize_denoising_horizon:
+        log_prob_norm = log_prob_norm * jnp.float32(K * H)
+    if rl.normalize_act_space_dimension:
+        log_prob_norm = log_prob_norm * jnp.float32(D)
+
+    def _expand(x):
+        return jnp.repeat(x, repeats=rl.group_num_samples, axis=0)
+
+    expanded_policy_obs = jax.tree.map(_expand, policy_observation)
+
+    # --- 3a. PPO surrogate (gradient sink; BC anchor lives in jit-2b). ---
     @at.typecheck
     def loss_fn(
         model: _model.BaseModel,
-        bc_rng: at.KeyArrayLike,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
         new_log_prob_per_step = score_chain_under_model(
             model,
@@ -187,15 +284,6 @@ def train_step(
         # actually killing.
         pg_loss_unclipped = -jnp.mean(ratio * advantage)
 
-        # BC on the un-expanded online batch (size B).
-        bc_loss = jnp.float32(0.0)
-        if rl.use_bc_regularization:
-            chunked_bc = model.compute_loss(
-                bc_rng, policy_observation, actions_demo, train=True
-            )
-            bc_loss = jnp.mean(chunked_bc)
-
-        total = pg_loss + rl.bc_coeff * bc_loss
         # PPO's k3 approximation of KL(old || new); ratio_mean and log_ratio
         # together pin down a Gaussian fit on the log-ratio when needed.
         approx_kl = jnp.mean((ratio - 1.0) - log_ratio)
@@ -213,10 +301,11 @@ def train_step(
             ((ratio >= lower_bound) & (ratio <= upper_bound)).astype(jnp.float32)
         )
 
+        # 20 PPO keys — NO bc_loss (jit-2b adds bc_loss + grad_norm so the
+        # learner/composer info dict is the same 33-key schema as before).
         aux = {
             "pg_loss": pg_loss,
             "pg_loss_unclipped": pg_loss_unclipped,
-            "bc_loss": bc_loss,
             # Ratio distribution: mean/std collapse to a single point estimate
             # when the distribution is bimodal (mass near 0 + small heavy
             # tail); quantiles + min/max disambiguate that case.
@@ -240,45 +329,126 @@ def train_step(
             "alive_fraction": alive_fraction,
             "new_log_prob_mean": jnp.mean(new_lp),
             "old_log_prob_mean": jnp.mean(old_lp),
-            "q_mean": jnp.mean(q_value),
-            "v_mean": jnp.mean(v_value),
         }
-        return total, aux
+        return pg_loss, aux
 
     policy_model = nnx.merge(policy_state.model_def, policy_state.params)
     policy_model.train()
-    train_rng = jax.random.fold_in(bc_rng, policy_state.step)
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, aux), grads = nnx.value_and_grad(loss_fn, has_aux=True, argnums=diff_state)(
-        policy_model, train_rng
-    )
+    (pg_loss, pg_aux), grads_pg = nnx.value_and_grad(
+        loss_fn, has_aux=True, argnums=diff_state
+    )(policy_model)
+    return grads_pg, pg_loss, pg_aux
 
-    # --- 4. Optimizer step + EMA update (mirrors awr/flow_grpo). -------
-    params = nnx.filter_state(policy_state.params, config.trainable_filter)
-    updates, new_opt_state = policy_state.tx.update(grads, policy_state.opt_state, params)
-    new_params = optax.apply_updates(params, updates)
-    nnx.update(policy_model, new_params)
-    new_full_params = nnx.state(policy_model)
 
-    new_state = dataclasses.replace(
+@at.typecheck
+def bc_grad_accumulate(
+    config: OnlineTrainConfig,
+    grads_pg: nnx.State,                        # DONATED (scan-accumulated PPO grads from jit-2a)
+    rng: at.KeyArrayLike,                       # = policy_rng (SAME key as jit-1/jit-2a)
+    policy_state: training_utils.TrainState,    # UNDONATED (model_def, params-current, PRE-increment step)
+    policy_observation: _model.Observation,     # un-expanded (BC uses this directly)
+    actions_demo: _model.Actions,
+    pg_loss: at.Float[at.Array, ""],
+    pg_aux: dict[str, at.Array],
+) -> tuple[nnx.State, at.Float[at.Array, ""], dict[str, at.Array]]:
+    # jit-2b: the CFM BC anchor. Differentiate bc_coeff*bc_loss and accumulate
+    # the resulting grads INTO the donated grads_pg accumulator (donate_argnums
+    # aliases the sum in-place). The two full fp32 grad trees are the only large
+    # tensors this jit builds — the rescoring scan's activations (jit-2a) are
+    # already freed — so the co-residency that sized the single jit-2 arena is
+    # broken structurally, not by remat (which was measured ineffective; see the
+    # J-2-revert commit / AFTERJ2_B32 artifacts).
+    #
+    # RNG contract (G1): reproduce the mono derivation EXACTLY — bc_rng is the
+    # arity-3 split of the SAME policy_rng at index [2], folded into the
+    # PRE-increment policy_state.step (jit-3 does the increment). jit-2a consumed
+    # no rng, so the model's rng state entering compute_loss here is the
+    # freshly-merged initial state, identical to the mono's single merge.
+    assert isinstance(config.rl, OGPOSFTLearnerConfig)
+    rl = config.rl
+
+    if rl.use_bc_regularization:
+        _, _, bc_rng = jax.random.split(rng, 3)
+        policy_model = nnx.merge(policy_state.model_def, policy_state.params)
+        policy_model.train()
+        train_rng = jax.random.fold_in(bc_rng, policy_state.step)
+
+        @at.typecheck
+        def bc_loss_fn(
+            model: _model.BaseModel,
+            bc_rng: at.KeyArrayLike,
+        ) -> tuple[at.Float[at.Array, ""], at.Float[at.Array, ""]]:
+            # BC on the un-expanded online batch (size B). Return the bc_coeff-
+            # scaled loss as the differentiand so grads_bc == bc_coeff * d(bc)/dθ
+            # — exactly the BC contribution the mono's value_and_grad over
+            # (pg + bc_coeff*bc) produced. The raw bc_loss rides along as aux.
+            bc_loss = jnp.mean(
+                model.compute_loss(bc_rng, policy_observation, actions_demo, train=True)
+            )
+            return rl.bc_coeff * bc_loss, bc_loss
+
+        diff_state = nnx.DiffState(0, config.trainable_filter)
+        (_, bc_loss), grads_bc = nnx.value_and_grad(
+            bc_loss_fn, has_aux=True, argnums=diff_state
+        )(policy_model, train_rng)
+        # Accumulate into the DONATED grads_pg: same 2-input per-leaf add the
+        # mono did (grad_pg + bc_coeff*grad_bc), only reassociated across the jit
+        # boundary — floating-point ulps, certified at atol=1e-6 by
+        # tests/ogpo/test_split_equivalence.py.
+        grads = jax.tree.map(lambda g_pg, g_bc: g_pg + g_bc, grads_pg, grads_bc)
+    else:
+        # use_bc_regularization=False: no BC term. grads pass through unchanged,
+        # bc_loss=0, grad_norm over the PPO tree — matches the mono False path.
+        bc_loss = jnp.float32(0.0)
+        grads = grads_pg
+
+    # Total loss = pg + bc_coeff*bc (bit-identical to the mono `loss`); grad_norm
+    # is computed over the COMBINED grads (post-accumulation), not the PPO-only
+    # tree. loss_aux restores the 22-key jit-2 aux schema (20 PPO + bc_loss +
+    # grad_norm).
+    loss = pg_loss + rl.bc_coeff * bc_loss
+    loss_aux = pg_aux | {"bc_loss": bc_loss, "grad_norm": optax.global_norm(grads)}
+    return grads, loss, loss_aux
+
+
+def optimizer_tail(
+    config: OnlineTrainConfig,
+    policy_state: training_utils.TrainState,   # DONATED (params + opt_state + step)
+    grads: nnx.State,                          # DONATED (trainable tree from jit-2)
+) -> training_utils.TrainState:
+    # --- 4. Optimizer step (mirrors awr/flow_grpo). --------------------
+    trainable = nnx.filter_state(policy_state.params, config.trainable_filter)
+    updates, new_opt_state = policy_state.tx.update(grads, policy_state.opt_state, trainable)
+    new_trainable = optax.apply_updates(trainable, updates)
+
+    # Splice replaces nnx.update(policy_model, new_params) + nnx.state(policy_model):
+    # frozen + non-Param leaves are optimizer fixed points, so sourcing them from
+    # the (donated) input params is bit-identical to re-extracting them via the
+    # round-trip, and it lets XLA alias the frozen leaves in place instead of
+    # rebuilding the full tree.
+    frozen_and_rest = nnx.filter_state(policy_state.params, nnx.Not(config.trainable_filter))
+    new_full_params = nnx.merge_state(frozen_and_rest, new_trainable)
+
+    # ema_params/ema_decay are not passed to replace, so they pass through
+    # unchanged from the donated policy_state (None in production; the EMA is
+    # learner-managed by WP-B).
+    return dataclasses.replace(
         policy_state,
         step=policy_state.step + 1,
         params=new_full_params,
         opt_state=new_opt_state,
     )
-    if policy_state.ema_decay is not None:
-        new_state = dataclasses.replace(
-            new_state,
-            ema_params=jax.tree.map(
-                lambda old, new: policy_state.ema_decay * old
-                + (1.0 - policy_state.ema_decay) * new,
-                policy_state.ema_params,
-                new_full_params,
-            ),
-        )
 
-    kernel_params = nnx.state(
-        policy_model,
+
+def policy_param_norm(
+    config: OnlineTrainConfig, params: nnx.State
+) -> at.Float[at.Array, ""]:
+    # Hoisted into its own jit so the param tree's live range never re-enters the
+    # binding optimizer tail. nnx.state(model, filter) == filter_state(nnx.state(
+    # model), filter); `params` is already nnx.state, so this is equivalent.
+    kernel_params = nnx.filter_state(
+        params,
         nnx.All(
             nnx.Param,
             nnx.Not(
@@ -287,16 +457,46 @@ def train_step(
             lambda _, x: x.value.ndim > 1,
         ),
     )
-    info = {
-        "loss": loss,
-        "grad_norm": optax.global_norm(grads),
-        "param_norm": optax.global_norm(kernel_params),
-        "advantage_mean": jnp.mean(advantage),
-        "advantage_max":  jnp.max(advantage),
-        "advantage_min":  jnp.min(advantage),
-        "advantage_std":  jnp.std(advantage),
-        "advantage_q_up":  jnp.quantile(advantage, 0.95),
-        "advantage_q_low": jnp.quantile(advantage, 0.05),
-        "advantage_median": jnp.median(advantage),
-    } | aux
+    return optax.global_norm(kernel_params)
+
+
+@at.typecheck
+def train_step(
+    config: OnlineTrainConfig,
+    rng: at.KeyArrayLike,
+    policy_state: training_utils.TrainState,
+    state_action_critic_state: training_utils.TrainState,
+    value_state: training_utils.TrainState,
+    batch: tuple[_model.Observation, ObsType, _model.Actions],
+    mc_return: at.Array | None = None,
+    is_success: at.Array | None = None,
+    scale: at.Array | float = 1.0,
+) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
+    del mc_return, is_success, scale  # OGPO uses Q-V advantages; AWR-style MC normalization unused.
+
+    policy_observation, critic_observation, actions_demo = batch
+    # The prefix is already built upstream (_sft_batch_to_actor_batch); feed it as
+    # the sidecar so the composer matches the pre-split behaviour (the recompute
+    # happened OUTSIDE this function). ema_params passes through unchanged.
+    critic_prefix = critic_observation[PREFIX_EMBEDDING_NAME]
+    ema = policy_state.ema_params if policy_state.ema_params is not None else policy_state.params
+
+    x_chain, x_next_chain, times, dt, old_lp, advantage, sampler_aux = sample_and_advantage(
+        config, rng, policy_state, state_action_critic_state, value_state,
+        policy_observation, critic_prefix, ema,
+    )
+    # Two-pass loss backward: jit-2a emits the PPO scan grads; jit-2b differentiates
+    # the BC anchor and accumulates INTO those (donated) grads. grads_pg is never
+    # co-resident with the BC backward's activations (the jit-2 arena fix).
+    grads_pg, pg_loss, pg_aux = loss_and_grad_pg(
+        config, policy_state, policy_observation,
+        x_chain, x_next_chain, times, dt, old_lp, advantage,
+    )
+    grads, loss, loss_aux = bc_grad_accumulate(
+        config, grads_pg, rng, policy_state, policy_observation, actions_demo,
+        pg_loss, pg_aux,
+    )
+    new_state = optimizer_tail(config, policy_state, grads)
+    param_norm = policy_param_norm(config, new_state.params)
+    info = {"loss": loss, "param_norm": param_norm} | loss_aux | sampler_aux
     return new_state, info

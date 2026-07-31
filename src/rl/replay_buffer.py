@@ -131,7 +131,7 @@ class ShardedReplayBuffer:
             self.valid_start += 1
         self.size = int(self.total_inserted - self.valid_start)
 
-    def sample(self, batch_size=None) -> Any:
+    def sample(self, batch_size=None, *, drop_obs_keys: tuple[str, ...] = ()) -> Any:
         if self.size == 0:
             raise ValueError("Cannot sample from an empty buffer")
         if batch_size is None:
@@ -146,6 +146,15 @@ class ShardedReplayBuffer:
         next_idx = (self.next_obs_pos[ring] % self.max_capacity)
         observation = jax.tree_util.tree_map(lambda leaf: leaf[obs_idx], self.obs_storage)
         next_observation = jax.tree_util.tree_map(lambda leaf: leaf[next_idx], self.obs_storage)
+
+        # The OGPO critic reads only observation["state"]/["prefix_embedding"] and discards images;
+        # dropping the heavy image keys HERE (before the device_put below) keeps the 224x224 tensors
+        # off-GPU for the 1024-row critic sample. Sample-time + per-call so the policy sample (needs
+        # images for BC + rescoring) is untouched, and the buffer storage schema is unchanged. The
+        # top-level "image" key is a nested {camera: array} dict, so dropping it removes all cameras.
+        if drop_obs_keys:
+            observation = {k: v for k, v in observation.items() if k not in drop_obs_keys}
+            next_observation = {k: v for k, v in next_observation.items() if k not in drop_obs_keys}
 
         batch = {"observation": observation, "next_observation": next_observation}
         batch.update(transition)

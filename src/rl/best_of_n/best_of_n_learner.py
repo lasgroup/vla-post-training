@@ -25,6 +25,7 @@ from src.rl.best_of_n.update_critic import (
     _build_pi0_backbone_critic_defs,
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
+from src.rl.ema_utils import compose_full_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
@@ -225,11 +226,16 @@ class BestofNLearner(FilteredSFTLearner):
         prefix = jnp.mean(prefix, axis=1)
         return prefix
 
-    @staticmethod
-    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
+    def _get_policy_model(self, policy_state: training_utils.TrainState) -> _model.BaseModel:
         """Merge policy params into a model. Call once per update() to avoid duplicates."""
+        # Instance method (was @staticmethod) so the compose can read self._config.trainable_filter.
+        # Keep the else fallback byte-identical: both callers reach this on the TRAINING path
+        # (_update_critics -> _get_on_policy_action / _recompute_prefix_embedding) with ema_params=None,
+        # where an unconditional compose would crash in nnx.filter_state(None, ...) (B2).
         params = (
-            policy_state.ema_params
+            compose_full_params(
+                policy_state.params, policy_state.ema_params, self._config.trainable_filter
+            )
             if policy_state.ema_params is not None
             else policy_state.params
         )
@@ -347,9 +353,12 @@ class BestofNLearner(FilteredSFTLearner):
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
 
-        # Build policy model once for prefix embedding.
+        # Build policy model once for prefix embedding. Compose only in the is-not-None branch (keep the
+        # else fallback byte-identical) — same load-bearing None-guard as _get_policy_model (B2).
         params = (
-            self._train_state.ema_params
+            compose_full_params(
+                self._train_state.params, self._train_state.ema_params, self._config.trainable_filter
+            )
             if self._train_state.ema_params is not None
             else self._train_state.params
         )

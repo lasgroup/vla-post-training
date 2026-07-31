@@ -26,6 +26,7 @@ import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
+from src.rl.ema_utils import compose_full_params
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
@@ -305,16 +306,28 @@ class FilteredSFTLearner(Agent):
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
 
-        # shard the EMA across devices
-        self._ema_sharding = _batch_axis_sharding(self._train_state.ema_params, self._mesh)
-        self._ema = jax.device_put(self._train_state.ema_params, self._ema_sharding)
+        # Keep ONLY the trainable subset of the EMA on device. Frozen (SigLIP) leaves are
+        # bit-invariant across the run (the optimizer touches only trainable leaves), so every
+        # full-model consumer recomposes them from self._train_state.params via compose_full_params.
+        # Runs unconditionally after the resume-restore block, so one slice covers fresh init
+        # (ema_params == params, FSL:174) and resume (restored full-tree EMA); the template FSL:174
+        # stays FULL so old full-tree on-disk EMAs structure-match. Every reachable config sets
+        # ema_decay, so ema_params is a real State here (no is-not-None guard needed).
+        ema_trainable = nnx.filter_state(self._train_state.ema_params, self._config.trainable_filter)
+        self._ema_sharding = _batch_axis_sharding(ema_trainable, self._mesh)
+        self._ema = jax.device_put(ema_trainable, self._ema_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=None, ema_decay=None)
         decay = self._config.ema_decay
         self._ema_update_fn = jax.jit(
             lambda ema, params: jax.tree.map(
                 lambda e, p: decay * e + (1.0 - decay) * p, ema, params
             ),
-            in_shardings=(self._ema_sharding, self._train_state_sharding.params),
+            # Both operands are now the trainable-only tree, so the params sharding must be the
+            # trainable slice (matches self._ema_sharding, rebuilt trainable-only above).
+            in_shardings=(
+                self._ema_sharding,
+                nnx.filter_state(self._train_state_sharding.params, self._config.trainable_filter),
+            ),
             out_shardings=self._ema_sharding,
             donate_argnums=0,
         )
@@ -483,8 +496,12 @@ class FilteredSFTLearner(Agent):
         train_state: training_utils.TrainState,
         return_prefix_rep: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        # Compose the full model from the (trainable-only, after Phase E) EMA, sourcing frozen leaves
+        # from the live params. Only in the is-not-None branch — keep the else fallback byte-identical.
         params = (
-            train_state.ema_params
+            compose_full_params(
+                train_state.params, train_state.ema_params, self._config.trainable_filter
+            )
             if train_state.ema_params is not None
             else train_state.params
         )
@@ -580,9 +597,15 @@ class FilteredSFTLearner(Agent):
     def save_checkpoint(self, step: int | None = None):
         state_to_save = self._train_state
         if self._ema is not None:
+            # self._ema is trainable-only (and host-resident for OGPO). Reconstruct the FULL EMA so
+            # the on-disk `params` inference item stays complete (frozen SigLIP included) -> zero
+            # migration; old checkpoints, inference/eval loaders, and resume keep working.
             ema_rep = jax.device_put(self._ema, self._replicated_sharding)
+            full_ema = compose_full_params(
+                self._train_state.params, ema_rep, self._config.trainable_filter
+            )
             state_to_save = dataclasses.replace(
-                state_to_save, ema_params=ema_rep, ema_decay=self._config.ema_decay
+                state_to_save, ema_params=full_ema, ema_decay=self._config.ema_decay
             )
         _checkpoints.save_state(
             self._checkpoint_manager, state_to_save, self._data_loader, step
@@ -632,7 +655,16 @@ class FilteredSFTLearner(Agent):
             lambda x: x[np.newaxis], episode_data[-1]["next_observation"]
         )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
-        model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
+        # G4: the stored prefix rep is what the critic trains on — it must come from the FULL EMA model,
+        # so compose the frozen leaves back from live params (the EMA is trainable-only after Phase E).
+        model = nnx.merge(
+            self._train_state.model_def,
+            compose_full_params(
+                self._train_state.params,
+                self._train_state.ema_params,
+                self._config.trainable_filter,
+            ),
+        )
         model.eval()
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
@@ -811,7 +843,11 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
-        self._ema = self._ema_update_fn(self._ema, self._train_state.params)
+        # _ema_update_fn now maps over the trainable-only tree; slice the params arg to match.
+        self._ema = self._ema_update_fn(
+            self._ema,
+            nnx.filter_state(self._train_state.params, self._config.trainable_filter),
+        )
         info = info | {
             "online_buffer_size": jnp.asarray(
                 float(self._online_data_buffer.size), dtype=jnp.float32
