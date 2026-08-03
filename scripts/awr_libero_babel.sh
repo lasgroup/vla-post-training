@@ -45,9 +45,19 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$CKPT_BASE_DIR"
 
 echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 
-# Schedule, collection and policy-update cadence are kept identical to
-# fsft_libero_babel.sh so the only algorithmic difference is the loss weight:
-# FSFT uses w=1 on a success-only buffer, AWR uses w=exp(A/beta) on all data.
+# Schedule is matched to BOTH baselines at once, which is possible because AWR
+# gates its critic and policy updates off the same step counter independently
+# (advantage_weighted_sft_learner.py:605-612):
+#   100000 steps / policy.update_interval 20 = 5000 policy updates  -> == fsft_libero_babel.sh
+#   100000 steps / critic.update_interval  1 = 100000 critic updates -> == bon_libero_babel.sh
+#   100000 steps / collect_interval    10000 = 10 collection rounds  -> == both
+# So vs FSFT the only algorithmic difference is the loss weight (FSFT uses w=1
+# on a success-only buffer, AWR uses w=exp(A/beta) on all data), and vs BoN the
+# critic gets an identical training budget — a BoN win can't be written off as
+# its critic simply having been trained 20x longer.
+#
+# Do not set policy.update_interval back to 1 without also dropping
+# num_train_steps: it would cost 100000 full pi0.5 gradient steps.
 #
 # beta=10 is the per-transition reward magnitude: with r=-1/step, discount
 # 0.995 and action_horizon 10, each stored transition's reward is
@@ -74,21 +84,21 @@ exec uv run scripts/exp.py \
   --overwrite \
   --log_interval 25 \
   --save_interval 100000 \
-  --num_train_steps 5000 \
+  --num_train_steps 100000 \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
   --collect.tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
   --collect.eval_tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
   --collect.store_prefix_rep \
-  --collect.collect_interval 500 \
+  --collect.collect_interval 10000 \
   --collect.num_rollouts 20 \
   --collect.env_num 8 \
   --collect.eval_env_num 8 \
-  --collect.eval_interval 4999 \
+  --collect.eval_interval 99999 \
   --rl.discount 0.995 \
   --rl.online_ratio 1.0 \
   --rl.buffer_capacity 500000 \
-  --rl.policy.update_interval 1 \
+  --rl.policy.update_interval 20 \
   --rl.policy.training_start_step 0 \
   --rl.critic.no-use_distributional_critic \
   --rl.critic.num_value_bins 1 \
