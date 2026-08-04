@@ -229,6 +229,12 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # (falling back to the online batch until the buffer holds a full batch).
     use_success_buffer: bool = False
     success_buffer_capacity: int = 50_000
+    # Performance-only: compute the PaliGemma prefix ONCE per state and tile
+    # its KV cache across the G group members in the sampler and rescorer,
+    # instead of running G redundant prefix forwards on identical observations.
+    # Semantically equivalent (allclose, certified by tests/ogpo/
+    # test_group_dedup.py); big win for group_num_samples > 1.
+    dedup_group_prefix: bool = False
     # Treat the EMA train state as the "old" policy (PPO denominator).
     # When False, the current params are used (stop-gradient'd).
     use_ema_as_old_policy: bool = True

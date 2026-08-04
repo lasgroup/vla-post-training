@@ -113,6 +113,72 @@ def get_dist_and_log_prob_with_cache(
     return dist.log_prob(sample), dist
 
 
+def get_sde_dist_with_cache(
+    model: _pi0.Pi0,
+    *,
+    x_t: at.Float[at.Array, "batch horizon action_dim"],
+    time: at.Float[at.Array, " batch"],
+    observation: _model.Observation,
+    kv_cache: _gemma.KVCache,
+    prefix_mask: at.Bool[at.Array, "b _p"],
+    dt: at.Float[at.Array, ""],
+    noise_level: float = 0.7,
+):
+    """SDE transition distribution at (x_t, time), reusing a precomputed prefix.
+
+    The suffix-side forward of ``get_dist_and_log_prob_with_cache`` without the
+    final ``log_prob(sample)`` — used by the group-deduplicated sampler, which
+    needs the distribution to SAMPLE from (then scores the draw itself).
+    """
+    suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = model.embed_suffix(
+        observation, x_t, time
+    )
+    suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+    prefix_attn_mask_b = einops.repeat(
+        prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1]
+    )
+    full_attn_mask = jnp.concatenate(
+        [prefix_attn_mask_b, suffix_attn_mask], axis=-1
+    )
+    positions = (
+        jnp.sum(prefix_mask, axis=-1)[:, None]
+        + jnp.cumsum(suffix_mask, axis=-1)
+        - 1
+    )
+    (prefix_out, suffix_out), _ = model.PaliGemma.llm(
+        [None, suffix_tokens],
+        mask=full_attn_mask,
+        positions=positions,
+        kv_cache=kv_cache,
+        adarms_cond=[None, adarms_cond],
+    )
+    assert prefix_out is None
+    v_t = model.action_out_proj(suffix_out[:, -model.action_horizon:])
+    return model._get_sde_dist(
+        x_t=x_t, v_t=v_t, time=time, dt=dt, noise_level=noise_level
+    )
+
+
+def repeat_prefix_cache(
+    kv_cache: _gemma.KVCache,
+    prefix_mask: at.Bool[at.Array, "b _p"],
+    group: int,
+) -> tuple[_gemma.KVCache, at.Bool[at.Array, "bg _p"]]:
+    """Tile a batch-B prefix cache to batch B*G, matching jnp.repeat(obs, G, 0).
+
+    KVCache leaves are [layers, batch, tokens, k, h] — batch is AXIS 1; the
+    prefix mask is [batch, tokens] — axis 0. jnp.repeat keeps group members
+    adjacent ([s0,s0,...,s1,s1,...]), the layout `_group_baseline`'s
+    reshape(B, G) assumes. Valid because attention is strictly per-sequence:
+    repeat(prefix(obs)) == prefix(repeat(obs)) with no cross-batch coupling
+    (no batch norm; deterministic/no-dropout forward — same argument as the
+    Phase-J scan-ify).
+    """
+    kv_rep = jax.tree.map(lambda x: jnp.repeat(x, group, axis=1), kv_cache)
+    mask_rep = jnp.repeat(prefix_mask, group, axis=0)
+    return kv_rep, mask_rep
+
+
 # ---------------------------------------------------------------------------
 # Sampling: draw an SDE rollout under (typically) the EMA / "old" policy.
 # ---------------------------------------------------------------------------
@@ -170,6 +236,90 @@ def sample_chain_with_logprob(
     }
 
 
+def sample_chain_with_logprob_grouped(
+    model: _pi0.Pi0,
+    observation: _model.Observation,
+    rng: at.KeyArrayLike,
+    *,
+    group: int,
+    num_steps: int,
+    noise_level: float,
+) -> dict[str, jax.Array]:
+    """Group-deduplicated ``sample_chain_with_logprob``.
+
+    Semantically identical to ``sample_chain_with_logprob(model,
+    jnp.repeat(observation, group, 0), rng, ...)`` — same preprocessing, same
+    noise key, same per-step RNG split structure, same scan — except the
+    PaliGemma prefix (SigLIP + Gemma over images/text) runs ONCE at batch B and
+    its KV cache is tiled to B*group, instead of running ``group`` redundant
+    times on identical observations. Pure performance: no algorithmic change.
+    Bit-parity caveat: batch-size-dependent XLA tiling can introduce float-ulp
+    differences in v_t, so equality is allclose (certified by
+    tests/ogpo/test_group_dedup.py), not bitwise.
+    """
+    if noise_level <= 0.0:
+        raise ValueError(
+            f"OGPO requires stochastic sampling (noise_level > 0); got {noise_level}."
+        )
+    # Mirror sample_actions: preprocess (resize/mask-fill, train=False) — a
+    # per-sample op, so preprocess-then-repeat == repeat-then-preprocess.
+    observation = _model.preprocess_observation(None, observation, train=False)
+    B = observation.state.shape[0]
+    bg = B * group
+    # SAME key and shape as the un-deduplicated path (which draws noise at the
+    # already-expanded batch), so the noise — and therefore the chains — match.
+    noise = jax.random.normal(rng, (bg, model.action_horizon, model.action_dim))
+
+    # ONE prefix forward at B; tile cache + mask to B*group. The observation is
+    # also tiled for embed_suffix, which reads only state/adarms inputs — the
+    # repeated image leaves are dead code inside the jit and XLA removes them.
+    kv_cache, prefix_mask = compute_prefix_cache(model, observation)
+    kv_rep, mask_rep = repeat_prefix_cache(kv_cache, prefix_mask, group)
+    obs_rep = jax.tree.map(lambda x: jnp.repeat(x, group, axis=0), observation)
+
+    dt = -1.0 / num_steps
+
+    def stochastic_step(carry, _):
+        x_t, time, step_rng = carry
+        dist = get_sde_dist_with_cache(
+            model,
+            x_t=x_t,
+            time=time,
+            observation=obs_rep,
+            kv_cache=kv_rep,
+            prefix_mask=mask_rep,
+            dt=dt,
+            noise_level=noise_level,
+        )
+        # EXACT split structure of pi0.sample_actions' stochastic_step:
+        # sample with the first output, carry the second.
+        step_rng, key = jax.random.split(step_rng)
+        x_next = jax.lax.stop_gradient(dist.sample(seed=step_rng))
+        log_prob = dist.log_prob(x_next)
+        t_next = time + dt
+        out = {
+            "x_next": x_next,
+            "x": x_t,
+            "time_next": t_next,
+            "time": time,
+            "log_prob": log_prob,
+        }
+        return (x_next, t_next, key), out
+
+    initial_time = jnp.ones((bg,), dtype=noise.dtype)
+    (x_0, _, _), outs = jax.lax.scan(
+        stochastic_step, (noise, initial_time, rng), xs=None, length=num_steps
+    )
+    return {
+        "actions": x_0,
+        "x_chain": outs["x"],
+        "x_next_chain": outs["x_next"],
+        "times": outs["time"],
+        "dt": jnp.asarray(dt, dtype=noise.dtype),
+        "log_prob_per_step": outs["log_prob"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Rescoring: log-prob of a frozen chain under a different set of weights.
 # ---------------------------------------------------------------------------
@@ -183,6 +333,7 @@ def score_chain_under_model(
     times: at.Float[at.Array, "k b"],
     dt: at.Float[at.Array, ""],
     noise_level: float,
+    prefix_cache: tuple[_gemma.KVCache, at.Bool[at.Array, "b _p"]] | None = None,
 ) -> at.Float[at.Array, "k b ah"]:
     """Recompute per-step Gaussian log-prob of ``x_next_chain`` under ``model``.
 
@@ -210,7 +361,18 @@ def score_chain_under_model(
     # gradient by a SINGLE backward through compute_prefix_cache — instead of K
     # full Gemma-weight cotangents. This is the jit-2 arena fix; see
     # docs/plans/ogpo-memory/analysis-jit2-forensics.md.
-    kv_cache, prefix_mask = compute_prefix_cache(model, observation)
+    #
+    # prefix_cache: an already-computed (and possibly group-tiled) cache from
+    # the caller. Group dedup passes prefix at batch B tiled to B*G here, so
+    # the redundant per-group-member prefix forward (and, when the backbone is
+    # unfrozen, its backward) is skipped. Gradients still flow through the
+    # provided cache identically — jnp.repeat is linear, so the group members'
+    # cache cotangents sum before the single prefix backward, exactly equal to
+    # summing G separate prefix backwards.
+    if prefix_cache is None:
+        kv_cache, prefix_mask = compute_prefix_cache(model, observation)
+    else:
+        kv_cache, prefix_mask = prefix_cache
 
     # We scan (NOT a Python loop) over the K rescoring steps so reverse-mode AD
     # accumulates the K weight-gradient contributions in ONE carry instead of

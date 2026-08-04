@@ -49,7 +49,10 @@ from src.rl.advantage_weighted_sft.update_critic import (
 from src.rl.ema_utils import compose_full_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.ogpo.sampling import (
+    compute_prefix_cache,
+    repeat_prefix_cache,
     sample_chain_with_logprob,
+    sample_chain_with_logprob_grouped,
     score_chain_under_model,
     sum_log_prob,
 )
@@ -149,13 +152,26 @@ def sample_and_advantage(
     expanded_critic_obs = jax.tree.map(_expand, critic_observation)
 
     # --- 1. Sample G SDE chains from the OLD policy. --------------------
-    chain_pack = sample_chain_with_logprob(
-        old_model,
-        expanded_policy_obs,
-        rng=sample_rng,
-        num_steps=num_steps,
-        noise_level=noise_level,
-    )
+    if rl.dedup_group_prefix:
+        # Performance-only: one prefix forward at B, cache tiled to B*G.
+        # Same rng, same noise shape, same scan — allclose-equivalent to the
+        # expanded-batch path (tests/ogpo/test_group_dedup.py).
+        chain_pack = sample_chain_with_logprob_grouped(
+            old_model,
+            policy_observation,
+            rng=sample_rng,
+            group=G,
+            num_steps=num_steps,
+            noise_level=noise_level,
+        )
+    else:
+        chain_pack = sample_chain_with_logprob(
+            old_model,
+            expanded_policy_obs,
+            rng=sample_rng,
+            num_steps=num_steps,
+            noise_level=noise_level,
+        )
     sampled_actions = jax.lax.stop_gradient(chain_pack["actions"])      # [B*G, H, D]
     x_chain         = jax.lax.stop_gradient(chain_pack["x_chain"])      # [K, B*G, H, D]
     x_next_chain    = jax.lax.stop_gradient(chain_pack["x_next_chain"]) # [K, B*G, H, D]
@@ -278,6 +294,13 @@ def loss_and_grad_pg(
     def loss_fn(
         model: _model.BaseModel,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
+        # Group dedup (performance-only): one prefix forward+backward at B,
+        # cache tiled to B*G. jnp.repeat is linear so the G members' cache
+        # cotangents sum before the single prefix backward — identical grads.
+        prefix_cache = None
+        if rl.dedup_group_prefix and rl.group_num_samples > 1:
+            kv_b, mask_b = compute_prefix_cache(model, policy_observation)
+            prefix_cache = repeat_prefix_cache(kv_b, mask_b, rl.group_num_samples)
         new_log_prob_per_step = score_chain_under_model(
             model,
             expanded_policy_obs,
@@ -286,6 +309,7 @@ def loss_and_grad_pg(
             times=times,
             dt=dt,
             noise_level=noise_level,
+            prefix_cache=prefix_cache,
         )  # [K, B*G, H]
         # Same normalization as old_lp so the ratio is on a per-dim scale.
         new_lp = sum_log_prob(new_log_prob_per_step) / log_prob_norm  # [B*G]
