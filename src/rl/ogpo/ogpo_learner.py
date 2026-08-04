@@ -88,10 +88,20 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
         # Mirror the AWR parent, but additionally copy successful episodes into
         # the success buffer BEFORE the parent consumes/clears episode storage.
+        # _save_episode_in_buffer -> _attach_prefix_embeddings_to_episode_data
+        # mutates the step dicts in place (unpacks ep["action"] and inserts the
+        # prefix keys), so the success-buffer pass must operate on a structural
+        # copy — step dicts and their nested obs dicts copied, arrays shared.
         if self._success_data_buffer is not None and is_success:
-            episode_data = self._episode_storage[env_index]
+            episode_copy = [
+                {
+                    k: (dict(v) if isinstance(v, dict) else v)
+                    for k, v in step.items()
+                }
+                for step in self._episode_storage[env_index]
+            ]
             self._save_episode_in_buffer(
-                list(episode_data),
+                episode_copy,
                 task_description,
                 is_success=True,
                 target_buffer=self._success_data_buffer,
