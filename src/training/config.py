@@ -295,6 +295,7 @@ class CollectionConfig:
     use_time_to_success_as_reward: bool = True
     fix_mc_returns: bool = True
     store_prefix_rep: bool = False
+    frozen_prefix_rep: bool = False
     eval_env_num: int = 4
     eval_interval: int = 300
     num_eval_rollouts: int = 32
@@ -358,6 +359,13 @@ class OnlineTrainConfig(TrainConfig):
     
     def __post_init__(self):
         super().__post_init__()
+
+        if self.collect.frozen_prefix_rep and not self.collect.store_prefix_rep:
+            raise ValueError(
+                "collect.frozen_prefix_rep=True requires collect.store_prefix_rep=True: "
+                "the frozen backbone only ever runs during data collection, and its "
+                "output is consumed from the replay buffer at training time."
+            )
 
         if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self.rl.critic.use_distributional_critic:

@@ -39,6 +39,7 @@ from src.envs.wrappers import (
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
+from src.rl.frozen_prefix import load_frozen_prefix_backbone
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.runtime_state import load_resume_state
 
@@ -350,6 +351,15 @@ class FilteredSFTLearner(Agent):
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
 
+        # Frozen backbone for prefix embeddings. Parked on the host until a
+        # collection round starts, so it costs no accelerator memory while training.
+        self._frozen_prefix = None
+        if self._config.collect.frozen_prefix_rep:
+            self._frozen_prefix = load_frozen_prefix_backbone(
+                self._config, replicated_sharding=self._replicated_sharding
+            )
+        gc.collect()
+
     def _get_policy_transforms(self, domain: str):
         if domain == "libero":
             return _transforms.compose([*self._data_config.repack_transforms.inputs, *self._policy._input_transform.transforms])
@@ -476,6 +486,18 @@ class FilteredSFTLearner(Agent):
                     inputs[key] = np.repeat(arr[np.newaxis], batch_size, axis=0)
         return inputs
 
+    def _prefix_backbone_model(self) -> _model.BaseModel:
+        if self._frozen_prefix is not None:
+            return self._frozen_prefix.model
+        params = (
+            self._train_state.ema_params
+            if self._train_state.ema_params is not None
+            else self._train_state.params
+        )
+        model = nnx.merge(self._train_state.model_def, params)
+        model.eval()
+        return model
+
     def _sample_action(
         self,
         observations: Dict,
@@ -531,6 +553,10 @@ class FilteredSFTLearner(Agent):
             return_prefix_rep=True,
             **self._policy._sample_kwargs,
         )
+        if self._frozen_prefix is not None:
+            prefix = self._get_prefix_rep_with_model(
+                m=self._frozen_prefix.model, observation=observation
+            )
         outputs = {"state": inputs["state"], "actions": raw_actions}
         if batch_size == 1:
             outputs = jax.tree.map(lambda x: np.asarray(x[0]), outputs)
@@ -632,8 +658,7 @@ class FilteredSFTLearner(Agent):
             lambda x: x[np.newaxis], episode_data[-1]["next_observation"]
         )
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
-        model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
-        model.eval()
+        model = self._prefix_backbone_model()
         inputs = self._policy._input_transform(processed_obs)
         inputs = self._batch_transform_inputs(inputs, batch_size=1)
         observation = _model.Observation.from_dict(inputs)
@@ -763,6 +788,8 @@ class FilteredSFTLearner(Agent):
         assert self._train_state.ema_params is None, "EMA parameters should be offloaded except during data collection."
         ema_rep = jax.device_put(self._ema, self._replicated_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)
+        if self._frozen_prefix is not None:
+            self._frozen_prefix.activate()
 
     def end_data_collection(self, step: int | None = None) -> int:
         collected_episodes = int(self._collection_success_episodes)
@@ -772,6 +799,8 @@ class FilteredSFTLearner(Agent):
         # offload EMA
         assert self._train_state.ema_params is not None, "EMA parameters should be on device during data collection."
         self._train_state = dataclasses.replace(self._train_state, ema_params=None)
+        if self._frozen_prefix is not None:
+            self._frozen_prefix.deactivate()
         gc.collect()
         return collected_episodes
 

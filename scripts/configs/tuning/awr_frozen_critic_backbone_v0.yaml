@@ -1,0 +1,47 @@
+script: scripts/exp.py
+config_name: pi05_libero_online_aw_sft
+project_name: openpi
+group_name: awr_frozen_critic_backbone_v0
+params:
+  seed: [0]
+  num_train_steps: [100000]
+  lr_schedule.value: [2.5e-5]
+  log_interval: [25]
+  save_interval: [100000]
+  max_runtime: [39600]  # 11 hours
+
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [libero, libero_90_44, libero_90_44],
+  ]
+
+  collect.store_prefix_rep: [True]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
+    [10000, 20],
+  ]
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  collect.eval_interval: [99999]
+
+  !!python/tuple [rl.beta, rl.normalize_advantages]: [
+    [0.1, False],
+  ]
+  rl.weight_clip: [20.0]
+  rl.discount: [0.995]
+  rl.online_ratio: [1.0]
+  rl.buffer_capacity: [250000]
+
+  rl.policy.update_interval: [10]
+  rl.policy.training_start_step: [900]
+
+  !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
+    [1, 1, False, 1],     # TD (regression)
+  ]
+
+  rl.critic.batch_size: [1024]
+  rl.critic.pre_training_steps: [0]
+  rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
+  rl.critic.inference_start_step: [1]
+  rl.critic.value_target_type: [one_hot]
+  rl.critic.td_weight_schedule.switch_step: [999999]

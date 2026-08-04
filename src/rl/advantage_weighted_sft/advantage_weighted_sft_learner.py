@@ -128,7 +128,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, is_success, scale):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, is_success, scale, prefix_embedding):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -138,6 +138,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 mc_return=mc_return,
                 is_success=is_success,
                 scale=scale,
+                prefix_embedding=prefix_embedding,
             )
 
         self._update_critics_jitted = jax.jit(
@@ -169,6 +170,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._data_sharding,
                 self._data_sharding,
                 self._replicated_sharding,
+                self._data_sharding,
             ),
             out_shardings=(
                 self._train_state_sharding,
@@ -282,6 +284,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self,
         sft_batch: tuple[_model.Observation, _model.Actions],
         policy_state: training_utils.TrainState,
+        prefix_embedding: at.Float[at.Array, "b embed"] | None = None,
     ) -> tuple[_model.Observation, ObsType, _model.Actions]:
         policy_observation, actions = sft_batch
         policy_obs_dict = policy_observation.to_dict()
@@ -290,10 +293,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             "state": policy_obs_dict["state"],
         }
 
-        prefix_embedding = self._recompute_prefix_embedding(
-            observation=policy_obs_dict,
-            policy_state=policy_state,
-        )
+        if prefix_embedding is None:
+            prefix_embedding = self._recompute_prefix_embedding(
+                observation=policy_obs_dict,
+                policy_state=policy_state,
+            )
 
         critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
 
@@ -346,8 +350,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
 
-        policy_model = nnx.merge(self._train_state.model_def, self._train_state.ema_params)
-        policy_model.eval()
+        prefix_model = self._prefix_backbone_model()
 
         for task, indices in task_to_indices.items():
             group_obs = jax.tree.map(lambda x: np.asarray(x)[indices], observations)
@@ -419,7 +422,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 for k, v in inputs.items()
             }
             obs_for_prefix = _model.Observation.from_dict(inputs)
-            prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
+            prefix = self._get_prefix_rep_with_model(m=prefix_model, observation=obs_for_prefix)
             prefix = np.asarray(prefix)
             if prefix.ndim == 3:
                 prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
@@ -553,11 +556,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         mc_return: at.Array | None = None,
         is_success: at.Float[at.Array, " b"] | None = None,
         scale: at.Array | float = 1.0,
+        prefix_embedding: at.Float[at.Array, "b embed"] | None = None,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
             batch,
             policy_state=policy_state,
+            prefix_embedding=prefix_embedding,
         )
         # Update the policy state
         policy_state, info = self._train_step(
@@ -630,6 +635,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         critic_info, actor_info = {}, {}
         mc_return = None
         is_success = None
+        actor_prefix = None
         if use_online:
             # Two independent samples: critics may use a larger batch than the policy.
             critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size) if update_critic else None
@@ -659,6 +665,14 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     "(MC returns are not available for offline data)"
                 )
             online_is_success = jnp.asarray(online_batch["is_success"], dtype=jnp.float32)
+            if self._config.collect.frozen_prefix_rep:
+                actor_prefix = online_batch["observation"].get(PREFIX_EMBEDDING_NAME)
+                if actor_prefix is None:
+                    raise RuntimeError(
+                        "collect.frozen_prefix_rep is set but the replay buffer holds no "
+                        f"'{PREFIX_EMBEDDING_NAME}'. This buffer was filled without "
+                        "collect.store_prefix_rep; it cannot be reused for a frozen-prefix run."
+                    )
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = self._config.rl.online_ratio
             if online_ratio >= 1.0:
@@ -722,6 +736,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     mc_return,
                     is_success,
                     scale,
+                    actor_prefix,
                 )
 
             self._train_state = policy_state
