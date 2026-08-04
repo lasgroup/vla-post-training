@@ -81,12 +81,15 @@ def sample_and_advantage(
     critic_prefix: at.Float[at.Array, "b embed"] | None,   # None => recompute; WP-C sidecar otherwise
     ema: nnx.State,                                         # explicit _ema_sharding input (full OR trainable-only)
 ) -> tuple[
-    at.Float[at.Array, "k b ah ad"],   # x_chain
-    at.Float[at.Array, "k b ah ad"],   # x_next_chain
-    at.Float[at.Array, "k b"],         # times
+    # Outputs are at the EXPANDED batch (bg = B*G); `b` is reserved for the
+    # un-expanded inputs above. With G=1 the two coincide, but G>1 must not
+    # fail the typecheck.
+    at.Float[at.Array, "k bg ah ad"],  # x_chain
+    at.Float[at.Array, "k bg ah ad"],  # x_next_chain
+    at.Float[at.Array, "k bg"],        # times
     at.Float[at.Array, ""],            # dt
-    at.Float[at.Array, " b"],          # old_lp (already / log_prob_norm)
-    at.Float[at.Array, " b"],          # advantage (stop-grad'd)
+    at.Float[at.Array, " bg"],         # old_lp (already / log_prob_norm)
+    at.Float[at.Array, " bg"],         # advantage (stop-grad'd)
     dict[str, at.Array],               # sampler_aux
 ]:
     assert isinstance(config.rl, OGPOSFTLearnerConfig)
@@ -232,12 +235,12 @@ def loss_and_grad_pg(
     config: OnlineTrainConfig,
     policy_state: training_utils.TrainState,    # UNDONATED (model_def, params-current)
     policy_observation: _model.Observation,     # un-expanded (rescore expands internally)
-    x_chain: at.Float[at.Array, "k b ah ad"],
-    x_next_chain: at.Float[at.Array, "k b ah ad"],
-    times: at.Float[at.Array, "k b"],
+    x_chain: at.Float[at.Array, "k bg ah ad"],
+    x_next_chain: at.Float[at.Array, "k bg ah ad"],
+    times: at.Float[at.Array, "k bg"],
     dt: at.Float[at.Array, ""],
-    old_lp: at.Float[at.Array, " b"],
-    advantage: at.Float[at.Array, " b"],
+    old_lp: at.Float[at.Array, " bg"],
+    advantage: at.Float[at.Array, " bg"],
 ) -> tuple[nnx.State, at.Float[at.Array, ""], dict[str, at.Array]]:
     # jit-2a: the PPO surrogate ONLY (no BC anchor). Emits the scan-accumulated
     # weight gradients (grads_pg) plus pg_loss and the PPO aux. The BC anchor's
