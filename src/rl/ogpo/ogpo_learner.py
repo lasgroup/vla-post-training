@@ -65,8 +65,42 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             self._mesh, jax.sharding.PartitionSpec(), memory_kind="pinned_host"
         )
         self._ema = jax.device_put(self._ema, self._ema_host_sharding)
+        # Optional success buffer: successful episodes are duplicated here and
+        # the BC anchor samples from it once it holds a full batch. Same schema
+        # as the online buffer (built from the same dummy data).
+        self._success_data_buffer = None
+        if self._config.rl.use_success_buffer:
+            import dataclasses as _dc
+            success_cfg = _dc.replace(
+                self._config,
+                rl=_dc.replace(
+                    self._config.rl,
+                    buffer_capacity=self._config.rl.success_buffer_capacity,
+                ),
+            )
+            orig_config = self._config
+            self._config = success_cfg
+            self._success_data_buffer = self._get_online_replay_buffer()
+            self._config = orig_config
         self._train_step = functools.partial(ogpo_train_step, self._config)
         self._refresh_update_functions()
+
+    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+        # Mirror the AWR parent, but additionally copy successful episodes into
+        # the success buffer BEFORE the parent consumes/clears episode storage.
+        if self._success_data_buffer is not None and is_success:
+            episode_data = self._episode_storage[env_index]
+            self._save_episode_in_buffer(
+                list(episode_data),
+                task_description,
+                is_success=True,
+                target_buffer=self._success_data_buffer,
+            )
+        super().save_episode(
+            is_success=is_success,
+            env_index=env_index,
+            task_description=task_description,
+        )
 
     def _refresh_update_functions(self):
         # Keep the shared critic jit (AWR:143) and leave the AWR mono policy jit (AWR:161) built but
@@ -246,6 +280,21 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             # jit-1 recomputes under current params (None -> array is a deliberate recompile). The base
             # 2-tuple (FSL:572) is untouched for siblings (G3).
             policy_observation, actions_demo, critic_prefix = self._online_batch_to_sft_batch(online_batch)
+            # Success-buffer BC: once the success buffer holds a full batch, the
+            # BC anchor regresses onto successful trajectories instead of the
+            # (mostly failed) online batch. The PPO path is untouched — only the
+            # (observation, actions) pair fed to jit-2b changes.
+            bc_observation, bc_actions = policy_observation, actions_demo
+            if (
+                self._success_data_buffer is not None
+                and self._success_data_buffer.size >= online_batch_size
+            ):
+                success_batch = self._success_data_buffer.sample(
+                    batch_size=online_batch_size
+                )
+                bc_observation, bc_actions, _ = self._online_batch_to_sft_batch(
+                    success_batch
+                )
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             # G2: a device copy of the host EMA enters ONLY the undonated jit-1, and self._ema is the
             # donated arg of _ema_update_fn on its final use (below); it is NEVER attached to a donated
@@ -284,8 +333,8 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     grads_pg,                        # DONATED accumulator
                     policy_rng,
                     self._train_state,               # pre-increment step for fold_in
-                    policy_observation,
-                    actions_demo,
+                    bc_observation,                  # success-buffer batch when available
+                    bc_actions,
                     pg_loss, pg_aux,
                 )
                 new_state = self._optimizer_tail_jitted(self._train_state, grads)   # DONATES train_state+grads
@@ -322,6 +371,10 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 )
             }
         )
+        if self._success_data_buffer is not None:
+            info["success_buffer_size"] = jnp.asarray(
+                float(self._success_data_buffer.size), dtype=jnp.float32
+            )
         return jax.tree.map(np.asarray, info)
 
     def _online_batch_to_sft_batch(

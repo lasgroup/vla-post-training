@@ -224,6 +224,11 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # BC regularization on the on-policy actions in the same batch.
     bc_coeff: float = 1.0
     use_bc_regularization: bool = True
+    # When True, successful episodes are additionally stored in a dedicated
+    # success buffer and the BC anchor draws its (obs, actions) batch from it
+    # (falling back to the online batch until the buffer holds a full batch).
+    use_success_buffer: bool = False
+    success_buffer_capacity: int = 50_000
     # Treat the EMA train state as the "old" policy (PPO denominator).
     # When False, the current params are used (stop-gradient'd).
     use_ema_as_old_policy: bool = True

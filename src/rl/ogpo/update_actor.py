@@ -42,6 +42,7 @@ import openpi.training.utils as training_utils
 
 from src.rl.advantage_weighted_sft.update_critic import (
     create_critic,
+    critic_values_per_head,
     flatten_action_horizon,
     summarize_critic_values,
 )
@@ -174,19 +175,33 @@ def sample_and_advantage(
     )  # [B*G]
 
     # --- 2. Q − V advantages, then group-relative centering. -----------
+    q_logits = state_action_critic(
+        expanded_critic_obs, flatten_action_horizon(sampled_actions)
+    )
+    v_logits = value_critic(expanded_critic_obs)
     q_value = summarize_critic_values(
-        state_action_critic(
-            expanded_critic_obs, flatten_action_horizon(sampled_actions)
-        ),
-        config,
-        critic_reduction=rl.critic.reduction,
+        q_logits, config, critic_reduction=rl.critic.reduction
     )  # [B*G]
     v_value = summarize_critic_values(
-        value_critic(expanded_critic_obs),
-        config,
-        critic_reduction=rl.critic.reduction,
+        v_logits, config, critic_reduction=rl.critic.reduction
     )  # [B*G]
-    advantage_raw = q_value - v_value  # [B*G]
+    if rl.advantage_combination == "conservative":
+        # Per-head A_i = Q_i - V_i, combined sign-unanimously (mirrors the AWR
+        # actor's conservative branch): positive only if every head agrees it's
+        # positive (take the smallest), negative only if every head agrees it's
+        # negative (take the smallest magnitude), zero on sign disagreement.
+        assert rl.critic.num_qs == rl.critic.num_vs, (
+            "conservative advantage needs num_qs == num_vs"
+        )
+        adv_heads = (
+            critic_values_per_head(q_logits, config)
+            - critic_values_per_head(v_logits, config)
+        )  # (n, B*G)
+        advantage_raw = jnp.maximum(jnp.min(adv_heads, axis=0), 0.0) + jnp.minimum(
+            jnp.max(adv_heads, axis=0), 0.0
+        )  # [B*G]
+    else:
+        advantage_raw = q_value - v_value  # [B*G]
 
     B = jax.tree.leaves(policy_observation)[0].shape[0]
     baseline = _group_baseline(advantage_raw, B, G, rl.adv_strategy)  # [B, 1]
