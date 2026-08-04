@@ -59,13 +59,6 @@ echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 # Do not set policy.update_interval back to 1 without also dropping
 # num_train_steps: it would cost 100000 full pi0.5 gradient steps.
 #
-# The critic recipe is copied from bon_libero_babel.sh so the two runs learn
-# their critics identically. The defaults differ from BoN in two ways:
-#   td_weight_schedule 1/1/999999 -> pure TD from step 0, instead of the default
-#     0->1 at step 1000 (MC regression for the first 1000 steps).
-#   pre_training_steps 0 -> no q/v optimizer reset + EMA re-seed at step 1000
-#     (advantage_weighted_sft_learner.py:578).
-#
 # beta=10 is the per-transition reward magnitude: with r=-1/step, discount
 # 0.995 and action_horizon 10, each stored transition's reward is
 # -(1-0.995^10)/0.005 = -9.78, so one chunk of delay costs one unit of
@@ -110,10 +103,6 @@ exec uv run scripts/exp.py \
   --rl.critic.no-use_distributional_critic \
   --rl.critic.num_value_bins 1 \
   --rl.critic.batch_size 1024 \
-  --rl.critic.pre_training_steps 0 \
-  --rl.critic.td_weight_schedule.init_value 1 \
-  --rl.critic.td_weight_schedule.end_value 1 \
-  --rl.critic.td_weight_schedule.switch_step 999999 \
   --rl.critic.use_bronet \
   --rl.critic.bronet_hidden_dim 1024 \
   --rl.beta 10.0 \
