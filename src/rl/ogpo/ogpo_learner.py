@@ -262,7 +262,17 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             if update_critic
             else None
         )
-        online_batch = self._online_data_buffer.sample(batch_size=online_batch_size)
+        # Sample the policy batch ONLY on policy-update steps: 9 of 10 steps are
+        # critic-only, and this gather moves ~10s of MB of images host->device
+        # for nothing (S4, docs/ogpo_speed_memory_analysis.md). Pure overhead
+        # removal; the batch content on policy steps is unchanged (the buffer
+        # rng is consumed in the same order relative to policy updates as long
+        # as critic sampling above stays unconditional-on-its-own-gate).
+        online_batch = (
+            self._online_data_buffer.sample(batch_size=online_batch_size)
+            if update_policy
+            else None
+        )
 
         critic_info, actor_info = {}, {}
         if update_critic:
@@ -385,7 +395,12 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             info["success_buffer_size"] = jnp.asarray(
                 float(self._success_data_buffer.size), dtype=jnp.float32
             )
-        return jax.tree.map(np.asarray, info)
+        # Return DEVICE arrays (S3, docs/ogpo_speed_memory_analysis.md): the old
+        # jax.tree.map(np.asarray, ...) forced a host sync on ~50 scalars EVERY
+        # step, stalling async dispatch of the next step's jits. exp.py already
+        # normalizes + jax.device_get()s at log_interval, so materializing here
+        # is pure overhead. Values are identical, just fetched lazily.
+        return info
 
     def _online_batch_to_sft_batch(
         self, online_batch: dict
