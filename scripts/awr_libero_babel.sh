@@ -16,7 +16,7 @@ set -euo pipefail
 PROJECT_DIR=/home/mananaga/VLA/manan_babel/vla-post-training
 STORE_ROOT=/data/group_data/maxlab/common_datasets/mananaga/vla-post-training
 EXP_NAME=pi05_libero_online_aw_sft_libero_90_44_seed0
-CKPT_BASE_DIR=$STORE_ROOT/checkpoints/awr_multitask
+CKPT_BASE_DIR=$STORE_ROOT/checkpoints/awr_multitask_with_bon_cfg
 
 cd "$PROJECT_DIR"
 
@@ -116,7 +116,7 @@ exec uv run scripts/exp.py \
   --rl.critic.td_weight_schedule.switch_step 999999 \
   --rl.critic.use_bronet \
   --rl.critic.bronet_hidden_dim 1024 \
-  --rl.beta 10.0 \
+  --rl.beta 1.0 \
   --rl.advantage_scale 1.0 \
   --rl.weight_clip 3.0 \
   --batch_size 256

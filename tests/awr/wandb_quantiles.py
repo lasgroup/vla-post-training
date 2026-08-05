@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Print step-bucketed quantiles of AWR debug metrics from a wandb run.
+"""Print step-bucketed quantiles of AWR/BoN/F-SFT debug metrics from wandb.
 
 Usage:
     python tests/awr/wandb_quantiles.py
-    python tests/awr/wandb_quantiles.py --run-name <other-run>
+    python tests/awr/wandb_quantiles.py --run-names AWR-Debug BON-Debug
     python tests/awr/wandb_quantiles.py --list-metrics
-    python tests/awr/wandb_quantiles.py --entity <ent> --project <proj> --run-name <run>
+    python tests/awr/wandb_quantiles.py --entity <ent> --project <proj> --run-names <run>
 
-Defaults target the AWR run launched by scripts/awr_libero_babel.sh
-(``diverse-data-synthesis/openpi``,
-``pi05_libero_online_aw_sft_libero_90_44_seed0``); override any of
-``--entity / --project / --run-name`` on the CLI. Buckets default to 500
-training steps (= one collect_interval), pass ``--bucket 1000`` to change.
+Defaults target the three debug runs launched by
+scripts/{awr,bon,fsft}_libero_babel.sh on the same 4-task LIBERO-90 set
+(``diverse-data-synthesis/openpi``: ``AWR-Debug``, ``BON-Debug``,
+``FSFT-Debug``); override any of ``--entity / --project / --run-names`` on
+the CLI. Buckets default to 500 training steps, pass ``--bucket 1000`` to
+change. Only AWR and BoN train a critic, only AWR and F-SFT train a policy,
+so each run is analysed with whichever of the reports below apply to it.
+
+Why the three are comparable: AWR's policy-gradient budget matches F-SFT's
+(100k steps / policy.update_interval 20 = 5k policy updates) and its critic
+budget matches BoN's (100k steps / critic.update_interval 1), on identical
+task sets and collection schedules. So a critic metric that differs between
+AWR and BoN, or an actor metric that differs between AWR and F-SFT, is an
+algorithmic difference and not a budget artefact.
 
 What it prints
 --------------
@@ -42,6 +51,13 @@ What it prints
    * ``A / (scale * beta)`` routinely exceeds ``weight_clip`` -> the exp
      saturates and the loss becomes a hard argmax over a handful of
      transitions in the batch.
+
+3. A cross-run critic comparison (``--no-compare`` to skip), aligning the
+   ``critic/*`` metrics of every run that has them onto a shared step grid.
+   AWR and BoN run the *same* critic recipe on the same data, so any
+   divergence here is the thing to explain: the two runs differ only in
+   that AWR's policy moves under its critic (and re-embeds the prefix with
+   the live policy), while BoN's policy is frozen.
 """
 
 from __future__ import annotations
@@ -50,17 +66,17 @@ import argparse
 import fnmatch
 import math
 import sys
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 import wandb
 
 
-# Defaults for the current AWR debug run. Override any of these from CLI.
+# Defaults for the current debug sweep. Override any of these from CLI.
 DEFAULT_ENTITY = "diverse-data-synthesis"
 DEFAULT_PROJECT = "openpi"
-DEFAULT_RUN_NAME = "pi05_libero_online_aw_sft_libero_90_44_seed0"
+DEFAULT_RUN_NAMES = ("AWR-Debug", "BON-Debug", "FSFT-Debug")
 
 
 # Metrics the AWR actor/critic emit (see
@@ -88,6 +104,11 @@ DEFAULT_METRICS: tuple[str, ...] = (
     # optimisation health
     "actor/grad_norm",
     "actor/param_norm",
+    # F-SFT logs the same three unprefixed (filtered_sft_learner.update()),
+    # so include them to line its policy up against AWR's actor/*.
+    "loss",
+    "grad_norm",
+    "param_norm",
     # critic diagnostics: loss/value_mean/td_loss/mc_loss/td_weight/
     # grad_norm/param_norm for both the Q and the V head
     "critic/q_*",
@@ -386,11 +407,15 @@ def _awr_weight_report(df: pd.DataFrame, config: dict[str, Any],
     print(f"z_std (advantage spread in exponent units): "
           f"first bucket {z_std[0]:.4g}, last bucket {z_std[-1]:.4g}, "
           f"median {np.median(z_std):.4g}")
-    if np.median(z_std) < 0.05:
-        print("  -> DEGENERATE: weights are effectively uniform. AWR is "
-              "training as plain BC on the whole buffer, failures included. "
-              "Lower rl.beta (or turn on rl.normalize_advantages) so the "
-              "advantage spread actually reaches the exponent.")
+    # Judge degeneracy on ESS/N, not on a raw z_std cutoff: z_std=0.1 still
+    # leaves ESS/N=0.99, i.e. every sample weighted ~1. The old 0.05
+    # threshold called that "usable" and hid the failure.
+    if float(np.median(report["ess_frac"])) > 0.9:
+        print("  -> DEGENERATE: weights are effectively uniform (ESS/N ~ 1). "
+              "AWR is training as plain BC on the whole buffer, failures "
+              "included. Lower rl.beta (or turn on rl.normalize_advantages) "
+              "so the advantage spread actually reaches the exponent — see "
+              "the suggested beta values below.")
     elif np.median(z_std) > weight_clip:
         print("  -> SATURATED: the advantage spread exceeds weight_clip, so "
               "the exp is pinned at the clip for much of the batch and the "
@@ -510,6 +535,90 @@ def _critic_report(df: pd.DataFrame, config: dict[str, Any]) -> None:
     print()
 
 
+def _cross_run_compare(frames: dict[str, pd.DataFrame], metrics: Sequence[str],
+                       title: str) -> None:
+    """Print one table per metric with a column per run that logged it.
+
+    Runs are aligned on the step bucket, not on wall clock: AWR/BoN share a
+    100k-step critic schedule while F-SFT only runs 5k policy steps, so a
+    bucket row simply goes blank for a run that never reached it.
+    """
+    cols: dict[str, dict[str, pd.Series]] = {}
+    for metric in metrics:
+        per_run: dict[str, pd.Series] = {}
+        for name, df in frames.items():
+            if metric not in df.columns:
+                continue
+            sub = df.loc[df[metric].notna(), ["_bucket_start", metric]]
+            if sub.empty:
+                continue
+            per_run[name] = sub.groupby("_bucket_start")[metric].mean()
+        if len(per_run) >= 1:
+            cols[metric] = per_run
+    if not cols:
+        return
+
+    print(f"=== {title} ===")
+    for metric, per_run in cols.items():
+        table = pd.DataFrame(per_run)
+        table.index.name = "step_start"
+        print(f"--- {metric} ({', '.join(per_run)}) ---")
+        with pd.option_context("display.float_format", "{:.4g}".format,
+                               "display.width", 220,
+                               "display.max_rows", None,
+                               "display.max_columns", None):
+            print(table.to_string())
+        print()
+
+
+def _analyze_run(run: "wandb.apis.public.Run", args: argparse.Namespace,
+                 available: list[str]) -> pd.DataFrame | None:
+    """Print every applicable report for one run and return its bucketed history."""
+    print("=" * 78)
+    print(f"Run: {run.entity}/{run.project}/{run.id}  ({run.name})")
+    print(f"State: {run.state}  Steps: {run.summary.get('_step', '?')}")
+
+    selected = _select_metric_columns(available, args.metrics)
+    if not selected:
+        print("[warn] no requested metric exists on this run; skipping.")
+        print()
+        return None
+    print(f"Metrics ({len(selected)}): {', '.join(selected)}")
+    print(f"Bucket width: {args.bucket} steps")
+    print()
+
+    df = _fetch_history(run, selected, args.max_samples)
+    df = _bucketize(df, args.bucket)
+    qs = tuple(sorted(set(args.quantiles)))
+
+    long_rows: list[pd.DataFrame] = []
+    for metric in selected:
+        summary = _summary_for_metric(df, metric, qs)
+        if summary.empty:
+            print(f"--- {metric}: no data ---")
+            print()
+            continue
+        print(f"=== {metric} ===")
+        with pd.option_context("display.float_format", "{:.4g}".format,
+                               "display.width", 200,
+                               "display.max_rows", None):
+            print(summary.to_string(index=False))
+        print()
+        if args.csv is not None:
+            long_rows.append(summary.assign(metric=metric, run=run.name))
+
+    run_config = dict(run.config)
+    # The weight report only means anything for a run with an AWR actor; BoN
+    # has no policy loss and F-SFT's weights are the 0/1 success mask.
+    if not args.no_weights and "actor/advantage_std" in df.columns:
+        _awr_weight_report(df, run_config, args.bucket)
+    _critic_report(df, run_config)
+
+    if long_rows:
+        df.attrs["long_rows"] = long_rows
+    return df
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Print step-bucketed quantiles of W&B metrics for an AWR run."
@@ -518,10 +627,12 @@ def main() -> None:
                     help=f"W&B entity (default: {DEFAULT_ENTITY})")
     ap.add_argument("--project", default=DEFAULT_PROJECT,
                     help=f"W&B project name (default: {DEFAULT_PROJECT})")
-    ap.add_argument("--run-name", default=DEFAULT_RUN_NAME,
-                    help=f"W&B run display name (default: {DEFAULT_RUN_NAME})")
-    ap.add_argument("--run-id", default=None,
-                    help="W&B run id; bypasses name lookup and --select.")
+    ap.add_argument("--run-names", nargs="+", default=list(DEFAULT_RUN_NAMES),
+                    help=("W&B run display names to analyse "
+                          f"(default: {' '.join(DEFAULT_RUN_NAMES)})"))
+    ap.add_argument("--run-ids", nargs="+", default=None,
+                    help=("W&B run ids; bypasses name lookup and --select. "
+                          "Overrides --run-names when given."))
     ap.add_argument("--select", default="latest",
                     choices=("latest", "longest", "running"),
                     help=("Which run to use when several share the name: "
@@ -545,9 +656,13 @@ def main() -> None:
         help="Fallback cap for history() if scan_history is unavailable.",
     )
     ap.add_argument("--list-metrics", action="store_true",
-                    help="Print every metric key the run logged, then exit.")
+                    help="Print every metric key each run logged, then exit.")
     ap.add_argument("--no-weights", action="store_true",
                     help="Skip the reconstructed AWR weight report.")
+    ap.add_argument("--no-compare", action="store_true",
+                    help="Skip the cross-run critic/actor comparison tables.")
+    ap.add_argument("--compare-only", action="store_true",
+                    help="Print only the cross-run comparison, not per-run tables.")
     ap.add_argument(
         "--csv", default=None,
         help="If set, also write the long-form summary to this CSV path.",
@@ -555,75 +670,95 @@ def main() -> None:
     args = ap.parse_args()
 
     api = wandb.Api(timeout=60)
-    run = _resolve_run(api, args.entity, args.project, args.run_name,
-                       args.run_id, args.select)
-    print(f"Run: {run.entity}/{run.project}/{run.id}  ({run.name})")
-    print(f"State: {run.state}  Steps: {run.summary.get('_step', '?')}")
+    if args.run_ids:
+        runs = [api.run(f"{args.entity}/{args.project}/{rid}")
+                for rid in args.run_ids]
+    else:
+        runs = [_resolve_run(api, args.entity, args.project, name, None,
+                             args.select)
+                for name in args.run_names]
 
-    # Discover which metric names exist on the run. ``run.summary`` reflects
-    # the *last* logged value per key, which is enough for *finished* runs
-    # but lags for running ones — newly-introduced keys may not be in the
-    # summary cache yet. Combine summary with ``run.history(samples=1)``
-    # column names as a more authoritative discovery source.
-    available_set = {k for k in run.summary.keys() if not k.startswith("_")}
-    try:
-        sample = run.history(samples=1, pandas=True)
-        available_set.update(
-            c for c in sample.columns if not c.startswith("_")
-        )
-    except Exception as exc:  # pragma: no cover - tolerate API quirks
-        print(f"[warn] history(samples=1) failed ({exc}); "
-              "falling back to summary keys only.", file=sys.stderr)
-    available = sorted(available_set)
-
-    if args.list_metrics:
-        print(f"Available metrics ({len(available)}):")
-        for k in available:
-            print(f"    {k}")
-        return
-
-    selected = _select_metric_columns(available, args.metrics)
-    if not selected:
-        print("[err] No metrics matched. Available keys (first 60):",
-              file=sys.stderr)
-        for k in available[:60]:
-            print(f"    {k}", file=sys.stderr)
-        sys.exit(2)
-    print(f"Metrics ({len(selected)}): {', '.join(selected)}")
-    print(f"Bucket width: {args.bucket} steps")
-    print()
-
-    df = _fetch_history(run, selected, args.max_samples)
-    df = _bucketize(df, args.bucket)
-
-    qs = tuple(sorted(set(args.quantiles)))
-
+    frames: dict[str, pd.DataFrame] = {}
     long_rows: list[pd.DataFrame] = []
-    for metric in selected:
-        summary = _summary_for_metric(df, metric, qs)
-        if summary.empty:
-            print(f"--- {metric}: no data ---")
+    for run in runs:
+        # Discover which metric names exist on the run. ``run.summary``
+        # reflects the *last* logged value per key, which is enough for
+        # *finished* runs but lags for running ones — newly-introduced keys
+        # may not be in the summary cache yet. Combine summary with
+        # ``run.history(samples=1)`` column names as a more authoritative
+        # discovery source.
+        available_set = {k for k in run.summary.keys() if not k.startswith("_")}
+        try:
+            sample = run.history(samples=1, pandas=True)
+            available_set.update(
+                c for c in sample.columns if not c.startswith("_")
+            )
+        except Exception as exc:  # pragma: no cover - tolerate API quirks
+            print(f"[warn] history(samples=1) failed ({exc}); "
+                  "falling back to summary keys only.", file=sys.stderr)
+        available = sorted(available_set)
+
+        if args.list_metrics:
+            print(f"{run.name}: available metrics ({len(available)}):")
+            for k in available:
+                print(f"    {k}")
             print()
             continue
-        print(f"=== {metric} ===")
-        # Use to_string so all rows print even if there are many.
-        with pd.option_context("display.float_format", "{:.4g}".format,
-                                "display.width", 200,
-                                "display.max_rows", None):
-            print(summary.to_string(index=False))
-        print()
-        if args.csv is not None:
-            summary = summary.assign(metric=metric)
-            long_rows.append(summary)
 
-    if not args.no_weights:
-        run_config = dict(run.config)
-        _awr_weight_report(df, run_config, args.bucket)
-        _critic_report(df, run_config)
+        if args.compare_only:
+            # Still need the history for the comparison, just not the tables.
+            selected = _select_metric_columns(available, args.metrics)
+            if not selected:
+                continue
+            frames[run.name] = _bucketize(
+                _fetch_history(run, selected, args.max_samples), args.bucket
+            )
+            continue
+
+        df = _analyze_run(run, args, available)
+        if df is None:
+            continue
+        frames[run.name] = df
+        long_rows.extend(df.attrs.get("long_rows", []))
+
+    if args.list_metrics:
+        return
+    if not frames:
+        print("[err] no run produced any history.", file=sys.stderr)
+        sys.exit(2)
+
+    if not args.no_compare:
+        # Critic first: AWR and BoN share a critic recipe, so this is the
+        # apples-to-apples panel. Actor second: AWR vs F-SFT.
+        critic_metrics = sorted(
+            {c for df in frames.values() for c in df.columns
+             if c.startswith("critic/")}
+        )
+        _cross_run_compare(frames, critic_metrics,
+                           "cross-run critic comparison (AWR vs BoN)")
+        actor_metrics = [
+            c for c in (
+                "actor/loss", "loss", "actor/grad_norm", "grad_norm",
+                "actor/param_norm", "param_norm", "actor/chunked_loss",
+                "actor/advantage_mean", "actor/advantage_std",
+                "actor/normalizer_scale",
+            )
+            if any(c in df.columns for df in frames.values())
+        ]
+        _cross_run_compare(frames, actor_metrics,
+                           "cross-run actor comparison (AWR vs F-SFT)")
+        outcome_metrics = sorted(
+            {c for df in frames.values() for c in df.columns
+             if c.startswith("eval/") or c == "success_rate"
+             or c.startswith("success_rate/") or c == "online_buffer_size"}
+        )
+        _cross_run_compare(frames, outcome_metrics,
+                           "cross-run outcome comparison")
 
     if args.csv is not None and long_rows:
         long_df = pd.concat(long_rows, ignore_index=True)
-        cols = ["metric"] + [c for c in long_df.columns if c != "metric"]
+        cols = ["run", "metric"] + [c for c in long_df.columns
+                                    if c not in ("run", "metric")]
         long_df = long_df[cols]
         long_df.to_csv(args.csv, index=False)
         print(f"Wrote long-form CSV: {args.csv}")

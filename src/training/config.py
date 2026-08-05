@@ -183,6 +183,11 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     # Probability of dropping the prompt from a training sample, so the same
     # weights learn the unconditional branch.
     cfg_dropout_prob: float = 0.0
+    # Sampler used at action-generation time. 0.0 integrates the probability-flow
+    # ODE (Euler); >0 switches to the distribution-preserving SDE, whose per-step
+    # kernel is Pi0._get_sde_dist with sigma_t = sde_noise_level * sqrt(t/(1-t)).
+    # Sweep by running eval once per level, not by passing a list.
+    sde_noise_level: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

@@ -363,6 +363,12 @@ class FilteredSFTLearner(Agent):
                 self._cfg_scales,
                 "guided" if self._cfg_guide_collection else "unguided",
             )
+        # Passed explicitly to sample_actions rather than through `_sample_kwargs`:
+        # `infer_with_model` already forwards a `noise_level` of its own, so a
+        # second one in the splatted kwargs is a duplicate-keyword TypeError.
+        self._sde_noise_level = float(getattr(self._config.rl, "sde_noise_level", 0.0))
+        if self._sde_noise_level > 0.0:
+            logging.info("SDE sampling enabled (noise_level=%g)", self._sde_noise_level)
 
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
@@ -526,6 +532,7 @@ class FilteredSFTLearner(Agent):
                 model=model,
                 obs=observations,
                 noise=noise,
+                noise_level=self._sde_noise_level,
                 return_prefix_rep=False,
                 sharding_spec=sharding_spec,
             )["actions"]
@@ -545,6 +552,7 @@ class FilteredSFTLearner(Agent):
             observation=observation,
             noise=noise,
             rng=sample_rng,
+            noise_level=self._sde_noise_level,
             return_prefix_rep=True,
             **self._policy._sample_kwargs,
         )
