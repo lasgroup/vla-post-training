@@ -237,12 +237,16 @@ def sample_and_advantage(
         # identical task); soft one-hot masks keep it jit-friendly for any
         # number of distinct tasks in the batch.
         prompt = policy_observation.tokenized_prompt  # [B, L] int32
-        # simple order-sensitive hash per row. uint32 arithmetic wraps (mod
-        # 2^32) instead of overflowing — no x64 mode needed; collisions across
-        # DIFFERENT tasks are astronomically unlikely for <100 prompts.
+        # simple order-sensitive hash per row. Weights are precomputed HOST-SIDE
+        # with Python-int arithmetic (L is static at trace time) and embedded as
+        # a uint32 constant: jax 0.6's jit argument parsing rejects Python ints
+        # > int32 range even when destined for a uint32 op (the two prior
+        # OverflowError crashes). uint32 wraps mod 2^32; collisions across
+        # different prompts are astronomically unlikely for <100 tasks.
         L = prompt.shape[-1]
-        weights = (
-            jnp.arange(1, L + 1, dtype=jnp.uint32) * jnp.uint32(2654435761)
+        weights = jnp.asarray(
+            [(i * 2654435761) % (2**32) for i in range(1, L + 1)],
+            dtype=jnp.uint32,
         )
         task_id = jnp.sum(prompt.astype(jnp.uint32) * weights, axis=-1)  # [B]
         task_id = jnp.repeat(task_id, G, axis=0)  # [B*G]
