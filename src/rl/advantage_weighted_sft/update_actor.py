@@ -129,16 +129,26 @@ def train_step(
                 state_action_critic(critic_observation, critic_actions), config
             )  # (B,)
             advantage = q_value - value  # (B, )
-    # Per-task baseline: `bias`/`scale` are (num_groups,) EMAs, gathered per
-    # sample. Centering only matters group-wise -- a single global bias shifts
-    # every exponent equally and cancels out of the relative weights, so a
-    # per-task offset in Q - V (the critic's level error, which is far larger
-    # here than the advantage itself) is what decides which task wins the batch.
-    if task_id is None:
-        adv_bias, adv_scale = bias, scale
+    # Per-task baseline taken from THIS batch, not from the EMA. Two things
+    # need removing and the batch's own statistics remove both exactly:
+    #   - the per-task offset in Q - V (the critic's level error), which decides
+    #     which task wins the weight mass in a multi-task batch;
+    #   - the common-mode level, which moves by several value units between
+    #     consecutive actor updates because the critic takes update_interval
+    #     gradient steps in between. An EMA at ema_weight=0.99 cannot track
+    #     that, and exponentiating the residual swings the mean weight (and so
+    #     the effective lr) by orders of magnitude from one step to the next.
+    # The EMA is still updated from these numbers, but only for logging.
+    group_stats = (
+        _per_group_stats(advantage, task_id, int(jnp.asarray(scale).shape[0]), config)
+        if task_id is not None
+        else None
+    )
+    if group_stats is not None and config.rl.normalize_advantages:
+        adv_bias = group_stats["group_batch_bias"][task_id]
+        adv_scale = group_stats["group_batch_scale"][task_id]
     else:
-        adv_bias = jnp.asarray(bias)[task_id]
-        adv_scale = jnp.asarray(scale)[task_id]
+        adv_bias, adv_scale = bias, scale
     normalized_advantage = (advantage - adv_bias) / adv_scale
 
     # (1) relu: non-exponentiated max(adv, 0) weights; exp: standard AWR weights.
@@ -256,9 +266,9 @@ def train_step(
         "weight_ess_frac": jnp.square(jnp.sum(score)) / (advantage.shape[0] * jnp.sum(jnp.square(score))),
     } | aux_data
 
-    if task_id is not None:
+    if group_stats is not None:
         num_groups = int(jnp.asarray(scale).shape[0])
-        group_info = _per_group_stats(advantage, task_id, num_groups, config)
+        group_info = dict(group_stats)
         onehot = jax.nn.one_hot(task_id, num_groups)
         weight_sum = jnp.sum(onehot * score[:, jnp.newaxis], axis=0)
         # Share of the batch's total weight mass going to each task -- the

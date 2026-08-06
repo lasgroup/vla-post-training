@@ -67,20 +67,33 @@ echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 #     (advantage_weighted_sft_learner.py:578).
 #
 # Advantages are normalized PER TASK (rl.normalize_advantages). The weight is
-# exp((A - bias[task]) / (scale[task] * beta)), with bias/scale an EMA of that
-# task's own q05 and q95-q05. Without it the weight is exp of a raw Q-V, and
-# Q-V carries a per-task offset from the critic's level error: at beta=1 an
-# offset of 2.3 (1.2% of the value scale, well under the critic's own TD RMSE
-# of 4.8) is a 10x weight ratio between tasks, so one task takes most of the
-# batch's weight mass. That is why every previous multi-task run improved only
-# libero_90_31 at beta = 0.05, 1 and 10 alike, while the same config works
-# single-task. Watch actor/weight_share/<task>: it should sit near 1/4.
+# exp((A - bias[task]) / (scale[task] * beta)), where bias/scale are that task's
+# q05 and q95-q05 computed from the batch being scored -- a group baseline, not
+# an EMA. It removes two things at once:
+#   - the per-task offset in Q - V (critic level error). At beta=1 an offset of
+#     2.3 (1.2% of the value scale, well under the critic's own TD RMSE of 4.8)
+#     is a 10x weight ratio between tasks, so one task takes most of the batch's
+#     weight mass. That is why every previous multi-task run improved only
+#     libero_90_31 at beta = 0.05, 1 and 10 alike, while the same config works
+#     single-task.
+#   - the common-mode level, which moves several value units between actor
+#     updates because the critic takes update_interval steps in between. Run
+#     45a4ss6k tried an EMA (ema_weight 0.99) instead and could not track it:
+#     actor/weight_mean swung 3000x step to step, and grad_norm with it.
+# The EMA is still logged as actor/normalizer_{bias,scale}/<task>, diagnostics
+# only. Watch actor/weight_share/<task>: it should sit near 1/4.
 #
 # beta must be retuned for the new units — the exponent is now ~[0,1] between
-# a task's q05 and q95, not raw value units. beta=0.5 puts ESS/N near 0.4
-# (from the logged spread, std/(q95-q05) = 0.47), i.e. F-SFT-like selectivity;
-# lower it toward 0.4 to sharpen, raise past 1.0 and the weights go uniform.
-# weight_clip=3 then binds half a spread above q95, capping the top at 20x.
+# a task's q05 and q95, not raw value units, so the old 1.0 is nearly uniform.
+#
+# With this advantage distribution weight_clip, not beta, sets selectivity: it
+# is heavy-tailed (advantage_max ran 47-70 at std 1.2, i.e. ~50 sigma), so the
+# top of the batch is always against the clip and ESS/N sits at ~0.6 for any
+# beta in [0.3, 0.5] — beta only moves the mean weight (E[w] 6.9 -> 3.3 over
+# that range). Raising the clip to 5 would buy ESS/N ~0.2, F-SFT-like, but only
+# by letting 148x weights through onto what are most likely critic outliers
+# rather than real advantage. Keep the clip tight and get selectivity from
+# rl.filtered_sft_weight instead if 0.6 proves too flat.
 #
 # min_scale=0.1 because the default floor of 1.0 exceeds the per-task spread
 # and would silently disable the scale half of the normalization.
