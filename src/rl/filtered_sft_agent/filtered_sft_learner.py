@@ -437,6 +437,35 @@ class FilteredSFTLearner(Agent):
             donate_argnums=(1,),
         )
 
+    @property
+    def task_group_ids(self) -> list[str]:
+        """Canonical task ordering used for all per-task statistics.
+
+        collect.tasks is already expanded (ranges, multipliers) by
+        CollectionConfig.__post_init__, so dedupe while preserving order. Keyed
+        on the task id rather than the language prompt because distinct tasks
+        can share a prompt (e.g. libero_90_79 and libero_90_82).
+        """
+        cached = getattr(self, "_task_group_ids", None)
+        if cached is None:
+            cached = list(dict.fromkeys(self._config.collect.tasks))
+            self._task_group_ids = cached
+        return cached
+
+    @property
+    def num_task_groups(self) -> int:
+        """One group per task, plus a trailing group for transitions with no
+        task id (offline SFT data, or a caller that never passes one)."""
+        return len(self.task_group_ids) + 1
+
+    def _task_group_index(self, task_id: str | None) -> int:
+        if task_id is None:
+            return len(self.task_group_ids)
+        try:
+            return self.task_group_ids.index(task_id)
+        except ValueError:
+            return len(self.task_group_ids)
+
     def _make_buffer_dummy_data(self) -> dict:
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
         obs_spec_dict = obs_spec.to_dict()
@@ -455,6 +484,7 @@ class FilteredSFTLearner(Agent):
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
             "is_success": np.zeros((1,), dtype=np.float32),
+            "task_id": np.zeros((1,), dtype=np.int32),
         }
 
     def _get_online_replay_buffer(
@@ -701,7 +731,7 @@ class FilteredSFTLearner(Agent):
             )
             next_prefix = prefix
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None):
 
         assert env_index in range(
             len(self._episode_storage)
@@ -711,9 +741,9 @@ class FilteredSFTLearner(Agent):
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
         if is_success:
-            self._save_episode_in_buffer(episode_data, task_description, is_success=True)
+            self._save_episode_in_buffer(episode_data, task_description, is_success=True, task_id=task_id)
 
-    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
+    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None, task_id: str | None = None):
         # target_buffer allows PARL (and other wrappers) to redirect an episode
         # into a separate buffer without subclassing or duplicating preprocessing.
 
@@ -795,6 +825,7 @@ class FilteredSFTLearner(Agent):
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),
                 "is_success": _is_success,
+                "task_id": np.full((n_windows,), self._task_group_index(task_id), dtype=np.int32),
             }
         )
         if target_buffer is None:

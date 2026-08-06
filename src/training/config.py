@@ -32,24 +32,44 @@ class NormalizerState:
 
 
 class Normalizer:
-    def __init__(self, ema_weight: float = 0.99):
+    """EMA of the advantage location/spread, tracked separately per task group.
+
+    A single global bias is a no-op on AWR weights -- subtracting a constant
+    from every advantage multiplies every weight by the same factor, which only
+    rescales the gradient. Only a per-group baseline changes the *relative*
+    weight of one task against another, which is what a multi-task batch needs.
+    """
+
+    def __init__(self, ema_weight: float = 0.99, num_groups: int = 1):
         self._ema_weight = ema_weight
+        self._num_groups = num_groups
 
     def init(self) -> NormalizerState:
         return NormalizerState(
-            bias=jnp.array(0.0),
-            scale=jnp.array(1.0),
+            bias=jnp.zeros((self._num_groups,), dtype=jnp.float32),
+            scale=jnp.ones((self._num_groups,), dtype=jnp.float32),
             ema_weight=self._ema_weight,
         )
 
     @staticmethod
     @jax.jit
-    def update(normalizer_state: NormalizerState, bias: jax.Array, scale: jax.Array) -> NormalizerState:
+    def update(
+        normalizer_state: NormalizerState,
+        bias: jax.Array,
+        scale: jax.Array,
+        mask: jax.Array | None = None,
+    ) -> NormalizerState:
         prev_bias = normalizer_state.bias
         prev_scale = normalizer_state.scale
         ema_weight = normalizer_state.ema_weight
         new_bias = (1.0 - ema_weight) * bias + ema_weight * prev_bias
         new_scale = (1.0 - ema_weight) * scale + ema_weight * prev_scale
+        if mask is not None:
+            # A group with no samples in this batch reports a placeholder; keep
+            # its previous estimate rather than letting the placeholder in.
+            mask = mask.astype(new_bias.dtype)
+            new_bias = mask * new_bias + (1.0 - mask) * prev_bias
+            new_scale = mask * new_scale + (1.0 - mask) * prev_scale
         return normalizer_state.replace(bias=new_bias, scale=new_scale)
 
 

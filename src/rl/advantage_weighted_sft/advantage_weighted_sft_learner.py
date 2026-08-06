@@ -95,8 +95,11 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             critic_def=state_value_def,
             dummy_obs=dummy_obs,
         )
+        # One normalizer group per collected task, plus a trailing group for
+        # transitions with no task id (offline SFT data).
         self._normalizer = Normalizer(
             ema_weight=self._config.rl.normalizer_config.ema_weight,
+            num_groups=self.num_task_groups,
         )
         self._normalizer_state = jax.device_put(
             self._normalizer.init(), self._replicated_sharding
@@ -128,7 +131,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 rng=rng,
             )
 
-        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, is_success, scale):
+        def _policy_wrapper(batch, policy_state, q_state, value_state, rng, mc_return, is_success, scale, bias, task_id):
             return self._update_policy(
                 batch=batch,
                 policy_state=policy_state,
@@ -138,6 +141,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 mc_return=mc_return,
                 is_success=is_success,
                 scale=scale,
+                bias=bias,
+                task_id=task_id,
             )
 
         self._update_critics_jitted = jax.jit(
@@ -169,6 +174,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 self._data_sharding,
                 self._data_sharding,
                 self._replicated_sharding,
+                self._replicated_sharding,
+                self._data_sharding,
             ),
             out_shardings=(
                 self._train_state_sharding,
@@ -481,7 +488,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None):
         assert env_index in range(
             len(self._episode_storage)
         ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
@@ -490,18 +497,40 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._episode_storage[env_index] = []
         if self._config.rl.store_success_episodes_only and not is_success:
             return
-        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
+        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success, task_id=task_id)
 
-    def _update_normalizer(self, normalizer_state, bias, scale) -> tuple[NormalizerState, dict[str, at.Array]]:
+    def _update_normalizer(self, normalizer_state, bias, scale, mask=None) -> tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(
             normalizer_state=normalizer_state,
             bias=bias,
             scale=scale,
+            mask=mask,
         )
         return normalizer_state, {
+            # Scalars keep the pre-existing metric names; the per-task arrays
+            # are expanded into normalizer_bias/<task> by _expand_group_metrics.
             'normalizer_bias': jnp.mean(normalizer_state.bias),
             'normalizer_scale': jnp.mean(normalizer_state.scale),
+            'group_normalizer_bias': normalizer_state.bias,
+            'group_normalizer_scale': normalizer_state.scale,
         }
+
+    def _expand_group_metrics(self, info: dict) -> dict:
+        """Turn (num_groups,) `group_*` metrics into one scalar per task name."""
+        names = [*self.task_group_ids, "offline"]
+        expanded = {}
+        for key, value in info.items():
+            if not key.startswith("group_"):
+                expanded[key] = value
+                continue
+            array = np.asarray(value)
+            if array.ndim != 1 or array.shape[0] != self.num_task_groups:
+                expanded[key] = value
+                continue
+            stem = key[len("group_"):]
+            for name, entry in zip(names, array):
+                expanded[f"{stem}/{name}"] = entry
+        return expanded
 
     @at.typecheck
     def _update_critics(
@@ -553,6 +582,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         mc_return: at.Array | None = None,
         is_success: at.Float[at.Array, " b"] | None = None,
         scale: at.Array | float = 1.0,
+        bias: at.Array | float = 0.0,
+        task_id: at.Int[at.Array, " b"] | None = None,
     ):
         # Add prefix representation to the batch
         batch = self._sft_batch_to_actor_batch(
@@ -569,6 +600,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             mc_return=mc_return,
             is_success=is_success,
             scale=scale,
+            bias=bias,
+            task_id=task_id,
         )
 
         return policy_state, info
@@ -631,6 +664,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         critic_info, actor_info = {}, {}
         mc_return = None
         is_success = None
+        task_id = None
+        # Offline SFT samples carry no task id; they get the trailing group.
+        offline_group = len(self.task_group_ids)
         if use_online:
             # Two independent samples: critics may use a larger batch than the policy.
             critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size) if update_critic else None
@@ -660,11 +696,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     "(MC returns are not available for offline data)"
                 )
             online_is_success = jnp.asarray(online_batch["is_success"], dtype=jnp.float32)
+            online_task_id = jnp.asarray(online_batch["task_id"], dtype=jnp.int32)
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = self._config.rl.online_ratio
             if online_ratio >= 1.0:
                 batch = online_batch
                 is_success = online_is_success
+                task_id = online_task_id
             elif online_ratio > 0:
                 # Mix online and offline into a fixed-size batch instead of
                 # concatenating (which would double the batch and OOM).
@@ -690,6 +728,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     jnp.ones(n_offline, dtype=jnp.float32),
                     online_is_success[:n_online],
                 ])
+                task_id = jnp.concatenate([
+                    jnp.full((n_offline,), offline_group, dtype=jnp.int32),
+                    online_task_id[:n_online],
+                ])
                 del online_batch
                 gc.collect()
             else:
@@ -698,6 +740,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 first_leaf = jax.tree.leaves(batch)[0]
                 # Assumes all offline data is successful demos
                 is_success = jnp.ones(first_leaf.shape[0], dtype=jnp.float32)
+                task_id = jnp.full((first_leaf.shape[0],), offline_group, dtype=jnp.int32)
         else:
             if self._data_iter is None:
                 return {
@@ -710,9 +753,18 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             first_leaf = jax.tree.leaves(batch)[0]
             # Assumes all offline data is successful demos
             is_success = jnp.ones(first_leaf.shape[0], dtype=jnp.float32)
+            task_id = jnp.full((first_leaf.shape[0],), offline_group, dtype=jnp.int32)
         if update_policy:
             policy_rng, self._rng = jax.random.split(self._rng, 2)
-            scale = self._normalizer_state.scale if self._config.rl.normalize_advantages else 1.0
+            # Always pass (num_groups,) arrays so the per-task diagnostics are
+            # logged even with normalize_advantages off, where they reduce to
+            # the identity (bias 0, scale 1) and nothing about the loss changes.
+            if self._config.rl.normalize_advantages:
+                scale = self._normalizer_state.scale
+                bias = self._normalizer_state.bias
+            else:
+                scale = jnp.ones((self.num_task_groups,), dtype=jnp.float32)
+                bias = jnp.zeros((self.num_task_groups,), dtype=jnp.float32)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,
@@ -723,32 +775,21 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     mc_return,
                     is_success,
                     scale,
+                    bias,
+                    task_id,
                 )
 
             self._train_state = policy_state
             self._ema = self._ema_update_fn(self._ema, self._train_state.params)
-            scale, bias = 1.0, 0.0
-            normalizer_config = self._config.rl.normalizer_config
-            if normalizer_config.method is not None:
-                if normalizer_config.method == 'quantile':
-                    q_up, q_low = actor_info['advantage_q_up'], actor_info['advantage_q_low']
-                    scale = q_up - q_low
-                    bias = q_low
-                elif normalizer_config.method == 'standard_normal':
-                    scale = actor_info['advantage_std']
-                    bias = actor_info['advantage_mean']
-                elif normalizer_config.method == 'min_max':
-                    q_max, q_min = actor_info['advantage_max'], actor_info['advantage_min']
-                    scale = q_max - q_min
-                    bias = q_min
-                else:
-                    raise NotImplementedError
-                scale = jnp.clip(scale, min=normalizer_config.min_scale)
+            # train_step already reduced this batch's advantages per task group
+            # under normalizer_config.method; EMA only the groups it saw.
             self._normalizer_state, normalizer_info = self._update_normalizer(
                 normalizer_state=self._normalizer_state,
-                bias=bias,
-                scale=scale)
+                bias=actor_info['group_batch_bias'],
+                scale=actor_info['group_batch_scale'],
+                mask=actor_info['group_count'] > 0)
             actor_info = actor_info | normalizer_info
+            actor_info = self._expand_group_metrics(actor_info)
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
         info = (

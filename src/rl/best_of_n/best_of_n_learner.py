@@ -299,13 +299,13 @@ class BestofNLearner(FilteredSFTLearner):
 
         return policy_observation, critic_observation, actions
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None):
         assert env_index in range(len(self._episode_storage)), \
             f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
+        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success, task_id=task_id)
 
     @staticmethod
     def _pad_last_dim(arr: np.ndarray, target_dim: int) -> np.ndarray:

@@ -26,6 +26,60 @@ def _awr_beta(config: OnlineTrainConfig) -> float:
     return max(beta, 1e-6)
 
 
+def _per_group_stats(
+    advantage: at.Float[at.Array, " b"],
+    task_id: at.Int[at.Array, " b"],
+    num_groups: int,
+    config: OnlineTrainConfig,
+) -> dict[str, at.Array]:
+    """Advantage location/spread per task group, for the next EMA update.
+
+    Everything is a masked reduction over a fixed (num_groups, b) layout so the
+    shapes stay static under jit. Groups absent from this batch report zeros and
+    are filtered out by `count > 0` when the EMA is applied.
+    """
+    normalizer_config = config.rl.normalizer_config
+    onehot = jax.nn.one_hot(task_id, num_groups)  # (b, g)
+    count = jnp.sum(onehot, axis=0)  # (g,)
+    present = count > 0
+    denom = jnp.maximum(count, 1.0)
+
+    mean = jnp.sum(onehot * advantage[:, jnp.newaxis], axis=0) / denom
+    var = jnp.sum(onehot * (advantage[:, jnp.newaxis] - mean[jnp.newaxis, :]) ** 2, axis=0) / denom
+    std = jnp.sqrt(var)
+
+    # NaN out non-members so the quantiles see only this group's samples.
+    masked = jnp.where(onehot.T > 0, advantage[jnp.newaxis, :], jnp.nan)  # (g, b)
+    zero = jnp.zeros_like(count)
+    q_low = jnp.where(present, jnp.nanquantile(masked, normalizer_config.q_low, axis=-1), zero)
+    q_up = jnp.where(present, jnp.nanquantile(masked, normalizer_config.q_up, axis=-1), zero)
+    a_min = jnp.where(present, jnp.nanmin(masked, axis=-1), zero)
+    a_max = jnp.where(present, jnp.nanmax(masked, axis=-1), zero)
+    mean = jnp.where(present, mean, zero)
+    std = jnp.where(present, std, zero)
+
+    if normalizer_config.method == "quantile":
+        bias, scale = q_low, q_up - q_low
+    elif normalizer_config.method == "standard_normal":
+        bias, scale = mean, std
+    elif normalizer_config.method == "min_max":
+        bias, scale = a_min, a_max - a_min
+    elif normalizer_config.method is None:
+        bias, scale = zero, jnp.ones_like(count)
+    else:
+        raise NotImplementedError(f"normalizer method {normalizer_config.method!r}")
+
+    return {
+        "group_count": count,
+        "group_batch_bias": bias,
+        "group_batch_scale": jnp.clip(scale, min=normalizer_config.min_scale),
+        "group_advantage_mean": mean,
+        "group_advantage_std": std,
+        "group_advantage_q_low": q_low,
+        "group_advantage_q_up": q_up,
+    }
+
+
 @at.typecheck
 def train_step(
     config: OnlineTrainConfig,
@@ -37,6 +91,8 @@ def train_step(
     mc_return: at.Array | None = None,
     is_success: at.Float[at.Array, " b"] | None = None,
     scale: at.Array | float = 1.0,
+    bias: at.Array | float = 0.0,
+    task_id: at.Int[at.Array, " b"] | None = None,
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     policy_observation, critic_observation, actions = batch
 
@@ -73,11 +129,23 @@ def train_step(
                 state_action_critic(critic_observation, critic_actions), config
             )  # (B,)
             advantage = q_value - value  # (B, )
+    # Per-task baseline: `bias`/`scale` are (num_groups,) EMAs, gathered per
+    # sample. Centering only matters group-wise -- a single global bias shifts
+    # every exponent equally and cancels out of the relative weights, so a
+    # per-task offset in Q - V (the critic's level error, which is far larger
+    # here than the advantage itself) is what decides which task wins the batch.
+    if task_id is None:
+        adv_bias, adv_scale = bias, scale
+    else:
+        adv_bias = jnp.asarray(bias)[task_id]
+        adv_scale = jnp.asarray(scale)[task_id]
+    normalized_advantage = (advantage - adv_bias) / adv_scale
+
     # (1) relu: non-exponentiated max(adv, 0) weights; exp: standard AWR weights.
     if config.rl.advantage_weight_type == "relu":
-        score = jax.nn.relu(advantage / scale)
+        score = jax.nn.relu(normalized_advantage)
     else:
-        score = advantage / scale
+        score = normalized_advantage
         score = score / _awr_beta(config)
         score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
         score = jnp.exp(score)
@@ -181,5 +249,23 @@ def train_step(
         "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_up),
         "advantage_median": jnp.median(advantage),  # or jnp.quantile(advantage, 0.50)
         "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_low),
+        "weight_mean": jnp.mean(score),
+        "weight_max": jnp.max(score),
+        # Effective sample size of the weights as a fraction of the batch. 1.0
+        # means uniform (plain BC); near 1/b means the loss is an argmax.
+        "weight_ess_frac": jnp.square(jnp.sum(score)) / (advantage.shape[0] * jnp.sum(jnp.square(score))),
     } | aux_data
+
+    if task_id is not None:
+        num_groups = int(jnp.asarray(scale).shape[0])
+        group_info = _per_group_stats(advantage, task_id, num_groups, config)
+        onehot = jax.nn.one_hot(task_id, num_groups)
+        weight_sum = jnp.sum(onehot * score[:, jnp.newaxis], axis=0)
+        # Share of the batch's total weight mass going to each task -- the
+        # direct measure of one task crowding the others out of the gradient.
+        group_info["group_weight_share"] = weight_sum / jnp.maximum(jnp.sum(score), 1e-12)
+        group_info["group_weight_mean"] = weight_sum / jnp.maximum(group_info["group_count"], 1.0)
+        group_info["group_batch_share"] = group_info["group_count"] / advantage.shape[0]
+        info = info | group_info
+
     return new_state, info

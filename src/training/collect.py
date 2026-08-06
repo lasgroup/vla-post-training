@@ -239,6 +239,7 @@ def collect_data(
                     is_success=success,
                     env_index=int(env_index),
                     task_description=info["task_description"][env_index],
+                    task_id=current_task_ids[env_index],
                 )
 
                 if repeated_task_ids:

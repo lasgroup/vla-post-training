@@ -102,6 +102,8 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
         mc_return: at.Array | None = None,
         is_success: at.Float[at.Array, " b"] | None = None,
         scale: at.Array | float = 1.0,
+        bias: at.Array | float = 0.0,
+        task_id: at.Int[at.Array, " b"] | None = None,
     ):
         assert isinstance(self._config.rl, MPOWeightedSFTLearnerConfig)
         if not self._config.rl.store_buffer_actions_in_batch:
@@ -127,6 +129,8 @@ class MPOWeightedSFTLearner(AdvantageWeightedSFTLearner):
             mc_return=mc_return,
             is_success=is_success,
             scale=scale,
+            bias=bias,
+            task_id=task_id,
         )
 
         return policy_state, info

@@ -66,13 +66,30 @@ echo "[awr] node=$(hostname) job=${SLURM_JOB_ID:-none} exp=${EXP_NAME}"
 #   pre_training_steps 0 -> no q/v optimizer reset + EMA re-seed at step 1000
 #     (advantage_weighted_sft_learner.py:578).
 #
-# beta=10 is the per-transition reward magnitude: with r=-1/step, discount
-# 0.995 and action_horizon 10, each stored transition's reward is
-# -(1-0.995^10)/0.005 = -9.78, so one chunk of delay costs one unit of
-# exponent. Returns span [-173, 0] (see get_value_bounds), so the old
-# beta=0.05 saturated the exp against weight_clip for any |A| > 1 — the
-# weight degenerated into a hard argmax over the batch.
-# advantage_scale=1.0 keeps the mean weight comparable to FSFT's 1.0.
+# Advantages are normalized PER TASK (rl.normalize_advantages). The weight is
+# exp((A - bias[task]) / (scale[task] * beta)), with bias/scale an EMA of that
+# task's own q05 and q95-q05. Without it the weight is exp of a raw Q-V, and
+# Q-V carries a per-task offset from the critic's level error: at beta=1 an
+# offset of 2.3 (1.2% of the value scale, well under the critic's own TD RMSE
+# of 4.8) is a 10x weight ratio between tasks, so one task takes most of the
+# batch's weight mass. That is why every previous multi-task run improved only
+# libero_90_31 at beta = 0.05, 1 and 10 alike, while the same config works
+# single-task. Watch actor/weight_share/<task>: it should sit near 1/4.
+#
+# beta must be retuned for the new units — the exponent is now ~[0,1] between
+# a task's q05 and q95, not raw value units. beta=0.5 puts ESS/N near 0.4
+# (from the logged spread, std/(q95-q05) = 0.47), i.e. F-SFT-like selectivity;
+# lower it toward 0.4 to sharpen, raise past 1.0 and the weights go uniform.
+# weight_clip=3 then binds half a spread above q95, capping the top at 20x.
+#
+# min_scale=0.1 because the default floor of 1.0 exceeds the per-task spread
+# and would silently disable the scale half of the normalization.
+#
+# advantage_scale offsets the mean weight: centering on q05 makes every weight
+# >= 1, so the gradient is ~3-4x an unweighted BC step (estimated from the
+# logged quantiles). 3.5 is that estimate — read actor/weight_mean off the
+# first few hundred steps and set this to it, or the lr is no longer matched
+# to fsft_libero_babel.sh.
 #
 # Untouched AWR-only knobs worth revisiting:
 # --rl.advantage_weight_type relu \
@@ -116,7 +133,10 @@ exec uv run scripts/exp.py \
   --rl.critic.td_weight_schedule.switch_step 999999 \
   --rl.critic.use_bronet \
   --rl.critic.bronet_hidden_dim 1024 \
-  --rl.beta 1.0 \
-  --rl.advantage_scale 1.0 \
+  --rl.beta 0.5 \
+  --rl.advantage_scale 3.5 \
   --rl.weight_clip 3.0 \
+  --rl.normalize_advantages \
+  --rl.normalizer_config.method quantile \
+  --rl.normalizer_config.min_scale 0.1 \
   --batch_size 256
