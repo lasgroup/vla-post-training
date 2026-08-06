@@ -228,6 +228,29 @@ def sample_and_advantage(
     if rl.adv_clip_min is not None:
         advantage = jnp.maximum(advantage, rl.adv_clip_min)
     advantage = advantage.reshape(-1)  # [B*G]
+
+    if rl.normalize_advantage_per_task:
+        # Per-task advantage normalization (multitask): scale each sample's
+        # advantage by the std of advantages sharing its task, so cross-task
+        # value-scale differences can't dominate the PPO gradient. Tasks are
+        # identified by hashing the tokenized prompt (identical prompt ==
+        # identical task); soft one-hot masks keep it jit-friendly for any
+        # number of distinct tasks in the batch.
+        prompt = policy_observation.tokenized_prompt  # [B, L] int32
+        # simple order-sensitive hash per row
+        L = prompt.shape[-1]
+        weights = (jnp.arange(L, dtype=jnp.int64) * 2654435761) % (2**31 - 1)
+        task_id = jnp.sum(prompt.astype(jnp.int64) * weights, axis=-1)  # [B]
+        task_id = jnp.repeat(task_id, G, axis=0)  # [B*G]
+        same = (task_id[:, None] == task_id[None, :]).astype(advantage.dtype)  # [BG, BG]
+        cnt = jnp.sum(same, axis=1)
+        mean_t = jnp.sum(same * advantage[None, :], axis=1) / cnt
+        var_t = jnp.sum(same * (advantage[None, :] - mean_t[:, None]) ** 2, axis=1) / cnt
+        std_t = jnp.sqrt(var_t + 1e-8)
+        # normalize scale only (mean is already handled by the group baseline /
+        # V-centering) and guard the degenerate all-equal case.
+        advantage = advantage / jnp.maximum(std_t, 1e-3)
+
     advantage = jax.lax.stop_gradient(advantage)
 
     # q_mean/v_mean/advantage_* live here because they reduce q_value/v_value/

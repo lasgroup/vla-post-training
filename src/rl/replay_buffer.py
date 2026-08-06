@@ -131,14 +131,29 @@ class ShardedReplayBuffer:
             self.valid_start += 1
         self.size = int(self.total_inserted - self.valid_start)
 
-    def sample(self, batch_size=None, *, drop_obs_keys: tuple[str, ...] = ()) -> Any:
+    def sample(
+        self,
+        batch_size=None,
+        *,
+        drop_obs_keys: tuple[str, ...] = (),
+        ordinals: "np.ndarray | None" = None,
+    ) -> Any:
         if self.size == 0:
             raise ValueError("Cannot sample from an empty buffer")
         if batch_size is None:
             assert self.batch_size is not None, "Batch size must be specified for sampling"
             batch_size = self.batch_size
 
-        ordinals = self._rng.integers(self.valid_start, self.total_inserted, size=batch_size)
+        if ordinals is None:
+            ordinals = self._rng.integers(self.valid_start, self.total_inserted, size=batch_size)
+        else:
+            # Caller-provided ordinals (e.g. task-balanced success sampling).
+            # Must reference live transitions.
+            ordinals = np.asarray(ordinals, dtype=np.int64)
+            if ordinals.shape[0] != batch_size:
+                raise ValueError(f"ordinals length {ordinals.shape[0]} != batch_size {batch_size}")
+            if ordinals.min() < self.valid_start or ordinals.max() >= self.total_inserted:
+                raise ValueError("ordinals reference evicted or unwritten transitions")
         ring = (ordinals % self.max_capacity).astype(np.int64)
 
         transition = self._storage_treedef.unflatten([leaf[ring] for leaf in self._storage_leaves])

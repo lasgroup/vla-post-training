@@ -69,6 +69,9 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         # the BC anchor samples from it once it holds a full batch. Same schema
         # as the online buffer (built from the same dummy data).
         self._success_data_buffer = None
+        # task_description -> list of (start, end) ordinal ranges in the
+        # success buffer, used by balance_success_buffer_tasks sampling.
+        self._success_task_ranges = {}
         if self._config.rl.use_success_buffer:
             import dataclasses as _dc
             success_cfg = _dc.replace(
@@ -100,12 +103,20 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 }
                 for step in self._episode_storage[env_index]
             ]
+            before = self._success_data_buffer.total_inserted
             self._save_episode_in_buffer(
                 episode_copy,
                 task_description,
                 is_success=True,
                 target_buffer=self._success_data_buffer,
             )
+            after = self._success_data_buffer.total_inserted
+            # Record which ordinal range belongs to this task, for
+            # task-balanced BC sampling (host-side bookkeeping only).
+            if after > before:
+                self._success_task_ranges.setdefault(str(task_description), []).append(
+                    (before, after)
+                )
         super().save_episode(
             is_success=is_success,
             env_index=env_index,
@@ -309,8 +320,12 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 self._success_data_buffer is not None
                 and self._success_data_buffer.size >= online_batch_size
             ):
+                ordinals = None
+                if rl_config.balance_success_buffer_tasks:
+                    ordinals = self._balanced_success_ordinals(online_batch_size)
                 success_batch = self._success_data_buffer.sample(
-                    batch_size=online_batch_size
+                    batch_size=online_batch_size,
+                    ordinals=ordinals,
                 )
                 bc_observation, bc_actions, _ = self._online_batch_to_sft_batch(
                     success_batch
@@ -401,6 +416,46 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         # normalizes + jax.device_get()s at log_interval, so materializing here
         # is pure overhead. Values are identical, just fetched lazily.
         return info
+
+    def _balanced_success_ordinals(self, batch_size: int) -> "np.ndarray | None":
+        """Ordinals for a task-balanced sample of the success buffer.
+
+        Splits the batch equally across tasks that have live (non-evicted)
+        success transitions, sampling uniformly within each task's ordinal
+        ranges. Falls back to None (uniform sampling) if fewer than 2 tasks
+        have live data. Remainder slots go to the largest task pools.
+        """
+        buf = self._success_data_buffer
+        live = {}
+        for task, ranges in self._success_task_ranges.items():
+            ords = []
+            for lo, hi in ranges:
+                lo2 = max(lo, buf.valid_start)
+                if hi > lo2:
+                    ords.append((lo2, hi))
+            n = sum(hi - lo for lo, hi in ords)
+            if n > 0:
+                live[task] = (ords, n)
+        if len(live) < 2:
+            return None
+        tasks = sorted(live, key=lambda t: -live[t][1])
+        per = batch_size // len(tasks)
+        counts = {t: per for t in tasks}
+        for i in range(batch_size - per * len(tasks)):
+            counts[tasks[i % len(tasks)]] += 1
+        out = []
+        rng = buf._rng
+        for t in tasks:
+            ords, n = live[t]
+            flat = rng.integers(0, n, size=counts[t])
+            # map flat indices into the task's (possibly multiple) ranges
+            spans = np.array([hi - lo for lo, hi in ords])
+            starts = np.array([lo for lo, _ in ords])
+            cum = np.cumsum(spans)
+            seg = np.searchsorted(cum, flat, side="right")
+            offset = flat - np.where(seg > 0, cum[seg - 1], 0)
+            out.append(starts[seg] + offset)
+        return np.concatenate(out)
 
     def _online_batch_to_sft_batch(
         self, online_batch: dict

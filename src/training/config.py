@@ -235,6 +235,14 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # Semantically equivalent (allclose, certified by tests/ogpo/
     # test_group_dedup.py); big win for group_num_samples > 1.
     dedup_group_prefix: bool = False
+    # Multitask: normalize advantages by the per-task std within the batch
+    # (tasks identified by tokenized prompt). Equalizes advantage scale across
+    # tasks so cross-task value differences can't dominate the PPO gradient.
+    normalize_advantage_per_task: bool = False
+    # Multitask: sample the success-buffer BC batch balanced across tasks
+    # (equal share per task with recorded successes) instead of uniformly over
+    # transitions, so abundant-success tasks don't monopolize the BC anchor.
+    balance_success_buffer_tasks: bool = False
     # Treat the EMA train state as the "old" policy (PPO denominator).
     # When False, the current params are used (stop-gradient'd).
     use_ema_as_old_policy: bool = True
