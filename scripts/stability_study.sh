@@ -24,6 +24,9 @@ set -euo pipefail
 SEED="${SEED:-0}"
 EMA="${EMA:-0.99}"
 
+# Non-interactive shells (nohup over ssh) miss ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
+
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 STORE_ROOT="${STORE_ROOT:-$PROJECT_DIR/run_store}"
 EXP_NAME="stab_${ARM}"
