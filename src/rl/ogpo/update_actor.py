@@ -60,6 +60,30 @@ from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig, OGPOSFTLearnerConfig
 
 
+def _grpo_conservative_advantage(q_heads: jax.Array, B: int, G: int) -> jax.Array:
+    """Conservative GRPO advantage on Q only — V never enters.
+
+    Each Q head is centered by ITS OWN group mean (per-head GRPO baseline:
+    A_i = Q_i - mean_G(Q_i)), then the heads are combined sign-unanimously:
+    positive only if every head ranks the sample above its group mean (take
+    the smallest margin), negative only if every head ranks it below (take
+    the smallest magnitude), zero on disagreement.
+
+    Ordering matters: center-then-gate makes the result invariant to any
+    per-head, per-state offset (e.g. a V(s) shift) — gate-then-center would
+    not be, which is exactly the V-confusion this mode removes. The output is
+    NOT re-centered afterwards: re-centering would shift the disagreement
+    zeros off zero and destroy the no-gradient-on-disputed-samples property.
+    """
+    n = q_heads.shape[0]
+    heads = q_heads.reshape(n, B, G)
+    heads = heads - heads.mean(axis=-1, keepdims=True)
+    heads = heads.reshape(n, B * G)
+    return jnp.maximum(jnp.min(heads, axis=0), 0.0) + jnp.minimum(
+        jnp.max(heads, axis=0), 0.0
+    )
+
+
 def _group_baseline(adv: jax.Array, B: int, G: int, strategy: str) -> jax.Array:
     """Return a per-state baseline ``[B, 1]`` that will be broadcast over G."""
     adv_g = adv.reshape(B, G)
@@ -204,27 +228,42 @@ def sample_and_advantage(
     v_value = summarize_critic_values(
         v_logits, config, critic_reduction=rl.critic.reduction
     )  # [B*G]
-    if rl.advantage_combination == "conservative":
-        # Per-head A_i = Q_i - V_i, combined sign-unanimously (mirrors the AWR
-        # actor's conservative branch): positive only if every head agrees it's
-        # positive (take the smallest), negative only if every head agrees it's
-        # negative (take the smallest magnitude), zero on sign disagreement.
-        assert rl.critic.num_qs == rl.critic.num_vs, (
-            "conservative advantage needs num_qs == num_vs"
-        )
-        adv_heads = (
-            critic_values_per_head(q_logits, config)
-            - critic_values_per_head(v_logits, config)
-        )  # (n, B*G)
-        advantage_raw = jnp.maximum(jnp.min(adv_heads, axis=0), 0.0) + jnp.minimum(
-            jnp.max(adv_heads, axis=0), 0.0
-        )  # [B*G]
-    else:
-        advantage_raw = q_value - v_value  # [B*G]
-
     B = jax.tree.leaves(policy_observation)[0].shape[0]
-    baseline = _group_baseline(advantage_raw, B, G, rl.adv_strategy)  # [B, 1]
-    advantage = advantage_raw.reshape(B, G) - baseline
+    if rl.advantage_combination == "grpo_conservative":
+        # Pure-GRPO conservative advantage: per-head Q_i - mean_G(Q_i), gated
+        # sign-unanimously across heads. V(s) NEVER enters this advantage (it
+        # would cancel per-head anyway; this mode makes that explicit rather
+        # than incidental). Centering lives inside the helper, so the group
+        # baseline below must not run again.
+        assert G > 1, "grpo_conservative needs group_num_samples > 1"
+        assert rl.adv_strategy == "vanilla", (
+            "grpo_conservative embeds the vanilla (group-mean) baseline; "
+            f"adv_strategy={rl.adv_strategy!r} would silently conflict"
+        )
+        q_heads = critic_values_per_head(q_logits, config)  # (n, B*G)
+        advantage = _grpo_conservative_advantage(q_heads, B, G)  # [B*G], centered+gated
+        advantage = advantage.reshape(B, G)
+    else:
+        if rl.advantage_combination == "conservative":
+            # Per-head A_i = Q_i - V_i, combined sign-unanimously (mirrors the AWR
+            # actor's conservative branch): positive only if every head agrees it's
+            # positive (take the smallest), negative only if every head agrees it's
+            # negative (take the smallest magnitude), zero on sign disagreement.
+            assert rl.critic.num_qs == rl.critic.num_vs, (
+                "conservative advantage needs num_qs == num_vs"
+            )
+            adv_heads = (
+                critic_values_per_head(q_logits, config)
+                - critic_values_per_head(v_logits, config)
+            )  # (n, B*G)
+            advantage_raw = jnp.maximum(jnp.min(adv_heads, axis=0), 0.0) + jnp.minimum(
+                jnp.max(adv_heads, axis=0), 0.0
+            )  # [B*G]
+        else:
+            advantage_raw = q_value - v_value  # [B*G]
+
+        baseline = _group_baseline(advantage_raw, B, G, rl.adv_strategy)  # [B, 1]
+        advantage = advantage_raw.reshape(B, G) - baseline
     if rl.adv_clip_min is not None:
         advantage = jnp.maximum(advantage, rl.adv_clip_min)
     advantage = advantage.reshape(-1)  # [B*G]
@@ -267,6 +306,14 @@ def sample_and_advantage(
         "q_mean": jnp.mean(q_value),
         "v_mean": jnp.mean(v_value),
         "advantage_mean": jnp.mean(advantage),
+        # Fraction of samples zeroed by cross-head sign disagreement — the
+        # conservative gate's bite. Static-config branch: key exists only in
+        # grpo_conservative runs.
+        **(
+            {"cons_zero_frac": jnp.mean((advantage == 0.0).astype(jnp.float32))}
+            if rl.advantage_combination == "grpo_conservative"
+            else {}
+        ),
         "advantage_max":  jnp.max(advantage),
         "advantage_min":  jnp.min(advantage),
         "advantage_std":  jnp.std(advantage),

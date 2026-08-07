@@ -14,8 +14,11 @@
 #   NORM       - 1 => --rl.normalize_group_advantage (EMA-quantile scale)
 #   CLIP_SYM   - float => --rl.adv_clip_sym <v> (symmetric clip, post-norm)
 #   ACCUM      - int  => --rl.policy_grad_accum <M> (micro-batch grad accum)
-#   CONS       - 1 => --rl.advantage_combination conservative (per-head
-#                A_i = Q_i - V_i, sign-unanimous combine; 2Q/2V heads)
+#   CONS       - 1 => --rl.advantage_combination grpo_conservative:
+#                per-head Q_i - mean_G(Q_i), sign-unanimous combine across
+#                the 2 Q heads. V(s) NEVER enters the advantage (it cancels
+#                per-head under the group baseline; this mode makes that
+#                explicit). Replaces the vanilla group-mean centering.
 #
 # Usage:  ARM=N NORM=1 GPU=3 bash scripts/stability_study.sh
 # ---------------------------------------------------------------------------
@@ -74,7 +77,7 @@ EXTRA_FLAGS=()
 [ "${NORM:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.normalize_group_advantage)
 [ -n "${CLIP_SYM:-}" ] && EXTRA_FLAGS+=(--rl.adv_clip_sym "$CLIP_SYM")
 [ -n "${ACCUM:-}" ] && EXTRA_FLAGS+=(--rl.policy_grad_accum "$ACCUM")
-[ "${CONS:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.advantage_combination conservative)
+[ "${CONS:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.advantage_combination grpo_conservative)
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \

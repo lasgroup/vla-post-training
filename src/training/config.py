@@ -180,7 +180,7 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     awr_loss_weight: float = 1.0
     # --- conservative twin-critic AWR knobs (defaults reproduce current behavior) ---
     advantage_weight_type: str = "exp"  # "exp": exp(adv/beta) weights; "relu": max(adv, 0) weights
-    advantage_combination: str = "reduced"  # "reduced": reduce(Q)-reduce(V); "conservative": per-critic A_i combine
+    advantage_combination: str = "reduced"  # "reduced": reduce(Q)-reduce(V); "conservative": per-critic A_i combine; "grpo_conservative" (OGPO G>1 only): per-head Q_i - mean_G(Q_i), sign-unanimous combine — V(s) never enters
 
 
 @dataclasses.dataclass(frozen=True)
