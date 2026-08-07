@@ -267,11 +267,23 @@ def train_q_step(
         mc_loss = -jnp.mean(q_dist.log_prob(mc_return))
         value_mean = jnp.mean(q_dist.mean())
         loss = td_weight * td_loss + (1 - td_weight) * mc_loss
+        # Ranking-quality proxy: Pearson corr between the (head-mean) Q
+        # prediction and the observed MC return over this batch. Calibration
+        # drift is harmless to a group-baseline actor, but a decaying corr
+        # means the critic's ORDERING of actions is losing signal — the one
+        # critic failure mode that actually reaches the advantage.
+        q_pred = jnp.mean(q_dist.mean(), axis=0) if q_dist.mean().ndim > 1 else q_dist.mean()
+        qc = q_pred - jnp.mean(q_pred)
+        mc = mc_return - jnp.mean(mc_return)
+        q_mc_corr = jnp.sum(qc * mc) / jnp.maximum(
+            jnp.linalg.norm(qc) * jnp.linalg.norm(mc), 1e-8
+        )
         return loss, {
             "value_mean": value_mean,
             "td_loss": td_loss,
             "mc_loss": mc_loss,
             "td_weight": td_weight,
+            "mc_corr": q_mc_corr,
         }
 
     diff_state = nnx.DiffState(0, nnx.Param)

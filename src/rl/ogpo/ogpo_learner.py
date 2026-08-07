@@ -85,6 +85,11 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             self._config = success_cfg
             self._success_data_buffer = self._get_online_replay_buffer()
             self._config = orig_config
+        # Running scale for the EMA-quantile advantage normalizer (host-side
+        # Python float, AWR-normalizer semantics: the scale used by an update
+        # is the one accumulated BEFORE it). Not checkpointed — re-warms from
+        # min_scale within ~1/(1-ema_weight) policy updates after a resume.
+        self._adv_scale = float(self._config.rl.normalizer_config.min_scale)
         self._train_step = functools.partial(ogpo_train_step, self._config)
         self._refresh_update_functions()
 
@@ -306,73 +311,136 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             )
 
         if update_policy:
-            # OGPO 3-tuple override (below): critic_prefix is the buffer's stored EMA-computed prefix
-            # rep, threaded past Observation.from_dict. It is None when store_prefix_rep is off, so
-            # jit-1 recomputes under current params (None -> array is a deliberate recompile). The base
-            # 2-tuple (FSL:572) is untouched for siblings (G3).
-            policy_observation, actions_demo, critic_prefix = self._online_batch_to_sft_batch(online_batch)
-            # Success-buffer BC: once the success buffer holds a full batch, the
-            # BC anchor regresses onto successful trajectories instead of the
-            # (mostly failed) online batch. The PPO path is untouched — only the
-            # (observation, actions) pair fed to jit-2b changes.
-            bc_observation, bc_actions = policy_observation, actions_demo
-            if (
-                self._success_data_buffer is not None
-                and self._success_data_buffer.size >= online_batch_size
-            ):
-                ordinals = None
-                if rl_config.balance_success_buffer_tasks:
-                    ordinals = self._balanced_success_ordinals(online_batch_size)
-                success_batch = self._success_data_buffer.sample(
-                    batch_size=online_batch_size,
-                    ordinals=ordinals,
-                )
-                bc_observation, bc_actions, _ = self._online_batch_to_sft_batch(
-                    success_batch
-                )
-            policy_rng, self._rng = jax.random.split(self._rng, 2)
-            # G2: a device copy of the host EMA enters ONLY the undonated jit-1, and self._ema is the
-            # donated arg of _ema_update_fn on its final use (below); it is NEVER attached to a donated
-            # policy-jit argument, so the step-900 use-after-donate crash is structurally unreachable --
-            # the former ema_params attach + read-back dance is deleted, not reordered.
-            # Excursion 1: EMA on device for the sampler jit-1 ONLY. device_put does NOT consume
-            # self._ema, so the host copy stays valid.
-            ema_dev = jax.device_put(self._ema, self._ema_sharding)
+            # Micro-batch gradient accumulation (policy_grad_accum = M): the whole
+            # jit-1 -> jit-2a -> jit-2b chain runs M times on M independently
+            # sampled batches (fresh success-BC batch each time), grads averaged,
+            # optimizer applied ONCE. Peak memory per micro-batch is unchanged;
+            # for M > 1 the accumulated fp32 trainable grad tree is additionally
+            # co-resident with the next micro-batch's scan accumulator — fine for
+            # frozen-backbone runs (~1 GiB), NOT sized for unfrozen ones.
+            # PPO correctness: all M micro-batches score against the SAME old
+            # policy (the EMA is only advanced after the optimizer apply below).
+            num_micro = max(1, int(rl_config.policy_grad_accum))
+            grads_acc = None
+            loss_list: list = []
+            aux_list: list = []
             with sharding.set_mesh(self._mesh):
-                (x_chain, x_next_chain, times, dt, old_lp, advantage,
-                 sampler_aux) = self._sampler_advantage_jitted(
-                    policy_rng,
-                    self._train_state,
-                    self._state_action_critic_state,
-                    self._value_state,
-                    policy_observation,
-                    critic_prefix,
-                    ema_dev,                         # r/o (jit-1 donate_argnums=())
+                for micro_idx in range(num_micro):
+                    if micro_idx > 0:
+                        online_batch = self._online_data_buffer.sample(
+                            batch_size=online_batch_size
+                        )
+                    # OGPO 3-tuple override (below): critic_prefix is the buffer's stored EMA-computed prefix
+                    # rep, threaded past Observation.from_dict. It is None when store_prefix_rep is off, so
+                    # jit-1 recomputes under current params (None -> array is a deliberate recompile). The base
+                    # 2-tuple (FSL:572) is untouched for siblings (G3).
+                    policy_observation, actions_demo, critic_prefix = self._online_batch_to_sft_batch(online_batch)
+                    # Success-buffer BC: once the success buffer holds a full batch, the
+                    # BC anchor regresses onto successful trajectories instead of the
+                    # (mostly failed) online batch. The PPO path is untouched — only the
+                    # (observation, actions) pair fed to jit-2b changes.
+                    bc_observation, bc_actions = policy_observation, actions_demo
+                    if (
+                        self._success_data_buffer is not None
+                        and self._success_data_buffer.size >= online_batch_size
+                    ):
+                        ordinals = None
+                        if rl_config.balance_success_buffer_tasks:
+                            ordinals = self._balanced_success_ordinals(online_batch_size)
+                        success_batch = self._success_data_buffer.sample(
+                            batch_size=online_batch_size,
+                            ordinals=ordinals,
+                        )
+                        bc_observation, bc_actions, _ = self._online_batch_to_sft_batch(
+                            success_batch
+                        )
+                    policy_rng, self._rng = jax.random.split(self._rng, 2)
+                    # G2: a device copy of the host EMA enters ONLY the undonated jit-1, and self._ema is the
+                    # donated arg of _ema_update_fn on its final use (below); it is NEVER attached to a donated
+                    # policy-jit argument, so the step-900 use-after-donate crash is structurally unreachable --
+                    # the former ema_params attach + read-back dance is deleted, not reordered.
+                    # Excursion 1: EMA on device for the sampler jit-1 ONLY. device_put does NOT consume
+                    # self._ema, so the host copy stays valid.
+                    ema_dev = jax.device_put(self._ema, self._ema_sharding)
+                    (x_chain, x_next_chain, times, dt, old_lp, advantage,
+                     sampler_aux) = self._sampler_advantage_jitted(
+                        policy_rng,
+                        self._train_state,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        policy_observation,
+                        critic_prefix,
+                        ema_dev,                         # r/o (jit-1 donate_argnums=())
+                    )
+                    # LOAD-BEARING: release the 11.3 GiB device EMA BEFORE jit-2 so it is off-device
+                    # through the binding jit-2/jit-3. A held handle would pin it (JAX does not offload a
+                    # referenced buffer across executables) and the floor stays ~46, not ~34.7 GiB.
+                    del ema_dev
+                    # --- Advantage post-processing (eager ops on the [B*G] vector at
+                    # the jit-1 -> jit-2a boundary; advantage is data to jit-2a, so
+                    # no gradient concerns). Normalizer semantics mirror the AWR
+                    # normalizer: each update divides by the EMA scale accumulated
+                    # BEFORE it, then folds its own (q95-q05) spread into the EMA.
+                    if rl_config.normalize_group_advantage:
+                        ncfg = rl_config.normalizer_config
+                        scale_used = self._adv_scale
+                        advantage = advantage / scale_used
+                        spread = jnp.maximum(
+                            sampler_aux["advantage_q_up"] - sampler_aux["advantage_q_low"],
+                            ncfg.min_scale,
+                        )
+                        self._adv_scale = (
+                            ncfg.ema_weight * self._adv_scale
+                            + (1.0 - ncfg.ema_weight) * spread
+                        )
+                        sampler_aux = sampler_aux | {
+                            "adv_scale": jnp.asarray(scale_used, dtype=jnp.float32)
+                        }
+                    if rl_config.adv_clip_sym is not None:
+                        clip_c = rl_config.adv_clip_sym
+                        sampler_aux = sampler_aux | {
+                            "adv_clip_sym_frac": jnp.mean(
+                                (jnp.abs(advantage) >= clip_c).astype(jnp.float32)
+                            )
+                        }
+                        advantage = jnp.clip(advantage, -clip_c, clip_c)
+                    if rl_config.normalize_group_advantage or rl_config.adv_clip_sym is not None:
+                        sampler_aux = sampler_aux | {"advantage_std_final": jnp.std(advantage)}
+                    # jit-2a: PPO scan grads (no BC). grads_pg is the donated accumulator
+                    # into jit-2b; its scan activations are freed before the BC backward.
+                    grads_pg, pg_loss, pg_aux = self._loss_grad_pg_jitted(
+                        self._train_state,               # r/o (undonated)
+                        policy_observation,
+                        x_chain, x_next_chain, times, dt, old_lp, advantage,
+                    )
+                    # jit-2b: BC anchor, grads accumulated INTO the donated grads_pg. SAME
+                    # policy_rng (re-split arity-3, bc_rng=[2]); pre-increment step for the
+                    # fold_in (jit-3 increments). grads_pg is consumed here (donated), so it
+                    # must not be referenced afterward.
+                    grads, loss, loss_aux = self._bc_grad_accumulate_jitted(
+                        grads_pg,                        # DONATED accumulator
+                        policy_rng,
+                        self._train_state,               # pre-increment step for fold_in
+                        bc_observation,                  # success-buffer batch when available
+                        bc_actions,
+                        pg_loss, pg_aux,
+                    )
+                    if grads_acc is None:
+                        grads_acc = grads      # M=1: identical object flow to the pre-accum code
+                    else:
+                        grads_acc = jax.tree.map(jnp.add, grads_acc, grads)
+                    loss_list.append(loss)
+                    aux_list.append(loss_aux | sampler_aux)
+                if num_micro > 1:
+                    grads_acc = jax.tree.map(lambda g: g / num_micro, grads_acc)
+                new_state = self._optimizer_tail_jitted(self._train_state, grads_acc)   # DONATES train_state+grads
+            if num_micro == 1:
+                loss, merged_aux = loss_list[0], aux_list[0]
+            else:
+                loss = sum(loss_list) / num_micro
+                merged_aux = jax.tree.map(
+                    lambda *xs: sum(xs) / float(num_micro), *aux_list
                 )
-                # LOAD-BEARING: release the 11.3 GiB device EMA BEFORE jit-2 so it is off-device
-                # through the binding jit-2/jit-3. A held handle would pin it (JAX does not offload a
-                # referenced buffer across executables) and the floor stays ~46, not ~34.7 GiB.
-                del ema_dev
-                # jit-2a: PPO scan grads (no BC). grads_pg is the donated accumulator
-                # into jit-2b; its scan activations are freed before the BC backward.
-                grads_pg, pg_loss, pg_aux = self._loss_grad_pg_jitted(
-                    self._train_state,               # r/o (undonated)
-                    policy_observation,
-                    x_chain, x_next_chain, times, dt, old_lp, advantage,
-                )
-                # jit-2b: BC anchor, grads accumulated INTO the donated grads_pg. SAME
-                # policy_rng (re-split arity-3, bc_rng=[2]); pre-increment step for the
-                # fold_in (jit-3 increments). grads_pg is consumed here (donated), so it
-                # must not be referenced afterward.
-                grads, loss, loss_aux = self._bc_grad_accumulate_jitted(
-                    grads_pg,                        # DONATED accumulator
-                    policy_rng,
-                    self._train_state,               # pre-increment step for fold_in
-                    bc_observation,                  # success-buffer batch when available
-                    bc_actions,
-                    pg_loss, pg_aux,
-                )
-                new_state = self._optimizer_tail_jitted(self._train_state, grads)   # DONATES train_state+grads
             self._train_state = new_state
             # Barrier so jit-3 finishes before excursion 2's H2D allocates: excursion 2's device_put is
             # dispatched right after the jit-3 call returns (async), so without this the eager H2D target
@@ -392,7 +460,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             # binding tail (that separation is the memory win, not the cadence). N=1 emits every policy
             # update, identical to today. Do NOT gate on log_interval: it lives on the outer experiment
             # config (exp.py), not on the learner's OnlineTrainConfig.
-            actor_info = {"loss": loss} | loss_aux | sampler_aux
+            actor_info = {"loss": loss} | merged_aux
             if self.training_steps % (rl_config.policy.update_interval * _PARAM_NORM_EVERY_N) == 0:
                 actor_info["param_norm"] = self._policy_param_norm_jitted(self._train_state.params)
             actor_info = {f"actor/{k}": v for k, v in actor_info.items()}

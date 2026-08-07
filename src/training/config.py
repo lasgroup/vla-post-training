@@ -253,6 +253,23 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # ``clip_epsilon`` a meaningful per-dim bound.
     normalize_denoising_horizon: bool = True
     normalize_act_space_dimension: bool = True
+    # EMA-quantile advantage normalizer (the AWR normalizer applied to the
+    # group-centered PPO advantage): divide by an EMA of the per-update
+    # (q95 - q05) spread, floored at ``normalizer_config.min_scale``. Pins the
+    # advantage scale (= effective policy LR) against critic-spread drift.
+    # Reuses the inherited ``normalizer_config`` (q_up/q_low/min_scale/
+    # ema_weight). The running scale is NOT checkpointed: after a resume it
+    # re-warms from min_scale within ~1/(1-ema_weight) policy updates.
+    normalize_group_advantage: bool = False
+    # Symmetric per-sample advantage clip, applied AFTER normalization. Bounds
+    # the worst single-sample gradient contribution (the PPO analog of AWR's
+    # weight_clip); None disables.
+    adv_clip_sym: float | None = None
+    # Micro-batches accumulated per policy optimizer step. Each micro-batch is
+    # a fresh ``batch_size``-state sample (fresh success-BC batch too); grads
+    # and logged aux are averaged. Raises state diversity per update at
+    # unchanged peak memory, costing proportional wall-clock.
+    policy_grad_accum: int = 1
 
 
 @dataclasses.dataclass(frozen=True)
