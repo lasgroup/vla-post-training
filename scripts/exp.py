@@ -116,6 +116,22 @@ def main(config: _config.OnlineTrainConfig):
                 logging.info(
                     f"Collected {n_collected_episodes} successful episodes at step {step}."
                 )
+            # Critic digestion burst: let the critic fit the just-collected
+            # distribution before the actor's next update ranks fresh actions
+            # with it. Step 0 is skipped — policy.training_start_step already
+            # provides the initial actor-free head start.
+            if (
+                step > 0
+                and getattr(config.rl, "post_collection_critic_steps", 0) > 0
+                and hasattr(agent, "critic_digestion_burst")
+            ):
+                burst_info = agent.critic_digestion_burst()
+                if burst_info:
+                    logger.log_metrics(burst_info, step=step)
+                    logging.info(
+                        f"Critic digestion burst at step {step}: "
+                        f"{int(burst_info['burst/steps'])} critic-only updates."
+                    )
 
         if (step > 0) and step % config.collect.eval_interval == 0:  # skip first eval
             if config.free_buffer_before_eval:

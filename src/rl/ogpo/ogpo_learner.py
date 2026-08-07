@@ -226,6 +226,53 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             donate_argnums=(),
         )
 
+    def critic_digestion_burst(self) -> dict:
+        """Critic-only updates after a collection round (no actor, no step count).
+
+        Identical single-step semantics to the update() critic branch — same
+        jitted fn, same batch size, same buffer sampling, same rng stream —
+        just repeated ``post_collection_critic_steps`` times back-to-back so
+        the critic fits the freshly collected distribution before the next
+        policy update consumes Q on it. ``training_steps`` is NOT advanced:
+        the burst is invisible to every interval schedule (policy cadence,
+        logging, collection), it only moves the critic optimizer + rng.
+        """
+        rl_config = self._config.rl
+        assert isinstance(rl_config, OGPOSFTLearnerConfig)
+        n = int(rl_config.post_collection_critic_steps)
+        critic_batch_size = rl_config.critic.batch_size or self._config.batch_size
+        if n <= 0 or self._online_data_buffer.size < critic_batch_size:
+            return {}
+        last_q_info, last_v_info = {}, {}
+        for _ in range(n):
+            batch = self._online_data_buffer.sample(
+                batch_size=critic_batch_size,
+                drop_obs_keys=(
+                    _OGPO_CRITIC_DROP_OBS_KEYS
+                    if self._config.collect.store_prefix_rep
+                    else ()
+                ),
+            )
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, last_q_info, last_v_info = (
+                    self._update_critics_jitted(
+                        batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        self._train_state,
+                        critic_rng,
+                    )
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
+        info = (
+            {f"burst/q_{k}": v for k, v in last_q_info.items()}
+            | {f"burst/value_{k}": v for k, v in last_v_info.items()}
+            | {"burst/steps": jnp.asarray(float(n), dtype=jnp.float32)}
+        )
+        return jax.tree.map(np.asarray, info)
+
     @at.typecheck
     def update(self) -> dict:
         rl_config = self._config.rl

@@ -270,6 +270,13 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # and logged aux are averaged. Raises state diversity per update at
     # unchanged peak memory, costing proportional wall-clock.
     policy_grad_accum: int = 1
+    # Critic-only "digestion burst" after each collection round (skipped at
+    # step 0, where policy.training_start_step already provides the same
+    # actor-free critic head start): run this many extra critic updates on
+    # the refreshed buffer BEFORE the next policy update, so the actor never
+    # ranks fresh actions with a critic that hasn't fit the newly collected
+    # distribution. 0 disables.
+    post_collection_critic_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
