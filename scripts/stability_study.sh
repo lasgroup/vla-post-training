@@ -24,6 +24,9 @@
 #                before the next policy update, so the actor never ranks
 #                fresh actions with an uncalibrated critic. K=1000 ≈ 30
 #                visits per new transition at mid-run buffer size.
+#   QS         - int => --rl.critic.num_qs/num_vs <n> (default 2). With
+#                CONS=1, sign-unanimity across n heads is a much stricter
+#                gate (2 correlated heads share delusions — the CAB crash).
 #
 # Usage:  ARM=N NORM=1 GPU=3 bash scripts/stability_study.sh
 # ---------------------------------------------------------------------------
@@ -84,6 +87,7 @@ EXTRA_FLAGS=()
 [ -n "${ACCUM:-}" ] && EXTRA_FLAGS+=(--rl.policy_grad_accum "$ACCUM")
 [ "${CONS:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.advantage_combination grpo_conservative)
 [ -n "${BURST:-}" ] && EXTRA_FLAGS+=(--rl.post_collection_critic_steps "$BURST")
+[ -n "${QS:-}" ] && EXTRA_FLAGS+=(--rl.critic.num_qs "$QS" --rl.critic.num_vs "$QS")
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
