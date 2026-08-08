@@ -204,6 +204,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 self._data_sharding,                        # actions_demo
                 self._replicated_sharding,                  # pg_loss
                 self._replicated_sharding,                  # pg_aux
+                self._replicated_sharding,                  # bc_mask (None-passthrough)
             ),
             out_shardings=(
                 self._trainable_params_sharding,            # grads (combined)
@@ -458,7 +459,15 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     # (mostly failed) online batch. The PPO path is untouched — only the
                     # (observation, actions) pair fed to jit-2b changes.
                     bc_observation, bc_actions = policy_observation, actions_demo
-                    if (
+                    bc_mask = None
+                    if rl_config.bc_filtered_sft:
+                        # Ralf-style filtered SFT: BC on the online batch with
+                        # per-sample success weights (failures contribute 0).
+                        # Takes precedence over the success buffer.
+                        bc_mask = jnp.asarray(
+                            online_batch["is_success"], dtype=jnp.float32
+                        )
+                    elif (
                         self._success_data_buffer is not None
                         and self._success_data_buffer.size >= online_batch_size
                     ):
@@ -514,6 +523,13 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                         sampler_aux = sampler_aux | {
                             "adv_scale": jnp.asarray(scale_used, dtype=jnp.float32)
                         }
+                    # Policy warmstart: mute the PG term by zeroing the
+                    # advantage (jit-2a still runs — same rng stream, same
+                    # compiled graph — but contributes zero gradient), so the
+                    # actor trains on the BC anchor alone while the critic
+                    # calibrates. Python-level gate: no recompile, flips once.
+                    if self.training_steps < rl_config.pg_start_step:
+                        advantage = advantage * 0.0
                     if rl_config.adv_clip_sym is not None:
                         clip_c = rl_config.adv_clip_sym
                         sampler_aux = sampler_aux | {
@@ -542,6 +558,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                         bc_observation,                  # success-buffer batch when available
                         bc_actions,
                         pg_loss, pg_aux,
+                        bc_mask,                         # None => uniform BC (static branch)
                     )
                     if grads_acc is None:
                         grads_acc = grads      # M=1: identical object flow to the pre-accum code

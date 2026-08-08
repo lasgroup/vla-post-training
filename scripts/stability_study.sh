@@ -90,6 +90,10 @@ EXTRA_FLAGS=()
 [ -n "${QS:-}" ] && EXTRA_FLAGS+=(--rl.critic.num_qs "$QS" --rl.critic.num_vs "$QS")
 [ -n "${UTD:-}" ] && EXTRA_FLAGS+=(--rl.critic_utd "$UTD")
 [ "${BURST_MC:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.burst_use_mc_targets)
+# Policy warmstart: PG term muted before this step (BC-only actor phase).
+[ -n "${PG_START:-}" ] && EXTRA_FLAGS+=(--rl.pg_start_step "$PG_START")
+# Ralf-style filtered SFT BC (success-masked online batch instead of succ buffer)
+[ "${FSFT:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.bc_filtered_sft)
 # FC (frequent collection): override interval/rollouts, e.g. FC_INT=1000 FC_ROLLOUTS=2
 [ -n "${FC_INT:-}" ] && COLLECT_INT="$FC_INT" || COLLECT_INT=10000
 [ -n "${FC_ROLLOUTS:-}" ] && N_ROLLOUTS="$FC_ROLLOUTS" || N_ROLLOUTS=20

@@ -471,6 +471,7 @@ def bc_grad_accumulate(
     actions_demo: _model.Actions,
     pg_loss: at.Float[at.Array, ""],
     pg_aux: dict[str, at.Array],
+    bc_mask: at.Float[at.Array, " b"] | None = None,  # per-sample BC weights (Ralf-style filtered SFT); None = uniform
 ) -> tuple[nnx.State, at.Float[at.Array, ""], dict[str, at.Array]]:
     # jit-2b: the CFM BC anchor. Differentiate bc_coeff*bc_loss and accumulate
     # the resulting grads INTO the donated grads_pg accumulator (donate_argnums
@@ -503,9 +504,18 @@ def bc_grad_accumulate(
             # scaled loss as the differentiand so grads_bc == bc_coeff * d(bc)/dθ
             # — exactly the BC contribution the mono's value_and_grad over
             # (pg + bc_coeff*bc) produced. The raw bc_loss rides along as aux.
-            bc_loss = jnp.mean(
-                model.compute_loss(bc_rng, policy_observation, actions_demo, train=True)
-            )
+            chunked = model.compute_loss(bc_rng, policy_observation, actions_demo, train=True)
+            if bc_mask is not None:
+                # Ralf-style filtered SFT: per-sample success weights on the
+                # online batch — failures contribute zero. Mean over the batch
+                # axis keeps the coefficient scale comparable to the uniform
+                # path when most samples are successes.
+                w = bc_mask
+                while w.ndim < chunked.ndim:
+                    w = w[..., jnp.newaxis]
+                bc_loss = jnp.mean(w * chunked)
+            else:
+                bc_loss = jnp.mean(chunked)
             return rl.bc_coeff * bc_loss, bc_loss
 
         diff_state = nnx.DiffState(0, config.trainable_filter)

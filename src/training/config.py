@@ -287,6 +287,16 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # behavior. Chronic critic-priority: the standing-ratio alternative to
     # the post-collection burst.
     critic_utd: int = 1
+    # Policy warmstart: before this step the PG term is zeroed (advantage
+    # multiplied by 0 — sampling/rescoring still run, keeping rng streams and
+    # jit structure identical), so the actor trains on the BC anchor alone
+    # while the critic calibrates on the improving data. 0 = PPO from start.
+    pg_start_step: int = 0
+    # Ralf-style filtered SFT for the BC anchor: instead of sampling the BC
+    # batch from the success buffer, use the ONLINE batch weighted per-sample
+    # by is_success (failures contribute zero BC loss). Mutually exclusive
+    # with use_success_buffer in spirit; if both set, this wins.
+    bc_filtered_sft: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
