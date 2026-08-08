@@ -56,6 +56,7 @@ with _suppress_molmo_spaces_output():
     from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
     from molmo_spaces.policy.learned_policy.utils import PromptSampler
     from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
+    from molmo_spaces.molmo_spaces_constants import ASSETS_DIR as _MOLMO_ASSETS_DIR
 
 
 class _RegisteredPolicyAdapter:
@@ -78,8 +79,11 @@ class _RegisteredPolicyAdapter:
 
 @dataclasses.dataclass(frozen=True)
 class MolmoSpacesGymConfig:
-    benchmark_dir: str = (
-        "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231"
+    # Resolved via MLSPACES_ASSETS_DIR env var (defaults to molmospaces/assets/ in the submodule).
+    # Run scripts/install_molmo_assets.py on the login node to download this data.
+    benchmark_dir: str = str(
+        _MOLMO_ASSETS_DIR
+        / "benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231"
     )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"

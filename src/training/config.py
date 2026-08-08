@@ -355,7 +355,7 @@ class OnlineTrainConfig(TrainConfig):
     requeue_before_eval: bool = False
     free_buffer_before_eval: bool = False
     default_prompt: str | None = None
-    
+
     def __post_init__(self):
         super().__post_init__()
 

@@ -111,25 +111,7 @@ def _load_weights_and_validate(
     )
 
 
-def _batch_axis_sharding(pytree, mesh: jax.sharding.Mesh):
-    n = mesh.shape[sharding.BATCH_AXIS]
-    replicated = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
-    def shard(arr):
-        if n > 1 and arr.ndim >= 2:
-            for axis in np.argsort(arr.shape)[::-1]:
-                if arr.shape[axis] % n == 0:
-                    spec = [None] * arr.ndim
-                    spec[axis] = sharding.BATCH_AXIS
-                    return jax.sharding.NamedSharding(
-                        mesh, jax.sharding.PartitionSpec(*spec)
-                    )
-        return replicated
-
-    return jax.tree.map(shard, pytree)
-
-
-@at.typecheck
 def init_train_state(
     config: OnlineTrainConfig,
     init_rng: at.KeyArrayLike,
@@ -305,8 +287,8 @@ class FilteredSFTLearner(Agent):
             f"Initialized train state:\n{training_utils.array_tree_to_info(self._train_state.params)}"
         )
 
-        # shard the EMA across devices
-        self._ema_sharding = _batch_axis_sharding(self._train_state.ema_params, self._mesh)
+        # Shard EMA with the same FSDP sharding as params; update is element-wise so no all-gather needed.
+        self._ema_sharding = self._train_state_sharding.ema_params
         self._ema = jax.device_put(self._train_state.ema_params, self._ema_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=None, ema_decay=None)
         decay = self._config.ema_decay
@@ -335,16 +317,15 @@ class FilteredSFTLearner(Agent):
 
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
-        # Create policy for data collection
+        # Load onto CPU to avoid a second full model copy on GPU; drop references immediately after.
         policy_checkpoint_dir = self._config.weight_loader.params_path[
             : -len("/params")
         ]
-        self._policy = policy_config.create_trained_policy(
-            self._config,
-            policy_checkpoint_dir,
-        )
-        # This learner always calls `infer_with_model(...)` with the current train-state model.
-        # Drop policy-owned model references to avoid keeping an extra model copy in memory.
+        with jax.default_device(jax.devices("cpu")[0]):
+            self._policy = policy_config.create_trained_policy(
+                self._config,
+                policy_checkpoint_dir,
+            )
         self._drop_policy_model()
 
         # prepare transforms for preprocessing episode data into model input format
