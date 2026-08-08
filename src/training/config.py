@@ -277,6 +277,16 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # ranks fresh actions with a critic that hasn't fit the newly collected
     # distribution. 0 disables.
     post_collection_critic_steps: int = 0
+    # Train the BURST's critic updates on pure MC returns (td_weight forced
+    # to 0 inside the burst only; the regular loop keeps its schedule). MC
+    # targets need no backward bootstrapping through the episode, so a fresh
+    # high-value region calibrates in ~one pass instead of many TD sweeps.
+    burst_use_mc_targets: bool = False
+    # Critic updates per trainer step (fresh buffer batch EACH update, unlike
+    # critic.num_updates_per_batch which reuses one batch). 1 = today's
+    # behavior. Chronic critic-priority: the standing-ratio alternative to
+    # the post-collection burst.
+    critic_utd: int = 1
 
 
 @dataclasses.dataclass(frozen=True)

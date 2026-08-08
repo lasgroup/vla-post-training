@@ -20,6 +20,10 @@ import openpi.training.sharding as sharding
 from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import (
     AdvantageWeightedSFTLearner,
 )
+from src.rl.advantage_weighted_sft.update_critic import (
+    train_q_step as _awr_train_q_step,
+    train_value_step as _awr_train_value_step,
+)
 from src.rl.ogpo.update_actor import (
     bc_grad_accumulate,
     loss_and_grad_pg,
@@ -226,6 +230,57 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             donate_argnums=(),
         )
 
+    def _burst_critic_update_fn(self):
+        """Jitted critic update for the burst. With ``burst_use_mc_targets``,
+        a SECOND jit is built from a config whose td_weight schedule is pinned
+        to 0 (pure MC regression) — burst-only; the regular loop's jit and
+        schedule are untouched. Cached after first build."""
+        rl_config = self._config.rl
+        if not rl_config.burst_use_mc_targets:
+            return self._update_critics_jitted
+        if getattr(self, "_burst_mc_critics_jitted", None) is None:
+            from src.training.config import StepSchedule
+            mc_cfg = dataclasses.replace(
+                self._config,
+                rl=dataclasses.replace(
+                    rl_config,
+                    critic=dataclasses.replace(
+                        rl_config.critic,
+                        td_weight_schedule=StepSchedule(
+                            init_value=0.0, end_value=0.0, switch_step=1
+                        ),
+                    ),
+                ),
+            )
+            _q_step = functools.partial(_awr_train_q_step, mc_cfg)
+            _v_step = functools.partial(_awr_train_value_step, mc_cfg)
+
+            def _mc_wrapper(batch, q_state, value_state, policy_state, rng):
+                batch = self._online_batch_to_critic_batch(batch, policy_state)
+                q_rng, v_rng, rng = jax.random.split(rng, 3)
+                q_state, q_info = _q_step(q_rng, q_state, value_state, batch)
+                value_state, value_info = _v_step(v_rng, value_state, q_state, batch)
+                return q_state, value_state, q_info, value_info
+
+            self._burst_mc_critics_jitted = jax.jit(
+                _mc_wrapper,
+                in_shardings=(
+                    self._data_sharding,
+                    self._state_action_critic_state_sharding,
+                    self._value_state_sharding,
+                    self._train_state_sharding,
+                    self._replicated_sharding,
+                ),
+                out_shardings=(
+                    self._state_action_critic_state_sharding,
+                    self._value_state_sharding,
+                    self._replicated_sharding,
+                    self._replicated_sharding,
+                ),
+                donate_argnums=(1, 2),
+            )
+        return self._burst_mc_critics_jitted
+
     def critic_digestion_burst(self) -> dict:
         """Critic-only updates after a collection round (no actor, no step count).
 
@@ -243,6 +298,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         critic_batch_size = rl_config.critic.batch_size or self._config.batch_size
         if n <= 0 or self._online_data_buffer.size < critic_batch_size:
             return {}
+        update_fn = self._burst_critic_update_fn()
         last_q_info, last_v_info = {}, {}
         for _ in range(n):
             batch = self._online_data_buffer.sample(
@@ -256,7 +312,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             critic_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
                 q_state, value_state, last_q_info, last_v_info = (
-                    self._update_critics_jitted(
+                    update_fn(
                         batch,
                         self._state_action_critic_state,
                         self._value_state,
@@ -339,19 +395,34 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
 
         critic_info, actor_info = {}, {}
         if update_critic:
-            critic_rng, self._rng = jax.random.split(self._rng, 2)
-            with sharding.set_mesh(self._mesh):
-                q_state, value_state, q_info, value_info = (
-                    self._update_critics_jitted(
-                        critic_online_batch,
-                        self._state_action_critic_state,
-                        self._value_state,
-                        self._train_state,
-                        critic_rng,
+            # critic_utd: N critic updates per trainer step, each on a FRESH
+            # buffer batch (unlike critic.num_updates_per_batch, which reuses
+            # one batch). N=1 reproduces the original single-update behavior
+            # exactly (same batch above, same rng order).
+            n_utd = max(1, int(rl_config.critic_utd))
+            for utd_i in range(n_utd):
+                if utd_i > 0:
+                    critic_online_batch = self._online_data_buffer.sample(
+                        batch_size=critic_batch_size,
+                        drop_obs_keys=(
+                            _OGPO_CRITIC_DROP_OBS_KEYS
+                            if self._config.collect.store_prefix_rep
+                            else ()
+                        ),
                     )
-                )
-            self._state_action_critic_state = q_state
-            self._value_state = value_state
+                critic_rng, self._rng = jax.random.split(self._rng, 2)
+                with sharding.set_mesh(self._mesh):
+                    q_state, value_state, q_info, value_info = (
+                        self._update_critics_jitted(
+                            critic_online_batch,
+                            self._state_action_critic_state,
+                            self._value_state,
+                            self._train_state,
+                            critic_rng,
+                        )
+                    )
+                self._state_action_critic_state = q_state
+                self._value_state = value_state
             critic_info = (
                 {f"critic/q_{k}": v for k, v in q_info.items()}
                 | {f"critic/value_{k}": v for k, v in value_info.items()}

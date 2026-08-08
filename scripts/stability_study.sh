@@ -88,6 +88,11 @@ EXTRA_FLAGS=()
 [ "${CONS:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.advantage_combination grpo_conservative)
 [ -n "${BURST:-}" ] && EXTRA_FLAGS+=(--rl.post_collection_critic_steps "$BURST")
 [ -n "${QS:-}" ] && EXTRA_FLAGS+=(--rl.critic.num_qs "$QS" --rl.critic.num_vs "$QS")
+[ -n "${UTD:-}" ] && EXTRA_FLAGS+=(--rl.critic_utd "$UTD")
+[ "${BURST_MC:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.burst_use_mc_targets)
+# FC (frequent collection): override interval/rollouts, e.g. FC_INT=1000 FC_ROLLOUTS=2
+[ -n "${FC_INT:-}" ] && COLLECT_INT="$FC_INT" || COLLECT_INT=10000
+[ -n "${FC_ROLLOUTS:-}" ] && N_ROLLOUTS="$FC_ROLLOUTS" || N_ROLLOUTS=20
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
@@ -115,8 +120,8 @@ uv run scripts/exp.py \
   --collect.tasks libero_90_44 \
   --collect.eval_tasks libero_90_44 \
   --collect.store_prefix_rep \
-  --collect.collect_interval 10000 \
-  --collect.num_rollouts 20 \
+  --collect.collect_interval "$COLLECT_INT" \
+  --collect.num_rollouts "$N_ROLLOUTS" \
   --collect.env_num 8 \
   --collect.eval_env_num 8 \
   --collect.eval_interval 10000 \
