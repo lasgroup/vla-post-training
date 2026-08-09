@@ -92,6 +92,8 @@ EXTRA_FLAGS=()
 [ "${BURST_MC:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.burst_use_mc_targets)
 # Policy warmstart: PG term muted before this step (BC-only actor phase).
 [ -n "${PG_START:-}" ] && EXTRA_FLAGS+=(--rl.pg_start_step "$PG_START")
+# Linear PG ramp-in length after the handoff (0 = hard switch).
+[ -n "${PG_RAMP:-}" ] && EXTRA_FLAGS+=(--rl.pg_ramp_steps "$PG_RAMP")
 # Ralf-style filtered SFT BC (success-masked online batch instead of succ buffer)
 [ "${FSFT:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.bc_filtered_sft)
 # FC (frequent collection): override interval/rollouts, e.g. FC_INT=1000 FC_ROLLOUTS=2

@@ -530,6 +530,15 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     # calibrates. Python-level gate: no recompile, flips once.
                     if self.training_steps < rl_config.pg_start_step:
                         advantage = advantage * 0.0
+                    elif rl_config.pg_ramp_steps > 0:
+                        # Linear PG ramp-in after the handoff (host-side
+                        # scalar; 1.0 once past the ramp so the multiply is
+                        # exact identity afterwards).
+                        frac = (
+                            self.training_steps - rl_config.pg_start_step
+                        ) / float(rl_config.pg_ramp_steps)
+                        if frac < 1.0:
+                            advantage = advantage * max(0.0, frac)
                     if rl_config.adv_clip_sym is not None:
                         clip_c = rl_config.adv_clip_sym
                         sampler_aux = sampler_aux | {

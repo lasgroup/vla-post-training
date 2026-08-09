@@ -297,6 +297,13 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # by is_success (failures contribute zero BC loss). Mutually exclusive
     # with use_success_buffer in spirit; if both set, this wins.
     bc_filtered_sft: bool = False
+    # PG ramp after the warmstart handoff: advantages are scaled by
+    # min(1, (step - pg_start_step)/pg_ramp_steps), linearly rebuilding the
+    # effective-LR curriculum that from-scratch runs get for free (a newborn
+    # critic's tiny Q-spreads). Without it, a mature critic's full-size
+    # advantages hit the BC-tuned policy in ONE step (measured: grad_norm
+    # 0.05 -> 1.8 at the WS 20k handoff). 0 disables (hard switch).
+    pg_ramp_steps: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
