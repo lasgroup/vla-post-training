@@ -106,6 +106,9 @@ SAVE_INT="${SAVE_INT:-100000}"
 # FC (frequent collection): override interval/rollouts, e.g. FC_INT=1000 FC_ROLLOUTS=2
 [ -n "${FC_INT:-}" ] && COLLECT_INT="$FC_INT" || COLLECT_INT=10000
 [ -n "${FC_ROLLOUTS:-}" ] && N_ROLLOUTS="$FC_ROLLOUTS" || N_ROLLOUTS=20
+# Extra episodes at the step-0 collection ONLY (spark insurance: kills the
+# empty-success-buffer lottery; 100 extra => P(0 successes) ~ 0.2% at 5% SR).
+[ -n "${INIT_ROLLOUTS:-}" ] && EXTRA_FLAGS+=(--collect.num_initial_rollouts "$INIT_ROLLOUTS")
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
