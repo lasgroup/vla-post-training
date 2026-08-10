@@ -94,6 +94,13 @@ EXTRA_FLAGS=()
 [ -n "${PG_START:-}" ] && EXTRA_FLAGS+=(--rl.pg_start_step "$PG_START")
 # Linear PG ramp-in length after the handoff (0 = hard switch).
 [ -n "${PG_RAMP:-}" ] && EXTRA_FLAGS+=(--rl.pg_ramp_steps "$PG_RAMP")
+# Pipeline hooks (ws_bcbb_pipeline.sh): alternate entry script / config name /
+# step budget / save interval / initial weights checkpoint.
+ENTRY="${ENTRY:-scripts/exp.py}"
+CONFIG_NAME="${CONFIG_NAME:-pi05_libero_online_ogpo_sft}"
+N_STEPS="${N_STEPS:-100000}"
+SAVE_INT="${SAVE_INT:-100000}"
+[ -n "${WEIGHT_LOADER:-}" ] && EXTRA_FLAGS+=(--weight_loader.params_path "$WEIGHT_LOADER")
 # Ralf-style filtered SFT BC (success-masked online batch instead of succ buffer)
 [ "${FSFT:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.bc_filtered_sft)
 # FC (frequent collection): override interval/rollouts, e.g. FC_INT=1000 FC_ROLLOUTS=2
@@ -107,8 +114,8 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
 
 echo "[stability-study] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED ema=$EMA extra=${EXTRA_FLAGS[*]:-none}"
 
-uv run scripts/exp.py \
-  pi05_libero_online_ogpo_sft \
+uv run "$ENTRY" \
+  "$CONFIG_NAME" \
   --project_name ogpo_stability \
   --group_name stability_study \
   --exp_name "$EXP_NAME" \
@@ -117,9 +124,9 @@ uv run scripts/exp.py \
   --fsdp_devices 1 \
   --overwrite \
   --log_interval 25 \
-  --save_interval 100000 \
-  --keep_period 100000 \
-  --num_train_steps 100000 \
+  --save_interval "$SAVE_INT" \
+  --keep_period "$SAVE_INT" \
+  --num_train_steps "$N_STEPS" \
   --ema_decay "$EMA" \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
