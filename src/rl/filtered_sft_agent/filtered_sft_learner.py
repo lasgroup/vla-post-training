@@ -212,6 +212,7 @@ def _get_obs_key_process_fn(domain: str):
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
+        self._task_to_id: dict[str, int] = {}
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
         self.obs_key_process_fn = _get_obs_key_process_fn(self._config.collect.domain)
 
@@ -432,6 +433,7 @@ class FilteredSFTLearner(Agent):
             "mc_return": np.zeros((1,), dtype=np.float32),
             "discount": np.zeros((1,), dtype=np.float32),
             "is_success": np.zeros((1,), dtype=np.float32),
+            "task_id": np.zeros((1,), dtype=np.int32),
         }
 
     def _get_online_replay_buffer(
@@ -735,6 +737,8 @@ class FilteredSFTLearner(Agent):
         obs_index = np.arange(n_windows, dtype=np.int64)
         next_obs_index = obs_index + act_h
         _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
+        task_id = self._task_to_id.setdefault(task_description, len(self._task_to_id))
+        _task_id = np.full((n_windows,), task_id, dtype=np.int32)
         buf = target_buffer if target_buffer is not None else self._online_data_buffer
         buf.insert(
             {
@@ -746,6 +750,7 @@ class FilteredSFTLearner(Agent):
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),
                 "is_success": _is_success,
+                "task_id": _task_id,
             }
         )
         if target_buffer is None:

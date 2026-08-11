@@ -175,5 +175,7 @@ def train_step(
         "weight_ess": jnp.sum(score) ** 2 / (jnp.sum(score**2) * score.shape[0]),
         "weight_mean": jnp.mean(score),
         "weight_max": jnp.max(score),
+        "advantage_per_example": advantage,
+        "weight_per_example": score,
     } | aux_data
     return new_state, info

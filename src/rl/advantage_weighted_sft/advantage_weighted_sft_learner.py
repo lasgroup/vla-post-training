@@ -634,6 +634,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         critic_info, actor_info = {}, {}
         mc_return = None
         is_success = None
+        task_id_for_batch = None
         if use_online:
             # Two independent samples: critics may use a larger batch than the policy.
             critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size) if update_critic else None
@@ -663,11 +664,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     "(MC returns are not available for offline data)"
                 )
             online_is_success = jnp.asarray(online_batch["is_success"], dtype=jnp.float32)
+            online_task_id = np.asarray(online_batch["task_id"])
             online_batch = self._online_batch_to_sft_batch(online_batch)
             online_ratio = self._config.rl.online_ratio
             if online_ratio >= 1.0:
                 batch = online_batch
                 is_success = online_is_success
+                task_id_for_batch = online_task_id
             elif online_ratio > 0:
                 # Mix online and offline into a fixed-size batch instead of
                 # concatenating (which would double the batch and OOM).
@@ -730,6 +733,19 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
             self._train_state = policy_state
             self._ema = self._ema_update_fn(self._ema, self._train_state.params)
+
+            advantage_per_example = np.asarray(actor_info.pop("advantage_per_example"))
+            weight_per_example = np.asarray(actor_info.pop("weight_per_example"))
+            if task_id_for_batch is not None and len(task_id_for_batch) == len(advantage_per_example):
+                id_to_task = {v: k for k, v in self._task_to_id.items()}
+                per_task_metrics = {}
+                for tid in np.unique(task_id_for_batch):
+                    mask = task_id_for_batch == tid
+                    task_name = id_to_task.get(int(tid), str(int(tid))).replace("/", "_")
+                    per_task_metrics[f"advantage_mean/{task_name}"] = advantage_per_example[mask].mean()
+                    per_task_metrics[f"weight_mean/{task_name}"] = weight_per_example[mask].mean()
+                actor_info |= per_task_metrics
+
             scale, bias = 1.0, 0.0
             normalizer_config = self._config.rl.normalizer_config
             if normalizer_config.method is not None:
