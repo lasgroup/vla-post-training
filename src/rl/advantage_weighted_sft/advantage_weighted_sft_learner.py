@@ -207,8 +207,12 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def save_checkpoint(self, step: int | None = None):
         super().save_checkpoint(step=step)
         path = self._rl_checkpoint_path(step)
+        if path.exists():
+            logging.info("RL checkpoint already exists at %s; skipping.", path)
+            return
         self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
         self._rl_state_checkpointer.save(path, self._rl_checkpoint_state())
+        self._rl_state_checkpointer.wait_until_finished()
 
     def _recompute_prefix_embedding(
         self,

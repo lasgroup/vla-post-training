@@ -169,10 +169,9 @@ def main(config: _config.OnlineTrainConfig):
         about_to_collect = (step + 1) % config.collect.collect_interval == 0
         about_to_eval = (step + 1) % config.collect.eval_interval == 0
         runtime_exceeded = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
-        out_of_time = runtime_exceeded and (about_to_collect or about_to_eval)
-        if about_to_collect or about_to_eval or out_of_time:
+        if about_to_collect or about_to_eval or runtime_exceeded:
             save_epoch_state(agent, config, prepare_for_resume=True)
-            if out_of_time or (about_to_eval and config.requeue_before_eval):
+            if runtime_exceeded or (about_to_eval and config.requeue_before_eval):
                 logging.info("Exiting at step %d for requeue.", step)
                 sys.exit(REQUEUE_EXIT_CODE)
 

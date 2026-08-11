@@ -63,14 +63,15 @@ def train_step(
             state_action_critic(critic_observation, critic_actions), config
         )  # (B,)
         advantage = q_value - value  # (B, )
+    
+    if config.rl.normalize_advantages:
+        scale = jnp.std(advantage)
     score = advantage / scale
     score = score / _awr_beta(config)
     assert isinstance(config.rl, AdvantageWeightedSFTLearnerConfig)
     score = jnp.minimum(score, config.rl.weight_clip)  # Clipping
-
-    score = jnp.exp(score)
-    score = score / config.rl.advantage_scale  # Normalize advantage w.r.t scale
-    score = jnp.clip(score, min=1e-6)
+    score = jnp.exp(score - jnp.max(score))
+    score = score / jnp.mean(score)
 
     score = jax.lax.stop_gradient(score)  # Explicitly cut gradients
 
@@ -170,5 +171,9 @@ def train_step(
         "advantage_q_up": jnp.quantile(advantage, normalizer_config.q_up),
         "advantage_median": jnp.median(advantage),  # or jnp.quantile(advantage, 0.50)
         "advantage_q_low": jnp.quantile(advantage, normalizer_config.q_low),
+        "weight_sat_frac": jnp.mean((score >= 0.999 * jnp.max(score)).astype(score.dtype)),
+        "weight_ess": jnp.sum(score) ** 2 / (jnp.sum(score**2) * score.shape[0]),
+        "weight_mean": jnp.mean(score),
+        "weight_max": jnp.max(score),
     } | aux_data
     return new_state, info
