@@ -133,8 +133,8 @@ uv run "$ENTRY" \
   --ema_decay "$EMA" \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
-  --collect.tasks libero_90_44 \
-  --collect.eval_tasks libero_90_44 \
+  --collect.tasks "${TASK:-libero_90_44}" \
+  --collect.eval_tasks "${TASK:-libero_90_44}" \
   --collect.store_prefix_rep \
   --collect.collect_interval "$COLLECT_INT" \
   --collect.num_rollouts "$N_ROLLOUTS" \
