@@ -96,9 +96,12 @@ EXTRA_FLAGS=()
 [ -n "${PG_RAMP:-}" ] && EXTRA_FLAGS+=(--rl.pg_ramp_steps "$PG_RAMP")
 # BC anchor strength after the handoff (e.g. 0.0 = pure PPO post-warmstart).
 [ -n "${BC_POST:-}" ] && EXTRA_FLAGS+=(--rl.bc_coeff_post_warmstart "$BC_POST")
-# SDE sampling temperature (default 0.02 below; higher = more group diversity
-# + collection exploration).
+# SDE sampling temperature for the actor's group sampling (default 0.02).
+# NOTE: collection/eval run the deterministic ODE (noise_level=0.0 in the
+# policy path) — this knob is "imagination" temperature only.
 NOISE="${NOISE:-0.02}"
+# Episode horizon (env time limit + value-bound auto-computation).
+HORIZON="${HORIZON:-400}"
 # Pipeline hooks (ws_bcbb_pipeline.sh): alternate entry script / config name /
 # step budget / save interval / initial weights checkpoint.
 ENTRY="${ENTRY:-scripts/exp.py}"
@@ -145,6 +148,7 @@ uv run "$ENTRY" \
   --collect.num_rollouts "$N_ROLLOUTS" \
   --collect.env_num 8 \
   --collect.eval_env_num 8 \
+  --collect.max_episode_steps "$HORIZON" \
   --collect.eval_interval 10000 \
   --rl.beta 0.05 \
   --rl.discount 0.995 \
