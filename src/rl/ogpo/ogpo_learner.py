@@ -460,6 +460,21 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     # (observation, actions) pair fed to jit-2b changes.
                     bc_observation, bc_actions = policy_observation, actions_demo
                     bc_mask = None
+                    # Post-warmstart BC re-weighting: once PG is live, scale
+                    # the anchor to bc_coeff_post_warmstart via a uniform
+                    # per-sample weight (ratio to bc_coeff), so the jitted
+                    # loss (bc_coeff * mean(w * chunked)) needs no recompile.
+                    _bc_post = rl_config.bc_coeff_post_warmstart
+                    if (
+                        _bc_post is not None
+                        and self.training_steps >= rl_config.pg_start_step
+                        and rl_config.bc_coeff > 0.0
+                    ):
+                        bc_mask = jnp.full(
+                            (online_batch_size,),
+                            _bc_post / rl_config.bc_coeff,
+                            dtype=jnp.float32,
+                        )
                     if rl_config.bc_filtered_sft:
                         # Ralf-style filtered SFT: BC on the online batch with
                         # per-sample success weights (failures contribute 0).

@@ -94,6 +94,8 @@ EXTRA_FLAGS=()
 [ -n "${PG_START:-}" ] && EXTRA_FLAGS+=(--rl.pg_start_step "$PG_START")
 # Linear PG ramp-in length after the handoff (0 = hard switch).
 [ -n "${PG_RAMP:-}" ] && EXTRA_FLAGS+=(--rl.pg_ramp_steps "$PG_RAMP")
+# BC anchor strength after the handoff (e.g. 0.0 = pure PPO post-warmstart).
+[ -n "${BC_POST:-}" ] && EXTRA_FLAGS+=(--rl.bc_coeff_post_warmstart "$BC_POST")
 # Pipeline hooks (ws_bcbb_pipeline.sh): alternate entry script / config name /
 # step budget / save interval / initial weights checkpoint.
 ENTRY="${ENTRY:-scripts/exp.py}"

@@ -304,6 +304,14 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # advantages hit the BC-tuned policy in ONE step (measured: grad_norm
     # 0.05 -> 1.8 at the WS 20k handoff). 0 disables (hard switch).
     pg_ramp_steps: int = 0
+    # BC anchor strength AFTER the warmstart handoff (None = keep bc_coeff).
+    # During the BC-only phase the anchor is the sole teacher and stays at
+    # bc_coeff; from pg_start_step on, the effective coefficient becomes this
+    # value (implemented as a per-sample weight ratio through bc_mask, so the
+    # jitted loss is unchanged). 0.0 = pure PPO after warmstart. Motivated by
+    # mid-SR tasks where the success buffer mirrors average behavior and the
+    # full-strength anchor acts as a brake on PPO progress.
+    bc_coeff_post_warmstart: float | None = None
 
 
 @dataclasses.dataclass(frozen=True)
