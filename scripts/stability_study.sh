@@ -96,6 +96,9 @@ EXTRA_FLAGS=()
 [ -n "${PG_RAMP:-}" ] && EXTRA_FLAGS+=(--rl.pg_ramp_steps "$PG_RAMP")
 # BC anchor strength after the handoff (e.g. 0.0 = pure PPO post-warmstart).
 [ -n "${BC_POST:-}" ] && EXTRA_FLAGS+=(--rl.bc_coeff_post_warmstart "$BC_POST")
+# SDE sampling temperature (default 0.02 below; higher = more group diversity
+# + collection exploration).
+NOISE="${NOISE:-0.02}"
 # Pipeline hooks (ws_bcbb_pipeline.sh): alternate entry script / config name /
 # step budget / save interval / initial weights checkpoint.
 ENTRY="${ENTRY:-scripts/exp.py}"
@@ -163,7 +166,7 @@ uv run "$ENTRY" \
   --rl.clip_epsilon 0.1 \
   --rl.bc_coeff 1.0 \
   --rl.num_sde_steps 10 \
-  --rl.noise_level 0.02 \
+  --rl.noise_level "$NOISE" \
   --rl.adv_strategy vanilla \
   --rl.dedup_group_prefix \
   --rl.use_success_buffer \
