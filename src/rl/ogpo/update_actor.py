@@ -84,6 +84,37 @@ def _grpo_conservative_advantage(q_heads: jax.Array, B: int, G: int) -> jax.Arra
     )
 
 
+def _tree_cosine(
+    tree_a: nnx.State, tree_b: nnx.State, norm_a: jax.Array, norm_b: jax.Array
+) -> jax.Array:
+    """Cosine between two gradient trees, given their precomputed global norms.
+
+    Returns **NaN** when either tree is identically zero: the angle between a
+    zero vector and anything is undefined, and 0.0 would be read as
+    "orthogonal", which is a different and wrong claim. ``exp.py`` reduces the
+    info dict with ``jnp.nanmean``, so an undefined value drops out of the
+    logged window rather than dragging the mean toward zero — which is exactly
+    what happens throughout the PG warmstart, where ``grads_pg`` is an exact
+    zero tree.
+
+    The norms are passed in rather than recomputed because both callers already
+    have them (``grad_norm_pg`` arrives in ``pg_aux`` from jit-2a).
+    """
+    prods = jax.tree.leaves(
+        jax.tree.map(lambda a, b: jnp.sum(a.astype(jnp.float32) * b.astype(jnp.float32)),
+                     tree_a, tree_b)
+    )
+    # One reduction over the stacked per-leaf partials rather than a Python
+    # left-fold, so the summation order does not depend on tree traversal.
+    dot = jnp.sum(jnp.stack(prods))
+    denom = norm_a * norm_b
+    # Guard the division itself as well as selecting the branch: an inf in the
+    # discarded branch of jnp.where still propagates NaN through some XLA
+    # lowerings.
+    safe_denom = jnp.where(denom > 0.0, denom, jnp.float32(1.0))
+    return jnp.where(denom > 0.0, dot / safe_denom, jnp.float32(jnp.nan))
+
+
 def _group_baseline(adv: jax.Array, B: int, G: int, strategy: str) -> jax.Array:
     """Return a per-state baseline ``[B, 1]`` that will be broadcast over G."""
     adv_g = adv.reshape(B, G)
@@ -421,8 +452,9 @@ def loss_and_grad_pg(
             ((ratio >= lower_bound) & (ratio <= upper_bound)).astype(jnp.float32)
         )
 
-        # 20 PPO keys — NO bc_loss (jit-2b adds bc_loss + grad_norm so the
-        # learner/composer info dict is the same 33-key schema as before).
+        # 20 PPO keys — NO bc_loss and NO grad_norm_pg (the grads do not exist
+        # inside loss_fn; the norm is folded in at the return below). jit-2b adds
+        # bc_loss + grad_norm + grad_norm_bc + grad_cos_pg_bc.
         aux = {
             "pg_loss": pg_loss,
             "pg_loss_unclipped": pg_loss_unclipped,
@@ -458,6 +490,12 @@ def loss_and_grad_pg(
     (pg_loss, pg_aux), grads_pg = nnx.value_and_grad(
         loss_fn, has_aux=True, argnums=diff_state
     )(policy_model)
+    # PG-only gradient norm. jit-2b's `grad_norm` is taken over the COMBINED tree
+    # (after grads_bc is accumulated into this one), so without this key there is
+    # no way to read how much of the actor's update is policy gradient vs BC
+    # anchor. A reduction over grads_pg, which is already this jit's output — no
+    # new transient, no change to its live range.
+    pg_aux = pg_aux | {"grad_norm_pg": optax.global_norm(grads_pg)}
     return grads_pg, pg_loss, pg_aux
 
 
@@ -522,6 +560,18 @@ def bc_grad_accumulate(
         (_, bc_loss), grads_bc = nnx.value_and_grad(
             bc_loss_fn, has_aux=True, argnums=diff_state
         )(policy_model, train_rng)
+        # BC-only gradient norm, taken BEFORE the accumulation while grads_bc is
+        # still a distinct tree (it is live for the map below either way, so this
+        # costs a reduction and no extra residency). Note grads_bc already carries
+        # bc_coeff — bc_loss_fn differentiates `bc_coeff * bc_loss` — so this is
+        # the anchor's actual contribution to the sum, not the raw BC gradient.
+        grad_norm_bc = optax.global_norm(grads_bc)
+        # Cosine between the two gradient directions. The norms say how big each
+        # term is; only this says whether the anchor AGREES with the policy
+        # gradient (>0), is orthogonal to it (~0), or actively fights it (<0) —
+        # the question bc_coeff is actually tuned against. Same two trees the map
+        # below already reads, so no extra residency.
+        grad_cos_pg_bc = _tree_cosine(grads_pg, grads_bc, pg_aux["grad_norm_pg"], grad_norm_bc)
         # Accumulate into the DONATED grads_pg: same 2-input per-leaf add the
         # mono did (grad_pg + bc_coeff*grad_bc), only reassociated across the jit
         # boundary — floating-point ulps, certified at atol=1e-6 by
@@ -531,14 +581,29 @@ def bc_grad_accumulate(
         # use_bc_regularization=False: no BC term. grads pass through unchanged,
         # bc_loss=0, grad_norm over the PPO tree — matches the mono False path.
         bc_loss = jnp.float32(0.0)
+        # Not a placeholder: this branch's BC gradient genuinely is zero. Emitting
+        # it keeps the aux key schema static across both config branches.
+        grad_norm_bc = jnp.float32(0.0)
+        # No BC direction exists here, so the cosine is undefined — NaN, not 0.0
+        # (0.0 would read as "orthogonal"). exp.py reduces with jnp.nanmean, so
+        # an undefined value drops out of the logged window instead of biasing it.
+        grad_cos_pg_bc = jnp.float32(jnp.nan)
         grads = grads_pg
 
     # Total loss = pg + bc_coeff*bc (bit-identical to the mono `loss`); grad_norm
-    # is computed over the COMBINED grads (post-accumulation), not the PPO-only
-    # tree. loss_aux restores the 22-key jit-2 aux schema (20 PPO + bc_loss +
-    # grad_norm).
+    # is computed over the COMBINED grads (post-accumulation). The PPO-only and
+    # BC-only norms ride alongside it as grad_norm_pg (set in jit-2a) and
+    # grad_norm_bc, and their angle as grad_cos_pg_bc. loss_aux is the 25-key
+    # jit-2 aux schema: 21 in from jit-2a (20 PPO + grad_norm_pg) plus bc_loss +
+    # grad_norm + grad_norm_bc + grad_cos_pg_bc here. The learner/composer info
+    # dict is therefore 36 keys (was 33): + loss + param_norm + 9 sampler_aux.
     loss = pg_loss + rl.bc_coeff * bc_loss
-    loss_aux = pg_aux | {"bc_loss": bc_loss, "grad_norm": optax.global_norm(grads)}
+    loss_aux = pg_aux | {
+        "bc_loss": bc_loss,
+        "grad_norm": optax.global_norm(grads),
+        "grad_norm_bc": grad_norm_bc,
+        "grad_cos_pg_bc": grad_cos_pg_bc,
+    }
     return grads, loss, loss_aux
 
 

@@ -127,8 +127,15 @@ def get_value_bounds(config) -> tuple[float, float]:
     discount = float(config.rl.discount)
     T = int(config.collect.max_episode_steps)
     if config.collect.use_time_to_success_as_reward:
-        lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
-        upper = 0.0
+        # Lower bound is the never-succeeding Bellman fixed point, reward/(1-gamma),
+        # NOT the T-step truncated sum: `fix_mc_returns` overwrites every failed
+        # episode's MC return with exactly -1/(1-gamma) (filtered_sft_learner.py:
+        # 749-751), so that value — not the -(1-gamma^T)/(1-gamma) the horizon
+        # implies — is what the critic actually regresses onto.
+        lower = -1.0 / (1.0 - discount) if discount < 1.0 else -float(T)
+        # A positive terminal success bonus puts Q above 0; without this the bound
+        # silently truncates every successful state once num_value_bins > 1.
+        upper = max(0.0, float(config.collect.success_reward_bonus))
     else:
         lower = 0.0
         upper = 1.0

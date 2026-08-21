@@ -60,7 +60,9 @@ def filtered_sft_wrap_env(
             # Create the base environment
             base_env = env_fn(rank)
             if config.collect.use_time_to_success_as_reward:
-                base_env = TimeToSuccessAsRewardWrapper(base_env)
+                base_env = TimeToSuccessAsRewardWrapper(
+                    base_env, success_bonus=config.collect.success_reward_bonus
+                )
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,

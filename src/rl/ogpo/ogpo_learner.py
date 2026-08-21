@@ -58,6 +58,16 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 "valid on on-policy data; the BC anchor uses the same "
                 "online batch."
             )
+        if (
+            self._config.rl.critic_success_oversample
+            and not self._config.rl.use_success_buffer
+        ):
+            raise ValueError(
+                "critic_success_oversample=True needs use_success_buffer=True — "
+                "without it there is no success buffer to draw the extra critic "
+                "batch from and the flag would silently do nothing. Set "
+                "--rl.use_success_buffer, or drop --rl.critic_success_oversample."
+            )
         # Keep the trainable-only EMA on HOST between policy updates so it is OFF-DEVICE during the
         # binding loss/grad (jit-2) and optimizer-tail (jit-3) jits -- the ~11.3 GiB memory lever. It
         # is device_put back only for the two short excursions in update() and (transparently) for
@@ -428,6 +438,46 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 {f"critic/q_{k}": v for k, v in q_info.items()}
                 | {f"critic/value_{k}": v for k, v in value_info.items()}
             )
+            # Success oversampling (reference `critic_update_sb`, ogpo.py:1581-1585,
+            # enabled in 9 of its 15 recipes): ONE extra critic update on a
+            # success-only batch, on top of the all-data batches above. The online
+            # buffer is ~74% failed episodes whose MC return `fix_mc_returns` pins to
+            # exactly reward/(1-gamma), which is also the TD fixed point — the
+            # majority class and the attractor are the same number. This is the same
+            # success batch the BC anchor already draws below; it simply never
+            # reached the critic. Same jit, second invocation: no signature change.
+            if (
+                rl_config.critic_success_oversample
+                and self._success_data_buffer is not None
+                and self._success_data_buffer.size >= critic_batch_size
+            ):
+                critic_success_batch = self._success_data_buffer.sample(
+                    batch_size=critic_batch_size,
+                    drop_obs_keys=(
+                        _OGPO_CRITIC_DROP_OBS_KEYS
+                        if self._config.collect.store_prefix_rep
+                        else ()
+                    ),
+                )
+                critic_rng, self._rng = jax.random.split(self._rng, 2)
+                with sharding.set_mesh(self._mesh):
+                    q_state, value_state, q_sb_info, value_sb_info = (
+                        self._update_critics_jitted(
+                            critic_success_batch,
+                            self._state_action_critic_state,
+                            self._value_state,
+                            self._train_state,
+                            critic_rng,
+                        )
+                    )
+                self._state_action_critic_state = q_state
+                self._value_state = value_state
+                # Distinct prefix so the existing `critic/` series stays directly
+                # comparable across the pre- and post-change stacks.
+                critic_info |= (
+                    {f"critic_sb/q_{k}": v for k, v in q_sb_info.items()}
+                    | {f"critic_sb/value_{k}": v for k, v in value_sb_info.items()}
+                )
 
         if update_policy:
             # Micro-batch gradient accumulation (policy_grad_accum = M): the whole

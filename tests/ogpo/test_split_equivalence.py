@@ -61,7 +61,13 @@ _B = 2
 _ATOL = 1e-6
 # 33 keys today: loss + grad_norm + param_norm + 7 advantage_* + q_mean/v_mean +
 # 21 ratio/kl/pg/bc/log_prob (validates B.6's "info == today's 33 keys exactly").
+# Asserted on the REFERENCE monolith's info, which is frozen — this stays 33.
 _N_INFO_KEYS = 33
+# Keys the split emits that the frozen reference monolith predates. See
+# docs/changes/2026-08-15-actor-pg-bc-grad-norms/. Diagnostics only: they are
+# reductions over gradient trees the reference also built, it just never
+# reported them separately.
+_SPLIT_ONLY_INFO_KEYS = {"grad_norm_pg", "grad_norm_bc", "grad_cos_pg_bc"}
 
 
 def _build_config():
@@ -423,7 +429,17 @@ def _assert_tree_close(a, b, name):
 
 
 def _assert_info_close(got, ref, name):
-    assert set(got) == set(ref), f"{name}: info key set mismatch: {set(got) ^ set(ref)}"
+    # The reference is a VERBATIM copy of the pre-split monolith (see module
+    # docstring) and is deliberately never edited, so keys added to the split
+    # after the refactor legitimately have no counterpart in it. Every reference
+    # key must still be present and numerically equal; the extras must be
+    # EXACTLY the known set, so an unintended third addition still fails here.
+    missing = set(ref) - set(got)
+    assert not missing, f"{name}: info keys missing from split: {missing}"
+    extra = set(got) - set(ref)
+    assert extra == _SPLIT_ONLY_INFO_KEYS, (
+        f"{name}: unexpected split-only info keys: {extra ^ _SPLIT_ONLY_INFO_KEYS}"
+    )
     for k in ref:
         _assert_close(got[k], ref[k], f"{name}:info[{k}]")
 

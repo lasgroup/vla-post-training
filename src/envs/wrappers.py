@@ -228,12 +228,26 @@ class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
 
 
 class TimeToSuccessAsRewardWrapper(gym.Wrapper):
-    def __init__(self, env: gym.Env):
+    """-1 per step, ``success_bonus`` on the terminating step.
+
+    With ``success_bonus=0.0`` (the default) success is the mere absence of the
+    penalty, and the Bellman fixed point for a never-succeeding policy — exactly
+    ``reward/(1-discount)`` — is the only attractor the critic sees. A positive
+    bonus widens the success/failure gap; see
+    ``docs/changes/2026-08-20-ogpo-reference-alignment/README.md`` for the sizing.
+
+    The bonus is passed in rather than read from the config here because the
+    wrapper takes an env, not a config, and it is constructed once for every
+    learner in ``FilteredSFTLearner._make_env``.
+    """
+
+    def __init__(self, env: gym.Env, success_bonus: float = 0.0):
         super().__init__(env=env)
+        self._success_bonus = float(success_bonus)
 
     def step(self, action):
         obs, _, terminate, truncate, info = self.env.step(action)
-        time_to_success_reward = 0.0 if terminate else -1.0
+        time_to_success_reward = self._success_bonus if terminate else -1.0
         return obs, time_to_success_reward, terminate, truncate, info
 
 

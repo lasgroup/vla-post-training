@@ -287,6 +287,13 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # behavior. Chronic critic-priority: the standing-ratio alternative to
     # the post-collection burst.
     critic_utd: int = 1
+    # Success oversampling for the critic: one EXTRA critic update per trainer
+    # step on a success-only batch, on top of the all-data batches. Mirrors the
+    # reference's `use_success_buffer_q` / `critic_update_sb` (ogpo.py:1581-1585),
+    # on in 9 of its 15 recipes including all three PaliGemma ones. Needs
+    # use_success_buffer=True; silently inert until that buffer holds a full
+    # critic batch. False reproduces today's behavior exactly.
+    critic_success_oversample: bool = False
     # Policy warmstart: before this step the PG term is zeroed (advantage
     # multiplied by 0 — sampling/rescoring still run, keeping rng streams and
     # jit structure identical), so the actor trains on the BC anchor alone
@@ -369,6 +376,15 @@ class CollectionConfig:
     replan_steps: int = 5
     num_steps_wait: int = 10
     use_time_to_success_as_reward: bool = True
+    # Reward paid on the terminating (success) step, on top of the -1/step time
+    # penalty. 0.0 reproduces the original behavior exactly (success = the mere
+    # absence of the penalty), so every existing config and recipe is unchanged.
+    # The reference OGPO pays +5.0 on each success step (envs/robomimic_utils.py:457
+    # and :467 in OGPO_public -- robomimic's raw success reward is 1.0, the -1.0 shift
+    # lands it at 0.0, then += 5.0), sustained over post_success_steps=8 extra steps,
+    # so up to +45 against its -100 failure floor = 45%. The same ratio against our
+    # -200 floor is 90.0. Only read when use_time_to_success_as_reward is True.
+    success_reward_bonus: float = 0.0
     fix_mc_returns: bool = True
     store_prefix_rep: bool = False
     eval_env_num: int = 4
@@ -627,6 +643,44 @@ _CONFIGS.extend(
             rl_config=OGPOSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        # OGPO aligned with the reference implementation (OGPO_public, recipe
+        # scripts/ogpo/square_image_paligemma.sh). Same learner and same dataclass
+        # as `pi05_libero_online_ogpo_sft` -- only defaults differ, so the
+        # isinstance dispatch in scripts/exp.py:74-85 is untouched. The two
+        # configs exist side by side so the pre-alignment stack stays runnable and
+        # the ten completed multitask arms remain valid comparators.
+        # Rationale for each value: docs/changes/2026-08-20-ogpo-reference-alignment/.
+        make_base_libero_config(
+            name="pi05_libero_online_ogpo_ref",
+            rl_config=OGPOSFTLearnerConfig(
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+                group_num_samples=8,  # NOT the reference's 32: 4x the actor fwd+bwd on a 3B expert
+                clip_epsilon=0.1,  # NOT 0.01: measured ratio_max <= 0.9888 < 0.99 would clip every sample
+                discount=0.995,  # NOT 0.99: 0.995 at our ~295-step successes == 0.99 at the reference's ~150
+                advantage_combination="grpo_conservative",
+                normalize_group_advantage=False,
+                normalize_advantage_per_task=False,
+                adv_clip_sym=None,
+                critic_success_oversample=True,
+                use_success_buffer=True,
+                n_samples=8,  # best-of-N collection, inherited from AdvantageWeightedSFTLearner
+                critic=CriticTrainingConfig(
+                    num_qs=10,
+                    num_vs=10,
+                    reduction="mean",
+                    batch_size=1024,
+                    pre_training_steps=0,
+                    use_bronet=True,
+                    bronet_hidden_dim=1024,
+                    # 95% TD / 5% MC: the only measured lever that moved q_value_mean
+                    # off the -1/(1-gamma) fixed point (-189.5 vs -198.6).
+                    td_weight_schedule=StepSchedule(
+                        init_value=0.95, end_value=0.95, switch_step=999_999
+                    ),
+                ),
             ),
             freeze_filter=_make_ogpo_freeze_filter(),
         ),
