@@ -21,6 +21,9 @@ from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.advantage_weighted_sft.update_actor import (
     train_step as train_actor_step,
 )
+from src.rl.advantage_weighted_sft.update_actor_group import (
+    train_step as train_group_actor_step,
+)
 from src.rl.advantage_weighted_sft.update_critic import (
     init_state_action_critic_train_state,
     init_state_value_train_state,
@@ -117,7 +120,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # 1. Un-JIT the inner steps (JAX will compile these as part of the outer methods)
         self._q_train_step = functools.partial(train_q_step, self._config)
         self._value_train_step = functools.partial(train_value_step, self._config)
-        self._train_step = functools.partial(train_actor_step, self._config)
+        actor_step = (
+            train_group_actor_step if self._config.rl.group_advantage else train_actor_step
+        )
+        self._train_step = functools.partial(actor_step, self._config)
         self._refresh_update_functions()
 
     def _refresh_update_functions(self):
@@ -765,6 +771,25 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             else:
                 scale = jnp.ones((self.num_task_groups,), dtype=jnp.float32)
                 bias = jnp.zeros((self.num_task_groups,), dtype=jnp.float32)
+            if self._config.rl.group_advantage:
+                # The group actor step repeats each state group_size times, so
+                # subsample first to keep the backward pass at batch_size
+                # chunks. This costs group_size-fold state diversity per update.
+                group_size = self._config.rl.group_size
+                batch_size = jax.tree.leaves(batch)[0].shape[0]
+                reduced_size = batch_size // group_size
+                assert reduced_size > 0, (
+                    f"batch_size {batch_size} < rl.group_size {group_size}"
+                )
+                subsample_rng, self._rng = jax.random.split(self._rng, 2)
+                indices = jax.random.permutation(subsample_rng, batch_size)[:reduced_size]
+                batch = jax.device_put(
+                    jax.tree.map(lambda x: x[indices], batch), self._data_sharding
+                )
+                if is_success is not None:
+                    is_success = jax.device_put(is_success[indices], self._data_sharding)
+                if task_id is not None:
+                    task_id = jax.device_put(task_id[indices], self._data_sharding)
             with sharding.set_mesh(self._mesh):
                 policy_state, actor_info = self._update_policy_jitted(
                     batch,

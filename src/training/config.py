@@ -220,6 +220,20 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     use_mc_returns: bool = False
     store_success_episodes_only: bool = False
     normalize_advantages: bool = False
+    # --- group-relative advantage (scripts/awr_group_adv.sh) ---
+    # Off: the actor scores the buffer action, A = Q(s,a) - V(s).
+    # On: the actor draws group_size fresh chunks per state from the current
+    # policy, scores each with Q, and uses the per-state group mean as the
+    # baseline in place of V. Those same samples become the CFM regression
+    # targets. normalize_advantages/normalizer_config are ignored -- the group
+    # mean is already an exact per-state baseline.
+    group_advantage: bool = False
+    group_size: int = 8
+    # Sampler for the group. 0.0 integrates the probability-flow ODE, so G
+    # different initial noise draws sample the policy's own distribution;
+    # >0 switches to the SDE.
+    group_num_steps: int = 10
+    group_noise_level: float = 0.0
     # n_samples > 1 enables best-of-N collection: the agent samples N candidate
     # action sequences and selects the one with the highest Q-value.
     n_samples: int = 1
