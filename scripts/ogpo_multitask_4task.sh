@@ -1,4 +1,15 @@
 #!/bin/bash
+#SBATCH --partition=maxlab
+#SBATCH --qos=maxlab_qos
+#SBATCH --nodelist=babel-m9-16
+#SBATCH --job-name=ogpo_mt4
+#SBATCH --gres=gpu:4
+#SBATCH --constraint=VRAM_96GB
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=400G
+#SBATCH --time=48:00:00
+#SBATCH --output=/home/mananaga/logs/%j/.out
+#SBATCH --error=/home/mananaga/logs/%j/.out
 # ---------------------------------------------------------------------------
 # Multi-task OGPO launcher: the "4-task LIBERO" benchmark set
 # (libero_90_79/31/82/38 — same set as fsft_libero_babel.sh and the
@@ -54,10 +65,15 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-: "${GPU:?set GPU (cuda device index or comma list, e.g. 0 or 0,1)}"
+# Under sbatch, SLURM already scopes the job to its allocated cards, so GPU is
+# only required for a bare interactive launch. Default to whatever SLURM gave
+# us (4 cards under the header above), and shard across all of them unless the
+# caller says otherwise -- matches awr_group_adv.sh's --fsdp_devices 4.
+GPU="${GPU:-${CUDA_VISIBLE_DEVICES:-0,1,2,3}}"
 ARM="${ARM:-v0}"
 SEED="${SEED:-0}"
-FSDP="${FSDP:-1}"
+_NGPU=$(awk -F, '{print NF}' <<<"$GPU")
+FSDP="${FSDP:-$_NGPU}"
 
 # The 4-task LIBERO train set (keep identical to the multitask configs so
 # runs are comparable with the FSFT/AWR/BofN campaigns).
@@ -76,11 +92,22 @@ EVAL_TASKS=("${TASKS[@]}")
 # Non-interactive shells (nohup over ssh) miss ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"
 
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-STORE_ROOT="${STORE_ROOT:-$PROJECT_DIR/run_store}"
+# Absolute, not derived from $0: sbatch copies the batch script into its spool
+# dir, so dirname "$0" does not resolve back to the checkout under SLURM.
+PROJECT_DIR="${PROJECT_DIR:-/home/mananaga/VLA/ogpo/vla-post-training}"
+# Everything on user_data: group_data IOs are slow and maxlab is unreachable.
+STORE_ROOT="${STORE_ROOT:-/data/user_data/mananaga/vla-post-training}"
 EXP_NAME="mt4_${ARM}_s${SEED}"
-# Checkpoints go to YOUR per-user group storage (never a colleague's dir).
-CKPT_BASE_DIR="${CKPT_BASE_DIR:-/data/group_data/maxlab/common_datasets/${USER:-pchellap}/vla-post-training/checkpoints/ogpo_multitask_4task}"
+CKPT_BASE_DIR="${CKPT_BASE_DIR:-$STORE_ROOT/checkpoints/ogpo_multitask_4task}"
+
+# Reuse the babel venv rather than building one here: pyproject.toml and
+# uv.lock are byte-identical between the checkouts, and that venv has no
+# editable install of vla-post-training/openpi/molmospaces -- all three come
+# from PYTHONPATH below, so the interpreter runs THIS tree's code. Call the
+# interpreter directly, never `uv run`: uv re-resolves against the branch
+# lockfile and mutates the venv, which would break the babel checkout too.
+PY="${PY:-/home/mananaga/VLA/manan_babel/vla-post-training/.venv/bin/python}"
+[ -x "$PY" ] || { echo "[mt4] no interpreter at $PY" >&2; exit 1; }
 
 export CUDA_VISIBLE_DEVICES="$GPU"
 cd "$PROJECT_DIR"
@@ -88,14 +115,18 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/openpi/packages/openpi-client/src:$PROJECT_DIR/openpi/src:$PROJECT_DIR/openpi/packages/openpi-client:$PROJECT_DIR/molmospaces"
 export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-$STORE_ROOT/cache/openpi}"
 export HF_HOME="${HF_HOME:-$STORE_ROOT/cache/huggingface}"
-export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$STORE_ROOT/libero}"
+# Your existing seeded config (~/.libero/config.yaml), same as awr_group_adv.sh.
+export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/.libero}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$STORE_ROOT/cache/uv}"
 export TORCH_HOME="${TORCH_HOME:-$STORE_ROOT/cache/torch}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$STORE_ROOT/cache/triton}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-$STORE_ROOT/cache/matplotlib}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$STORE_ROOT/cache/xdg}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$STORE_ROOT/config/xdg}"
-export WANDB_MODE="${WANDB_MODE:-offline}"
+# Online like the manan_babel scripts (they set no WANDB_* at all and use the
+# ~/.netrc credentials), so runs are readable with tests/awr/wandb_quantiles.py
+# while they are still going. WANDB_MODE=offline to fall back to local logging.
+export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_DIR="${WANDB_DIR:-$STORE_ROOT/wandb}"
 export WANDB_CACHE_DIR="${WANDB_CACHE_DIR:-$STORE_ROOT/cache/wandb}"
 export WANDB_CONFIG_DIR="${WANDB_CONFIG_DIR:-$STORE_ROOT/config/wandb}"
@@ -115,6 +146,7 @@ if [ "$MUJOCO_GL" = "egl" ] && [ -z "${__EGL_VENDOR_LIBRARY_FILENAMES:-}" ]; the
 fi
 export NCCL_CUMEM_ENABLE=0
 export NCCL_IB_DISABLE=1
+export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.75}"
 export MUJOCO_EGL_DEVICE_ID="${GPU%%,*}"
 
@@ -181,14 +213,14 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
 # LIBERO prompts interactively on first import if its config file is missing —
 # fatal in a batch job (EOFError). Seed the default config beforehand.
 if [ ! -f "$LIBERO_CONFIG_PATH/config.yaml" ]; then
-  printf 'n\n' | uv run python -c "import libero.libero" >/dev/null 2>&1 || true
+  printf 'n\n' | "$PY" -c "import libero.libero" >/dev/null 2>&1 || true
 fi
 
 echo "[mt4] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED tasks=${#TASKS[@]} eval_tasks=${#EVAL_TASKS[@]} rollouts/task=$N_ROLLOUTS ckpt=$CKPT_BASE_DIR"
 echo "[mt4] extra=${EXTRA_FLAGS[*]:-none}"
 
-RUN=(uv run scripts/exp.py)
-[ "${DRY:-0}" = "1" ] && RUN=(echo uv run scripts/exp.py)
+RUN=("$PY" scripts/exp.py)
+[ "${DRY:-0}" = "1" ] && RUN=(echo "$PY" scripts/exp.py)
 
 "${RUN[@]}" \
   "$CONFIG_NAME" \
