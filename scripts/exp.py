@@ -187,7 +187,11 @@ def main(config: _config.OnlineTrainConfig):
         runtime_exceeded = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
         out_of_time = runtime_exceeded and (about_to_collect or about_to_eval)
         if about_to_collect or about_to_eval or out_of_time:
-            save_epoch_state(agent, config, prepare_for_resume=True)
+            # Epoch state is only written on save_interval boundaries -- a full save
+            # is ~55GB of checkpoint plus a replay shard, and every collect boundary
+            # is far more often than anything needs it.
+            if out_of_time or (step + 1) % config.save_interval == 0:
+                save_epoch_state(agent, config, prepare_for_resume=True)
             if out_of_time or (about_to_eval and config.requeue_before_eval):
                 logging.info("Exiting at step %d for requeue.", step)
                 sys.exit(REQUEUE_EXIT_CODE)

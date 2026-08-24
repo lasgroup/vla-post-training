@@ -57,7 +57,11 @@
 #   NUM_STEPS     - train steps (default 100000). Set 100001 so the loop
 #                   reaches step 100000 and the final checkpoint gets an
 #                   in-run eval (the eval loop skips the last step otherwise).
-#   CKPT_BASE_DIR - checkpoint root (default: your group_data dir, see below)
+#   SAVE_INT      - save_interval (default 200000). Any value > NUM_STEPS means
+#                   no epoch state is ever written (~0 GB instead of ~55 GB per
+#                   save); the tradeoff is no resume point except the
+#                   max_runtime path. 100000 => one final checkpoint.
+#   CKPT_BASE_DIR - checkpoint root (default: your user_data dir, see below)
 #   DRY           - 1 => print the final command instead of running it
 #
 # Usage:  GPU=0 bash scripts/ogpo_multitask_4task.sh
@@ -204,6 +208,7 @@ N_ROLLOUTS="${N_ROLLOUTS:-5}"
 COLLECT_INT="${COLLECT_INT:-10000}"
 EVAL_ROLLOUTS="${EVAL_ROLLOUTS:-32}"
 NUM_STEPS="${NUM_STEPS:-100000}"
+SAVE_INT="${SAVE_INT:-200000}"
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
@@ -219,6 +224,11 @@ fi
 echo "[mt4] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED tasks=${#TASKS[@]} eval_tasks=${#EVAL_TASKS[@]} rollouts/task=$N_ROLLOUTS ckpt=$CKPT_BASE_DIR"
 echo "[mt4] extra=${EXTRA_FLAGS[*]:-none}"
 
+# save_interval 200000 > NUM_STEPS 100000, so (step+1) % save_interval is never
+# 0 and no epoch state is written -- the AWR recipe. Costs ~0 GB instead of
+# ~55 GB/save, at the price of NO resume point: only the max_runtime
+# `out_of_time` path saves, so a preemption SIGTERM loses the whole run.
+# Set SAVE_INT=100000 for a single final checkpoint at step 100000.
 RUN=("$PY" scripts/exp.py)
 [ "${DRY:-0}" = "1" ] && RUN=(echo "$PY" scripts/exp.py)
 
@@ -232,7 +242,7 @@ RUN=("$PY" scripts/exp.py)
   --fsdp_devices "$FSDP" \
   --overwrite \
   --log_interval 25 \
-  --save_interval 100000 \
+  --save_interval "$SAVE_INT" \
   --keep_period 100000 \
   --num_train_steps "$NUM_STEPS" \
   --ema_decay 0.99 \
