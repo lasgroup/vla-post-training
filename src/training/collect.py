@@ -57,6 +57,7 @@ def evaluate_policy(
                 task_description=info["task_description"],
             )
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
+            env_action_chunk = env_action_chunk[:, :config.collect.replan_steps]
             next_obs, _, terminate, truncate, _ = env.step(env_action_chunk)
 
             done_per_step = np.logical_or(terminate, truncate)
@@ -154,13 +155,14 @@ def collect_data(
                 task_description=info["task_description"],
             )
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
+            env_action_chunk = env_action_chunk[:, :config.collect.replan_steps]
             next_obs, reward, terminate, truncate, _ = env.step(env_action_chunk)
             aligned_obs = _shift_window(observation=obs, next_observation=next_obs)
 
             if isinstance(action_chunk, tuple):
-                action_payload = (env_action_chunk[:, :config.collect.replan_steps], action_chunk[1])
+                action_payload = (env_action_chunk, action_chunk[1])
             else:
-                action_payload = env_action_chunk[:, :config.collect.replan_steps]
+                action_payload = env_action_chunk
             step_data = {
                 "observation": aligned_obs,
                 "next_observation": next_obs,

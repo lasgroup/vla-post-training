@@ -27,6 +27,15 @@ Examples:
         --rl.online_ratio 1.0
 """
 
+import multiprocessing as mp
+import os
+
+mp.set_start_method("spawn", force=True)
+if mp.current_process().name != "MainProcess":
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+
 # suppress Numba FNV hashing warnings
 import warnings
 
@@ -47,11 +56,6 @@ logging.getLogger().addFilter(VersionWarningFilter())
 from datasets import disable_progress_bars
 
 disable_progress_bars()
-
-# allows using subprocenvs
-import multiprocessing as mp
-
-mp.set_start_method("spawn", force=True)
 
 import json
 import platform

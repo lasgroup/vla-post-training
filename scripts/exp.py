@@ -1,5 +1,17 @@
 # ruff: noqa: E402
+import multiprocessing as mp
+import os
 import time
+
+mp.set_start_method("spawn", force=True)
+if mp.current_process().name != "MainProcess":
+    # Slurm gives the collector one physical GPU, while every simulator worker
+    # renders on logical EGL device 0 inside that one-GPU namespace. Keep the
+    # scheduler-provided CUDA identity in the parent JAX policy process.
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+    os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+
 _PROCESS_START_TIME = time.monotonic()
 import sys
 REQUEUE_EXIT_CODE = 42
@@ -41,11 +53,6 @@ logging.getLogger().addFilter(VersionWarningFilter())
 from datasets import disable_progress_bars
 
 disable_progress_bars()
-
-# allows using subprocenvs
-import multiprocessing as mp
-
-mp.set_start_method("spawn", force=True)
 
 import platform
 

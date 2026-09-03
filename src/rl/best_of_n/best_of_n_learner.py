@@ -320,11 +320,17 @@ class BestofNLearner(FilteredSFTLearner):
     def sample_actions(self, observations, **kwargs):
         if self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
-        n_samples = self._config.rl.n_samples
+        if not isinstance(observations, dict):
+            raise TypeError("Best-of-N inference requires dictionary observations.")
+        best_of_n_config = self._config.rl
+        assert isinstance(best_of_n_config, BestofNLearnerConfig)
+        n_samples = best_of_n_config.n_samples
         rng, self._rng = jax.random.split(self._rng)
         task_description = kwargs.get("task_description")
 
-        # Group envs by task so each _sample_action call gets a single string prompt.
+        # Keep task groups only for task-specific critic preprocessing. Every
+        # policy call stays vectorized over all environments; candidate
+        # microbatches bound Best-of-N inference memory.
         if task_description is None or isinstance(task_description, str):
             task_description = [task_description] * next(
                 np.asarray(v).shape[0] for v in observations.values()
@@ -338,6 +344,50 @@ class BestofNLearner(FilteredSFTLearner):
         all_best_actions = None
         all_best_prefix = None
 
+        processed_batch = self._process_obs_for_pi0(
+            observations, task_description=task_description
+        )
+        candidates_per_batch = best_of_n_config.inference_candidates_per_batch
+        if candidates_per_batch <= 0:
+            raise ValueError("inference_candidates_per_batch must be positive.")
+        candidate_counts = [
+            min(candidates_per_batch, n_samples - start)
+            for start in range(0, n_samples, candidates_per_batch)
+        ]
+        batch_rngs = jax.random.split(rng, len(candidate_counts))
+        candidate_action_batches = []
+        env_prefix = None
+        for candidate_count, batch_rng in zip(
+            candidate_counts, batch_rngs, strict=True
+        ):
+            tiled_batch = {
+                key: np.repeat(np.asarray(value), candidate_count, axis=0)
+                for key, value in processed_batch.items()
+            }
+            actions, prefix = self._sample_action(
+                tiled_batch,
+                batch_rng,
+                self._train_state,
+                return_prefix_rep=True,
+            )
+            actions = np.asarray(actions).reshape(
+                env_num, candidate_count, *np.asarray(actions).shape[1:]
+            )
+            candidate_action_batches.append(actions)
+            if env_prefix is None:
+                prefix = np.asarray(prefix)
+                env_prefix = prefix.reshape(
+                    env_num, candidate_count, *prefix.shape[1:]
+                )[:, 0]
+        candidate_actions = np.concatenate(candidate_action_batches, axis=1).reshape(
+            env_num * n_samples, *candidate_action_batches[0].shape[2:]
+        )
+        assert env_prefix is not None
+        if env_prefix.ndim == 3:
+            env_prefix = env_prefix.reshape(
+                env_prefix.shape[0], -1, env_prefix.shape[-1]
+            ).mean(axis=1)
+
         # Build q-model once, shared across task groups.
         q_params = (
             self._state_action_critic_state.ema_params
@@ -347,26 +397,20 @@ class BestofNLearner(FilteredSFTLearner):
         q_model = nnx.merge(self._state_action_critic_state.model_def, q_params)
         q_model.eval()
 
-        # Build policy model once for prefix embedding.
-        params = (
-            self._train_state.ema_params
-            if self._train_state.ema_params is not None
-            else self._train_state.params
-        )
-        policy_model = nnx.merge(self._train_state.model_def, params)
-        policy_model.eval()
-
         for task, indices in task_to_indices.items():
-            group_obs = jax.tree.map(lambda x: np.asarray(x)[indices], observations)
-            processed_obs = self._process_obs_for_pi0(group_obs, task_description=task)
+            processed_obs = {
+                key: task if key == "prompt" else np.asarray(value)[indices]
+                for key, value in processed_batch.items()
+            }
             group_env_num = len(indices)
 
-            # 1. Tile obs along batch dim and sample all candidates in one pass
-            tiled_obs = {
-                k: (v if k == "prompt" else np.repeat(np.asarray(v), n_samples, axis=0))
-                for k, v in processed_obs.items()
-            }
-            group_actions = self._sample_action(tiled_obs, rng, self._train_state)
+            # Preserve each environment's contiguous candidate block after
+            # selecting this task group from the globally sampled batch.
+            candidate_indices = (
+                np.asarray(indices)[:, np.newaxis] * n_samples
+                + np.arange(n_samples)[np.newaxis, :]
+            ).reshape(-1)
+            group_actions = candidate_actions[candidate_indices]
             # group_actions: [group_env_num * n_samples, horizon, dim]
 
             # 2. Build critic observation (normalize + pad state to match buffer preprocessing)
@@ -393,54 +437,9 @@ class BestofNLearner(FilteredSFTLearner):
             state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
             critic_obs: dict = {"state": state}
 
-            # Compute prefix embedding on the non-tiled group, then repeat it
-            # across candidates. This matches ralf/value_learning's expensive
-            # model work. We transform per env before stacking to avoid LiberoInputs
-            # misreading a 3-env HWC image batch as one CHW image.
-            per_env_inputs = [
-                self._policy._input_transform(
-                    {
-                        k: (v if k == "prompt" else np.asarray(v)[i])
-                        for k, v in processed_obs.items()
-                    }
-                )
-                for i in range(group_env_num)
-            ]
-
-            def _stack_prefix_inputs(*values):
-                first = values[0]
-                if first is None:
-                    return None
-                return jnp.stack([jnp.asarray(v) for v in values], axis=0)
-
-            inputs = jax.tree.map(_stack_prefix_inputs, *per_env_inputs)
-            batch_size = group_env_num
-
-            def _as_batched_array(value):
-                if value is None:
-                    return None
-                value = jnp.asarray(value)
-                if value.ndim > 0 and value.shape[0] == batch_size:
-                    return value
-                return jnp.broadcast_to(
-                    value[jnp.newaxis, ...], (batch_size,) + value.shape
-                )
-
-            inputs = {
-                k: (
-                    jax.tree.map(lambda x: None if x is None else jnp.asarray(x), v)
-                    if k in ("image", "state")
-                    else jax.tree.map(_as_batched_array, v)
-                )
-                for k, v in inputs.items()
-            }
-            obs_for_prefix = _model.Observation.from_dict(inputs)
-            prefix = self._get_prefix_rep_with_model(
-                m=policy_model, observation=obs_for_prefix
-            )
-            prefix = np.asarray(prefix)
-            if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+            # Prefixes come from the same model invocation as the action
+            # candidates; take one identical observation prefix per env.
+            prefix = env_prefix[indices]
             critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
                 jnp.asarray(prefix), n_samples, axis=0
             )
@@ -467,7 +466,9 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             else:
                 actions_norm = np.asarray(
-                    self._action_normalize({"actions": np.asarray(group_actions)})["actions"]
+                    self._action_normalize({"actions": np.asarray(group_actions)})[
+                        "actions"
+                    ]
                 )
                 actions_norm = self._pad_last_dim(actions_norm, model_act_dim)
             flat_actions = jnp.asarray(
@@ -501,10 +502,16 @@ class BestofNLearner(FilteredSFTLearner):
 
             if return_prefix_rep:
                 if all_best_prefix is None:
-                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+                    all_best_prefix = np.zeros(
+                        (env_num, prefix.shape[-1]), dtype=np.float32
+                    )
                 all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
-        return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
+        return (
+            (all_best_actions, all_best_prefix)
+            if return_prefix_rep
+            else all_best_actions
+        )
 
     @at.typecheck
     def _get_on_policy_action(
