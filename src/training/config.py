@@ -182,8 +182,8 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     online_ratio: float = 1.0
     critic: CriticTrainingConfig = CriticTrainingConfig()
     n_samples: int = 32
-    # Bound pi0.5 inference memory while keeping every call vectorized over envs.
-    inference_candidates_per_batch: int = 2
+    # Keep two pi0.5 calls at N=32 while retaining margin below the one-call OOM.
+    inference_candidates_per_batch: int = 30
     discount: float = 0.995
     train_on_policy_value_function: bool = False
 

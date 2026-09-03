@@ -16,6 +16,10 @@ ACTION_HORIZON = 10
 ACTION_DIM = 7
 
 
+def test_best_of_n_default_uses_benchmarked_candidate_batch():
+    assert BestofNLearnerConfig().inference_candidates_per_batch == 30
+
+
 class _FakePolicy:
     action_horizon = ACTION_HORIZON
     action_dim = ACTION_DIM
