@@ -1,7 +1,7 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_aw_sft
-project_name: openpi
-group_name: parl_v1
+project_name: vla-post-training
+group_name: policy_extraction_tasks4_parl_libero_v0_seed0
 params:
   log_interval: [25]
   num_train_steps: [500000]
@@ -35,18 +35,11 @@ params:
   rl.filtered_sft_weight: [1.0]
   rl.policy.update_interval: [100]
 
-  # 4 variants of the same bofn + fsft recipe:
-  #   filter_sft_by_success: clone successful episodes only (True) vs. all of them (False).
-  #     The critic is unfiltered in both cases.
-  #   rerank_buffer_actions: freeze the argmax-Q candidate at collection time (False) vs.
-  #     store all 32 candidates and re-pick the best with the current critic on every
-  #     batch sample (True). Only windows starting at a decision point (1 in
-  #     collect.replan_steps) carry candidates; the rest keep their executed action.
   !!python/tuple [rl.filter_sft_by_success, rl.rerank_buffer_actions]: [
-    [True, False],
+    # [True, False],  # BofN + FSFT
     [False, False],
     [True, True],
-    [False, True],
+    # [False, True],  # closest to PARL
   ]
 
   rl.critic.batch_size: [1024]
