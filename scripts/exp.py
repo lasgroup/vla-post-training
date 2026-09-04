@@ -168,8 +168,7 @@ def main(config: _config.OnlineTrainConfig):
 
         about_to_collect = (step + 1) % config.collect.collect_interval == 0
         about_to_eval = (step + 1) % config.collect.eval_interval == 0
-        runtime_exceeded = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
-        out_of_time = runtime_exceeded and (about_to_collect or about_to_eval)
+        out_of_time = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
         if about_to_collect or about_to_eval or out_of_time:
             save_epoch_state(agent, config, prepare_for_resume=True)
             if out_of_time or (about_to_eval and config.requeue_before_eval):
