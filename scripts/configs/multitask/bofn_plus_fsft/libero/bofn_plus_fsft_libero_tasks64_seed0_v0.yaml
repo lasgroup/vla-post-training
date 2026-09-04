@@ -1,0 +1,71 @@
+script: scripts/exp.py
+config_name: pi05_libero_online_aw_sft
+project_name: vla-post-training
+group_name: multitask_tasks64_bofn_plus_fsft_libero_v0_seed0
+params:
+  log_interval: [25]
+  num_train_steps: [500000]
+  lr_schedule.value: [2.5e-5]
+  max_runtime: [25200]  # 7 hours: one collect cycle (~4.5h, grows) must fit before the 12h wall
+  requeue_before_eval: [True]
+  free_buffer_before_eval: [True]
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  collect.eval_interval: [499999]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts]: [
+    [50000, 20],
+  ]
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [libero, [
+        libero_90_5, libero_90_32, libero_90_6, libero_90_36, libero_90_74, libero_90_39, libero_90_40, libero_90_76,
+        libero_90_41, libero_90_43, libero_90_45, libero_90_49, libero_90_89, libero_90_65, libero_90_62, libero_90_42,
+        libero_90_78, libero_90_8, libero_90_1, libero_90_88, libero_90_16, libero_90_17, libero_90_3, libero_90_87,
+        libero_90_86, libero_90_58, libero_90_21, libero_90_84, libero_90_83, libero_90_25, libero_90_80, libero_90_27,
+        libero_90_85, libero_90_73, libero_90_35, libero_90_53, libero_90_63, libero_90_14, libero_90_44, libero_90_64,
+        libero_90_31, libero_90_79, libero_90_38, libero_90_82, libero_90_28, libero_90_70, libero_90_59, libero_90_60,
+        libero_90_30, libero_90_12, libero_90_29, libero_90_47, libero_90_54, libero_90_56, libero_90_33, libero_90_9,
+        libero_90_46, libero_90_50, libero_90_67, libero_90_51, libero_90_24, libero_90_20, libero_90_55, libero_90_61,
+      ],
+      [
+        libero_90_5, libero_90_32, libero_90_6, libero_90_36, libero_90_74, libero_90_39, libero_90_40, libero_90_76,
+        libero_90_41, libero_90_43, libero_90_45, libero_90_49, libero_90_89, libero_90_65, libero_90_62, libero_90_42,
+        libero_90_78, libero_90_8, libero_90_1, libero_90_88, libero_90_16, libero_90_17, libero_90_3, libero_90_87,
+        libero_90_86, libero_90_58, libero_90_21, libero_90_84, libero_90_83, libero_90_25, libero_90_80, libero_90_27,
+        libero_90_85, libero_90_73, libero_90_35, libero_90_53, libero_90_63, libero_90_14, libero_90_44, libero_90_64,
+        libero_90_31, libero_90_79, libero_90_38, libero_90_82, libero_90_28, libero_90_70, libero_90_59, libero_90_60,
+        libero_90_30, libero_90_12, libero_90_29, libero_90_47, libero_90_54, libero_90_56, libero_90_33, libero_90_9,
+        libero_90_46, libero_90_50, libero_90_67, libero_90_51, libero_90_24, libero_90_20, libero_90_55, libero_90_61,
+
+        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
+        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
+        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
+      ],
+    ]
+  ]
+
+  collect.store_prefix_rep: [True]
+
+  rl.n_samples: [32]
+  rl.awr_loss_weight: [0.0]
+  rl.filtered_sft_weight: [1.0]
+  # 10 collections x (50000/100) = 500 policy updates each = 5000 total, matching fsft_libero_tasks64.
+  rl.policy.update_interval: [100]
+
+  rl.critic.batch_size: [1024]
+  rl.critic.inference_start_step: [1]
+  rl.critic.pre_training_steps: [0]
+  rl.critic.td_weight_schedule.switch_step: [999999]
+
+  !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
+    [1, 1, False, 1],     # TD (regression)
+  ]
+
+  rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
+
+  rl.buffer_capacity: [300000]   # 500k/400k OOM at step 50k; 300k survived
+  rl.online_ratio: [1.0]
+  rl.discount: [0.995]
+
+  seed: [0]

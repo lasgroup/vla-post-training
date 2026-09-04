@@ -418,14 +418,16 @@ def make_base_libero_config(
 
 
 def make_base_molmo_config(
-        name: str, rl_config: RLAlgorithmConfig
+        name: str, rl_config: RLAlgorithmConfig, **kwargs
 ) -> OnlineTrainConfig:
     """
     Factory function to generate a base OnlineTrainConfig for Molmo.
     Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+
+    Extra kwargs are forwarded to OnlineTrainConfig (e.g. freeze_filter,
+    ema_decay, num_train_steps overrides).
     """
-    return OnlineTrainConfig(
-        name=name,
+    defaults = dict(
         model=pi0_config.Pi0Config(
             pi05=True, action_horizon=15, discrete_state_input=False
         ),
@@ -457,14 +459,15 @@ def make_base_molmo_config(
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=10_000,
         num_workers=4,  # override default num_workers
-        rl=rl_config,
         collect=CollectionConfig(
             domain="molmo",
             max_episode_steps=450,
             resize_image_h=224,
             resize_image_w=224,
-        )
+        ),
     )
+    defaults.update(kwargs)
+    return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
 def _make_ogpo_freeze_filter():
@@ -513,6 +516,40 @@ _CONFIGS.extend(
             rl_config=AdvantageWeightedSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
+        ),
+        make_base_molmo_config(
+            name="pi05_molmo_online_aw_sft",
+            rl_config=AdvantageWeightedSFTLearnerConfig(
+                online_ratio=1.0,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+            ),
+        ),
+        # 3. BoN+FSFT (expert-only): PaliGemma LLM stack 0 and the SigLIP img tower are
+        # frozen, so only the action expert (LLM stack 1) and the small
+        # action-projection MLPs receive gradients; frozen params are cast to
+        # bfloat16 by init_train_state. These need their own config names because
+        # freeze_filter is a pytree path filter, not a CLI-overridable scalar.
+        make_base_molmo_config(
+            name="pi05_molmo_online_aw_sft_expert_only",
+            rl_config=AdvantageWeightedSFTLearnerConfig(
+                online_ratio=1.0,
+                awr_loss_weight=0.0,
+                filtered_sft_weight=1.0,
+                n_samples=32,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        make_base_libero_config(
+            name="pi05_libero_online_aw_sft_expert_only",
+            rl_config=AdvantageWeightedSFTLearnerConfig(
+                online_ratio=1.0,
+                awr_loss_weight=0.0,
+                filtered_sft_weight=1.0,
+                n_samples=32,
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
         ),
         # 3. MPO Weighted SFT
         make_base_libero_config(
