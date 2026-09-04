@@ -669,6 +669,14 @@ class FilteredSFTLearner(Agent):
         if is_success:
             self._save_episode_in_buffer(episode_data, task_description, is_success=True)
 
+    def _extra_transition_fields(self, episode_data: Dict[str, Any], n_windows: int) -> Dict[str, np.ndarray]:
+        """Per-transition arrays to store alongside the standard ones.
+
+        `episode_data` is the concatenated (per env step) episode; subclasses that
+        declare extra keys in `_make_buffer_dummy_data` fill them in here.
+        """
+        return {}
+
     def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
         # target_buffer allows PARL (and other wrappers) to redirect an episode
         # into a separate buffer without subclassing or duplicating preprocessing.
@@ -751,6 +759,7 @@ class FilteredSFTLearner(Agent):
                 "mc_return": _mc_return.astype(np.float32),
                 "discount": _discount.astype(np.float32),
                 "is_success": _is_success,
+                **self._extra_transition_fields(episode_data, n_windows),
             }
         )
         if target_buffer is None:

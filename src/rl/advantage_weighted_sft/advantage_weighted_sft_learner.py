@@ -22,8 +22,10 @@ from src.rl.advantage_weighted_sft.update_actor import (
     train_step as train_actor_step,
 )
 from src.rl.advantage_weighted_sft.update_critic import (
+    create_critic,
     init_state_action_critic_train_state,
     init_state_value_train_state,
+    summarize_critic_values,
     train_q_step,
     train_value_step,
 )
@@ -64,6 +66,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._prefix_embed_dim = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
             self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+
+        # Best-of-N candidates produced by the most recent `sample_actions` call,
+        # consumed by the next `add_data` call. Only used when re-ranking is on.
+        self._pending_candidates: np.ndarray | None = None
 
         super().__init__(config)
 
@@ -118,6 +124,20 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         self._refresh_update_functions()
 
     def _refresh_update_functions(self):
+        if self._rerank_enabled:
+            if not self._config.collect.store_prefix_rep:
+                raise ValueError(
+                    "rl.rerank_buffer_actions requires collect.store_prefix_rep=True: "
+                    "re-ranking scores buffered candidates with the critic, which needs "
+                    "the cached prefix embedding."
+                )
+            if int(self._policy.action_horizon) != int(self._config.model.action_horizon):
+                raise ValueError(
+                    "rl.rerank_buffer_actions requires the policy action horizon "
+                    f"({self._policy.action_horizon}) to match the buffer window length "
+                    f"({self._config.model.action_horizon}); otherwise a candidate chunk "
+                    "is not comparable to a stored transition."
+                )
 
         def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
             return self._update_critics(
@@ -158,6 +178,10 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             donate_argnums=(1, 2),
         )
 
+        self._rerank_jitted = (
+            jax.jit(self._rerank_batch_actions) if self._rerank_enabled else None
+        )
+
         self._update_policy_jitted = jax.jit(
             _policy_wrapper,
             in_shardings=(
@@ -177,11 +201,68 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             donate_argnums=(1,),
         )
 
+    @property
+    def _rerank_enabled(self) -> bool:
+        """Whether to keep every best-of-N candidate and re-rank it at sample time."""
+        return bool(self._config.rl.rerank_buffer_actions and self._config.rl.n_samples > 1)
+
+    def _candidate_shape(self) -> tuple[int, int, int]:
+        return (
+            int(self._config.rl.n_samples),
+            int(self._config.model.action_horizon),
+            int(self._config.model.action_dim),
+        )
+
+    def _rerank_batch_actions(
+        self,
+        batch: dict[str, Any],
+        q_state: training_utils.TrainState,
+    ) -> tuple[_model.Actions, dict[str, at.Array]]:
+        """Re-pick the best-of-N candidate chunk under the *current* critic.
+
+        Collection freezes the argmax-Q candidate at rollout time; here we score all
+        stored candidates again with the critic as it is now. Transitions whose
+        window did not start at a decision point carry no candidates (mask == 0) and
+        keep the action that was actually executed.
+        """
+        candidates = jnp.asarray(batch["candidate_actions"])  # (b, n, h, d)
+        mask = jnp.asarray(batch["candidate_mask"], dtype=jnp.float32)  # (b,)
+        b, n = candidates.shape[0], candidates.shape[1]
+
+        critic_obs = {
+            "state": batch["observation"]["state"],
+            PREFIX_EMBEDDING_NAME: batch["observation"][PREFIX_EMBEDDING_NAME],
+        }
+        tiled_obs = jax.tree.map(lambda x: jnp.repeat(x, n, axis=0), critic_obs)
+
+        critic = create_critic(q_state, self._config)
+        critic.eval()
+        q_values = summarize_critic_values(
+            critic(tiled_obs, candidates.reshape(b * n, -1)),
+            self._config,
+            self._config.rl.critic.reduction,
+        ).reshape(b, n)
+
+        best_idx = jnp.argmax(q_values, axis=-1)
+        picked = jnp.take_along_axis(candidates, best_idx[:, None, None, None], axis=1)[:, 0]
+        actions = jnp.where((mask > 0)[:, None, None], picked, batch["actions"])
+        info = {
+            "rerank_coverage": jnp.mean(mask),
+            # max - mean over candidates: how much the choice is worth right now.
+            "rerank_q_spread": jnp.sum(
+                mask * (jnp.max(q_values, axis=-1) - jnp.mean(q_values, axis=-1))
+            ) / jnp.maximum(jnp.sum(mask), 1.0),
+        }
+        return actions, info
+
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
         if self._prefix_embed_dim is not None:
             zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
             dummy["observations"][PREFIX_EMBEDDING_NAME] = zeros
+        if self._rerank_enabled:
+            dummy["candidate_actions"] = np.zeros((1, *self._candidate_shape()), dtype=np.float32)
+            dummy["candidate_mask"] = np.zeros((1,), dtype=np.float32)
         return dummy
 
     def _rl_checkpoint_state(self) -> dict[str, training_utils.TrainState]:
@@ -317,6 +398,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         """
         assert isinstance(self._config.rl, AdvantageWeightedSFTLearnerConfig)
         n_samples = self._config.rl.n_samples
+        self._pending_candidates = None
         if n_samples <= 1 or self.training_steps < self._config.rl.critic.inference_start_step:
             return super().sample_actions(observations, **kwargs)
 
@@ -337,6 +419,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return_prefix_rep = self._config.collect.store_prefix_rep
         all_best_actions = None
         all_best_prefix = None
+        all_candidates = None
 
         q_params = (
             self._state_action_critic_state.ema_params
@@ -465,6 +548,19 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             scores = scores.reshape(group_env_num, n_samples)
             best_idx = scores.argmax(axis=1)
 
+            if self._rerank_enabled:
+                # Store the candidates in *buffer* space (the same normalize/pad the
+                # critic just scored), so they can be re-scored later and used
+                # directly as a BC target. Note `post_step_action_filter` is not
+                # applied here, matching the collection-time scoring above; it only
+                # zeroes |a| < 1.1e-3, well below the resolution that matters.
+                n_cand, cand_h, cand_dim = self._candidate_shape()
+                if all_candidates is None:
+                    all_candidates = np.zeros((env_num, n_cand, cand_h, cand_dim), dtype=np.float32)
+                all_candidates[indices] = actions_norm.reshape(
+                    group_env_num, n_cand, cand_h, cand_dim
+                ).astype(np.float32)
+
             group_actions = np.asarray(group_actions).reshape(
                 group_env_num, n_samples, *np.asarray(group_actions).shape[1:]
             )
@@ -479,7 +575,44 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                     all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
                 all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
+        self._pending_candidates = all_candidates
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
+
+    def add_data(self, step_data):
+        if not self._rerank_enabled:
+            super().add_data(step_data)
+            return
+        # `sample_actions` runs once per `replan_steps` env steps, so only the first
+        # step of this payload sits at a best-of-N decision point. Windows starting
+        # there can be re-ranked; the rest carry a zero mask and keep their executed
+        # action. `_pending_candidates` is None before `critic.inference_start_step`,
+        # when collection still falls back to a single policy sample.
+        n_cand, cand_h, cand_dim = self._candidate_shape()
+        replan_steps = int(self._config.collect.replan_steps)
+        candidates = self._pending_candidates
+        self._pending_candidates = None
+        for i in range(self._config.collect.env_num):
+            data = jax.tree.map(lambda x: x[i], step_data)
+            per_step = np.zeros((replan_steps, n_cand, cand_h, cand_dim), dtype=np.float32)
+            mask = np.zeros((replan_steps,), dtype=np.float32)
+            if candidates is not None:
+                per_step[0] = candidates[i]
+                mask[0] = 1.0
+            data["candidate_actions"] = per_step
+            data["candidate_mask"] = mask
+            self._episode_storage[i].append(data)
+
+    def _extra_transition_fields(self, episode_data, n_windows: int) -> dict:
+        if not self._rerank_enabled:
+            return {}
+        return {
+            "candidate_actions": np.asarray(
+                episode_data["candidate_actions"][:n_windows], dtype=np.float32
+            ),
+            "candidate_mask": np.asarray(
+                episode_data["candidate_mask"][:n_windows], dtype=np.float32
+            ),
+        }
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
         assert env_index in range(
@@ -628,12 +761,22 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             update_policy = False
 
         critic_info, actor_info = {}, {}
+        rerank_info = {}
         mc_return = None
         is_success = None
         if use_online:
             # Two independent samples: critics may use a larger batch than the policy.
             critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size) if update_critic else None
             online_batch = self._online_data_buffer.sample(batch_size=policy_batch_size)
+            if self._rerank_jitted is not None and update_policy:
+                # Re-rank before the batch is folded into the SFT tuple: the critic
+                # update below uses `critic_online_batch`, which keeps the executed
+                # actions (they are what the stored reward/next_obs correspond to).
+                with sharding.set_mesh(self._mesh):
+                    reranked_actions, rerank_info = self._rerank_jitted(
+                        online_batch, self._state_action_critic_state
+                    )
+                online_batch["actions"] = jax.device_put(reranked_actions, self._data_sharding)
             if update_critic:
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -709,6 +852,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             first_leaf = jax.tree.leaves(batch)[0]
             # Assumes all offline data is successful demos
             is_success = jnp.ones(first_leaf.shape[0], dtype=jnp.float32)
+        if not self._config.rl.filter_sft_by_success and is_success is not None:
+            # Train the filtered-SFT term on every transition, not just successes.
+            is_success = jnp.ones_like(is_success)
         if update_policy:
             policy_rng, self._rng = jax.random.split(self._rng, 2)
             scale = self._normalizer_state.scale if self._config.rl.normalize_advantages else 1.0
@@ -747,7 +893,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 normalizer_state=self._normalizer_state,
                 bias=bias,
                 scale=scale)
-            actor_info = actor_info | normalizer_info
+            actor_info = actor_info | normalizer_info | rerank_info
             actor_info = {f"actor/{key}": value for key, value in actor_info.items()}
 
         info = (

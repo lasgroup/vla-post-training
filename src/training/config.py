@@ -175,6 +175,15 @@ class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
     # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
     filtered_sft_weight: float = 0.0
     awr_loss_weight: float = 1.0
+    # When False the filtered-SFT term drops the success mask and trains on every
+    # collected transition. The critic is unfiltered either way.
+    filter_sft_by_success: bool = True
+    # When True, best-of-N collection stores all n_samples candidate chunks in the
+    # replay buffer and re-selects the argmax-Q one with the *current* critic every
+    # time a batch is sampled, instead of freezing the choice at collection time.
+    # Only the window that starts at an inference step carries candidates; windows
+    # that start mid-chunk keep their executed action (see `add_data`).
+    rerank_buffer_actions: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
