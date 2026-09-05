@@ -92,7 +92,12 @@ class ShardedReplayBuffer:
         if txn_treedef != self._storage_treedef:
             raise ValueError("Insert transition structure does not match buffer structure")
 
-        num_obs = int(obs_leaves[0].shape[0])
+        # Some leaves are 0-d (LiberoInputs emits image_mask as np.True_/np.False_
+        # scalars), so take the batch size from the first batched leaf rather than
+        # leaf 0 — which is only an image while "image" is present in the tree.
+        num_obs = next(
+            (int(leaf.shape[0]) for leaf in obs_leaves if np.ndim(leaf) >= 1), 0
+        )
         num_new = int(obs_index.shape[0])
         if num_new <= 0:
             return

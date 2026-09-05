@@ -64,8 +64,8 @@ exec uv run scripts/exp.py \
   --num_train_steps 5000 \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
-  --collect.tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
-  --collect.eval_tasks libero_90_79 libero_90_31 libero_90_82 libero_90_38 \
+  --collect.tasks libero_90_38 \
+  --collect.eval_tasks libero_90_38 \
   --collect.collect_interval 500 \
   --collect.num_rollouts 20 \
   --collect.env_num 8 \

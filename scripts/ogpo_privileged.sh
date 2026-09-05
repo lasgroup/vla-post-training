@@ -2,7 +2,7 @@
 #SBATCH --partition=maxlab
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
-#SBATCH --job-name=ogpo_mt4
+#SBATCH --job-name=ogpo_priv
 #SBATCH --gres=gpu:4
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
@@ -11,36 +11,60 @@
 #SBATCH --output=/home/mananaga/logs/%j/.out
 #SBATCH --error=/home/mananaga/logs/%j/.out
 # ---------------------------------------------------------------------------
-# Multi-task OGPO launcher: the "4-task LIBERO" benchmark set
-# (libero_90_79/31/82/38 — same set as fsft_libero_babel.sh and the
-# scripts/configs/multitask/*_tasks4-16 YAMLs), running the stabilized
-# single-task recipe from the stability study:
+# PRIVILEGED-CRITIC OGPO: the critic-capacity upper bound for the 4-task LIBERO
+# benchmark set (libero_90_79/31/82/38).
 #
-#   warmstart (PG muted 0->PG_START, succBC-only actor) -> linear PG ramp-in
-#   + grpo_conservative advantage (Q-only, sign-unanimous across heads)
-#   + EMA-quantile advantage normalizer + symmetric clip
-#   + post-collection critic digestion burst
+# This is scripts/ogpo_multitask_4task.sh with the CRITIC swapped and nothing
+# else. Same tasks, same rollout budget, same warmstart + PG ramp, same
+# advantage combination / normalizer / clip, same digestion burst, same policy
+# schedule, same optimizer. Run the two side by side and every difference is
+# attributable to the critic.
 #
-# plus the two multi-task OGPO knobs (per-task advantage normalization,
-# task-balanced success-buffer BC sampling) and the 500k buffer used by the
-# multitask configs.
+# WHAT CHANGES (src/rl/ogpo/privileged/, src/rl/privileged_state.py):
+#   1. STATE   The critic reads the simulator's own state — robot proprioception
+#              (robot0_proprio-state) plus every object's pose relative to the
+#              world and the gripper (object-state) — instead of the mean-pooled
+#              PaliGemma prefix + the policy's 8-d proprio vector. Zero-padded
+#              to PSTATE_DIM so one buffer schema covers tasks with different
+#              object counts.
+#   2. HEADS   One INDEPENDENT critic per training task (4 here), selected per
+#              sample from the task id recorded at reset. No capacity is spent
+#              telling the tasks apart, and one task's transitions cannot move
+#              another task's critic.
 #
-# PER-TASK SEMANTICS (why the defaults differ from the single-task numbers):
-#   collect.num_rollouts, num_initial_rollouts, num_eval_rollouts are all
-#   PER TASK and multiply by len(tasks). Defaults below keep the totals at
-#   the single-task recipe's calibration:
-#     N_ROLLOUTS=5      -> 20 episodes/round total (same flood size the
-#                          BURST=1000 digestion was tuned against)
-#     INIT_ROLLOUTS=10  -> (5+10)*4 = 60-episode step-0 collection (same
-#                          spark insurance as the colleague's cfg)
+# WHAT DOES NOT CHANGE: the TD target. Q still bootstraps through V(s'), and V
+# is still regressed onto Q(s, a_buffer), through the SAME shared critic train
+# steps the baseline uses — so the default arm isolates the critic's INPUTS and
+# PARAMETERIZATION from everything else.
+#   BACKUP=next_action_q is an opt-in ablation that instead backs up through
+#   Q_ema(s', a'), a' = the action the policy took at s'. That action is read
+#   out of the stored trajectory at collection (no policy rollout at TD time —
+#   the runtime cost is one extra critic forward), but it does add a
+#   `next_actions` column to the replay buffer: one action chunk per
+#   transition, ~640 MB at --rl.buffer_capacity 500000. The default allocates
+#   nothing for it.
 #
-# Env vars (defaults = colleague's recipe; set =0 / empty to disable):
-#   GPU           - CUDA device index or comma list, e.g. GPU=0 or GPU=0,1 (required)
-#   FSDP          - fsdp_devices (default 1; set to the number of GPUs in GPU)
+# The privileged vector does not exist on a real robot: this measures the
+# headroom the current critic is leaving on the table, it is not a deployable
+# recipe. Read critic/q_mc_corr against the baseline run's — the advantage only
+# ever consumes the critic's ORDERING of actions, so that correlation, not
+# q_value_mean, is the number this experiment is about.
+#
+# NOTE ON store_prefix_rep: deliberately NOT passed. The privileged critic reads
+# no prefix rep, so the per-collection-step PaliGemma prefix forward and the
+# prefix column in the buffer are both dropped (the learner rejects the flag
+# rather than silently paying for it).
+#
+# Env vars (defaults = the mt4 recipe; set =0 / empty to disable):
+#   GPU           - CUDA device index or comma list (default: SLURM's allocation)
+#   FSDP          - fsdp_devices (default: number of GPUs in GPU)
 #   ARM           - run name suffix (default v0)
 #   SEED          - default 0
+#   BACKUP        - value (default, the baseline's V bootstrap) | next_action_q
+#   PSTATE_DIM    - privileged state width, zero-padded (default 512)
+#   CRITIC_HID    - per-task BroNet width (default 1024, same as mt4)
 #   N_ROLLOUTS    - rollouts PER TASK per collection round (default 5)
-#   INIT_ROLLOUTS - EXTRA per-task episodes at step 0 only (default 10; empty to skip)
+#   INIT_ROLLOUTS - EXTRA per-task episodes at step 0 only (default 10)
 #   COLLECT_INT   - collection interval (default 10000)
 #   PG_START      - BC-only warmstart length (default 20000; 0 disables)
 #   PG_RAMP       - linear PG ramp-in after handoff (default 5000)
@@ -50,39 +74,33 @@
 #   BURST         - critic-only steps after each collection round (default 1000)
 #   MT_ADV        - 1 => per-task advantage normalization (default 1)
 #   MT_BAL        - 1 => task-balanced success-buffer BC (default 1)
-#   HELDOUT       - 1 => eval also on the 25-task held-out block (default 0:
-#                   eval on the 4 train tasks only). With HELDOUT=1 consider
-#                   EVAL_ROLLOUTS=8 — eval cost is EVAL_ROLLOUTS x 29 episodes.
-#   EVAL_ROLLOUTS - eval episodes PER TASK (default 32, the study's EMA eval)
-#   NUM_STEPS     - train steps (default 100000). Set 100001 so the loop
-#                   reaches step 100000 and the final checkpoint gets an
-#                   in-run eval (the eval loop skips the last step otherwise).
-#   SAVE_INT      - save_interval (default 200000). Any value > NUM_STEPS means
-#                   no epoch state is ever written (~0 GB instead of ~55 GB per
-#                   save); the tradeoff is no resume point except the
-#                   max_runtime path. 100000 => one final checkpoint.
-#   CKPT_BASE_DIR - checkpoint root (default: your user_data dir, see below)
+#   NUM_QS        - critic ensemble size PER TASK (default 2)
+#   CRITIC_RED    - ensemble reduction (default min)
+#   SUCC_BONUS    - reward on the terminating step (default 0)
+#   SB_Q          - 1 => success-oversampled extra critic update (default 0)
+#   TD_W          - TD/MC blend for the critic loss (default 1 = pure TD)
+#   HELDOUT       - 1 => eval also on the 25-task held-out block (default 0)
+#   EVAL_ROLLOUTS - eval episodes PER TASK (default 32)
+#   NUM_STEPS     - train steps (default 100000)
+#   SAVE_INT      - save_interval (default 200000 => no epoch state written)
+#   CKPT_BASE_DIR - checkpoint root
 #   DRY           - 1 => print the final command instead of running it
 #
-# Usage:  GPU=0 bash scripts/ogpo_multitask_4task.sh
-#         GPU=1 ARM=noburst BURST=0 bash scripts/ogpo_multitask_4task.sh
+# Usage:  GPU=0 bash scripts/ogpo_privileged.sh
+#         GPU=1 ARM=qbackup BACKUP=next_action_q bash scripts/ogpo_privileged.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-# Under sbatch, SLURM already scopes the job to its allocated cards, so GPU is
-# only required for a bare interactive launch. Default to whatever SLURM gave
-# us (4 cards under the header above), and shard across all of them unless the
-# caller says otherwise -- matches awr_group_adv.sh's --fsdp_devices 4.
 GPU="${GPU:-${CUDA_VISIBLE_DEVICES:-0,1,2,3}}"
 ARM="${ARM:-v0}"
 SEED="${SEED:-0}"
 _NGPU=$(awk -F, '{print NF}' <<<"$GPU")
 FSDP="${FSDP:-$_NGPU}"
 
-# The 4-task LIBERO train set (keep identical to the multitask configs so
-# runs are comparable with the FSFT/AWR/BofN campaigns).
-TASKS=(libero_90_38)
-# Held-out eval block shared by the multitask YAMLs (generalization eval).
+# The 4-task LIBERO train set — identical to ogpo_multitask_4task.sh, so the
+# two runs are directly comparable. This list ALSO defines the critic's head
+# index space: one critic per distinct entry, in this order.
+TASKS=(libero_90_79 libero_90_31 libero_90_82 libero_90_38)
 HELDOUT_TASKS=(
   libero_90_34 libero_90_37 libero_90_4 libero_90_71 libero_90_66
   libero_90_52 libero_90_75 libero_90_11 libero_90_18 libero_90_23
@@ -91,27 +109,23 @@ HELDOUT_TASKS=(
   libero_90_72 libero_90_22 libero_90_2 libero_90_68 libero_90_57
 )
 EVAL_TASKS=("${TASKS[@]}")
+# Held-out tasks have no critic head; their task id is recorded as -1, which
+# one-hots to zero. Harmless because collection-time critic scoring (best-of-N)
+# is off, and eval never touches the critic at all.
 [ "${HELDOUT:-0}" = "1" ] && EVAL_TASKS+=("${HELDOUT_TASKS[@]}")
 
-# Non-interactive shells (nohup over ssh) miss ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"
 
-# Absolute, not derived from $0: sbatch copies the batch script into its spool
-# dir, so dirname "$0" does not resolve back to the checkout under SLURM.
 PROJECT_DIR="${PROJECT_DIR:-/home/mananaga/VLA/ogpo/vla-post-training}"
-# Everything on user_data: group_data IOs are slow and maxlab is unreachable.
 STORE_ROOT="${STORE_ROOT:-/data/user_data/mananaga/vla-post-training}"
-EXP_NAME="mt4_${ARM}_s${SEED}"
-CKPT_BASE_DIR="${CKPT_BASE_DIR:-$STORE_ROOT/checkpoints/ogpo_multitask_4task}"
+EXP_NAME="mt4priv_${ARM}_s${SEED}"
+CKPT_BASE_DIR="${CKPT_BASE_DIR:-$STORE_ROOT/checkpoints/ogpo_privileged}"
 
-# Reuse the babel venv rather than building one here: pyproject.toml and
-# uv.lock are byte-identical between the checkouts, and that venv has no
-# editable install of vla-post-training/openpi/molmospaces -- all three come
-# from PYTHONPATH below, so the interpreter runs THIS tree's code. Call the
-# interpreter directly, never `uv run`: uv re-resolves against the branch
-# lockfile and mutates the venv, which would break the babel checkout too.
+# Same interpreter contract as ogpo_multitask_4task.sh: reuse the babel venv,
+# never `uv run` (it would re-resolve against the branch lockfile and mutate the
+# venv, breaking the other checkout too). This tree's code comes from PYTHONPATH.
 PY="${PY:-/home/mananaga/VLA/manan_babel/vla-post-training/.venv/bin/python}"
-[ -x "$PY" ] || { echo "[mt4] no interpreter at $PY" >&2; exit 1; }
+[ -x "$PY" ] || { echo "[priv] no interpreter at $PY" >&2; exit 1; }
 
 export CUDA_VISIBLE_DEVICES="$GPU"
 cd "$PROJECT_DIR"
@@ -119,7 +133,6 @@ cd "$PROJECT_DIR"
 export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/openpi/packages/openpi-client/src:$PROJECT_DIR/openpi/src:$PROJECT_DIR/openpi/packages/openpi-client:$PROJECT_DIR/molmospaces"
 export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-$STORE_ROOT/cache/openpi}"
 export HF_HOME="${HF_HOME:-$STORE_ROOT/cache/huggingface}"
-# Your existing seeded config (~/.libero/config.yaml), same as awr_group_adv.sh.
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$HOME/.libero}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$STORE_ROOT/cache/uv}"
 export TORCH_HOME="${TORCH_HOME:-$STORE_ROOT/cache/torch}"
@@ -127,9 +140,6 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$STORE_ROOT/cache/triton}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-$STORE_ROOT/cache/matplotlib}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$STORE_ROOT/cache/xdg}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$STORE_ROOT/config/xdg}"
-# Online like the manan_babel scripts (they set no WANDB_* at all and use the
-# ~/.netrc credentials), so runs are readable with tests/awr/wandb_quantiles.py
-# while they are still going. WANDB_MODE=offline to fall back to local logging.
 export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_DIR="${WANDB_DIR:-$STORE_ROOT/wandb}"
 export WANDB_CACHE_DIR="${WANDB_CACHE_DIR:-$STORE_ROOT/cache/wandb}"
@@ -155,19 +165,16 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.75}"
 export MUJOCO_EGL_DEVICE_ID="${GPU%%,*}"
 
 EXTRA_FLAGS=()
-# --- colleague's stability recipe (each individually disable-able) ---
+# --- stability recipe, byte-for-byte the mt4 block ---
 PG_START="${PG_START:-20000}"
 PG_RAMP="${PG_RAMP:-5000}"
 [ "${PG_START}" != "0" ] && EXTRA_FLAGS+=(--rl.pg_start_step "$PG_START" --rl.pg_ramp_steps "$PG_RAMP")
-# Authoritative for the same reason as the block below: CONS=0 previously emitted
-# nothing, leaving the ref config's grpo_conservative default in place.
 if [ "${CONS:-1}" = "1" ]; then
   EXTRA_FLAGS+=(--rl.advantage_combination grpo_conservative)
 else
   EXTRA_FLAGS+=(--rl.advantage_combination reduced)
 fi
 [ "${NORM:-1}" = "1" ] && EXTRA_FLAGS+=(--rl.normalize_group_advantage)
-# CLIP_SYM=0 and CLIP_SYM= both disable (adv_clip_sym 0 would zero every advantage).
 CLIP_SYM="${CLIP_SYM-4.0}"
 [ -n "$CLIP_SYM" ] && [ "$CLIP_SYM" != "0" ] && EXTRA_FLAGS+=(--rl.adv_clip_sym "$CLIP_SYM")
 BURST="${BURST:-1000}"
@@ -177,32 +184,25 @@ INIT_ROLLOUTS="${INIT_ROLLOUTS-10}"
 # --- multi-task knobs ---
 [ "${MT_ADV:-1}" = "1" ] && EXTRA_FLAGS+=(--rl.normalize_advantage_per_task)
 [ "${MT_BAL:-1}" = "1" ] && EXTRA_FLAGS+=(--rl.balance_success_buffer_tasks)
-# --- reference-alignment knobs (docs/changes/2026-08-20-ogpo-reference-alignment) ---
-# Every default below reproduces the pre-alignment recipe EXACTLY. These flags are
-# emitted UNCONDITIONALLY, not only when set away from the default: the aligned
-# config (pi05_libero_online_ogpo_ref) carries the aligned value as its dataclass
-# default, so a conditional guard would silently ignore an env var set back to the
-# baseline value -- NUM_QS=2 would emit nothing and leave num_qs at 10. Always
-# emitting makes the env var authoritative for ANY config, which is what the
-# "reproduce the baseline stack by env vars alone" contract requires.
-# Consequence: the emitted command line gains these flags versus the pre-alignment
-# script. The RESOLVED config is unchanged at the defaults; that equivalence is what
-# tests/ogpo/test_verifier_alignment.py pins, not the command text.
-NUM_QS="${NUM_QS:-2}"            # reference: 10 (num_vs follows num_qs)
+# --- reference-alignment knobs (emitted unconditionally so the env var is
+# authoritative for ANY config, same contract as the mt4 script) ---
+NUM_QS="${NUM_QS:-2}"            # PER TASK: the run holds NUM_QS x len(TASKS) Q nets
 EXTRA_FLAGS+=(--rl.critic.num_qs "$NUM_QS" --rl.critic.num_vs "$NUM_QS")
-CRITIC_RED="${CRITIC_RED:-min}"  # reference: mean
+CRITIC_RED="${CRITIC_RED:-min}"
 EXTRA_FLAGS+=(--rl.critic.reduction "$CRITIC_RED")
-BON_N="${BON_N:-1}"              # best-of-N collection; >1 enables it (AWR:313)
-EXTRA_FLAGS+=(--rl.n_samples "$BON_N")
-SUCC_BONUS="${SUCC_BONUS:-0}"    # reward on the terminating step; 0 = original behavior
+SUCC_BONUS="${SUCC_BONUS:-0}"
 EXTRA_FLAGS+=(--collect.success_reward_bonus "$SUCC_BONUS")
 if [ "${SB_Q:-0}" = "1" ]; then
   EXTRA_FLAGS+=(--rl.critic_success_oversample)
 else
   EXTRA_FLAGS+=(--rl.no-critic_success_oversample)
 fi
-TD_W="${TD_W:-1}"              # reference blends MC in via a separate loss; 0.95 = 95% TD / 5% MC
-CONFIG_NAME="${CONFIG_NAME:-pi05_libero_online_ogpo_sft}"
+TD_W="${TD_W:-1}"
+# --- privileged-critic knobs ---
+BACKUP="${BACKUP:-value}"
+PSTATE_DIM="${PSTATE_DIM:-512}"
+CRITIC_HID="${CRITIC_HID:-1024}"
+CONFIG_NAME="${CONFIG_NAME:-pi05_libero_online_ogpo_privileged}"
 
 N_ROLLOUTS="${N_ROLLOUTS:-5}"
 COLLECT_INT="${COLLECT_INT:-10000}"
@@ -215,27 +215,28 @@ mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" \
          "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR"
 
-# LIBERO prompts interactively on first import if its config file is missing —
-# fatal in a batch job (EOFError). Seed the default config beforehand.
 if [ ! -f "$LIBERO_CONFIG_PATH/config.yaml" ]; then
   printf 'n\n' | "$PY" -c "import libero.libero" >/dev/null 2>&1 || true
 fi
 
-echo "[mt4] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED tasks=${#TASKS[@]} eval_tasks=${#EVAL_TASKS[@]} rollouts/task=$N_ROLLOUTS ckpt=$CKPT_BASE_DIR"
-echo "[mt4] extra=${EXTRA_FLAGS[*]:-none}"
+echo "[priv] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED tasks=${#TASKS[@]} (=critic heads) eval_tasks=${#EVAL_TASKS[@]} backup=$BACKUP pstate_dim=$PSTATE_DIM ckpt=$CKPT_BASE_DIR"
+echo "[priv] extra=${EXTRA_FLAGS[*]:-none}"
 
-# save_interval 200000 > NUM_STEPS 100000, so (step+1) % save_interval is never
-# 0 and no epoch state is written -- the AWR recipe. Costs ~0 GB instead of
-# ~55 GB/save, at the price of NO resume point: only the max_runtime
-# `out_of_time` path saves, so a preemption SIGTERM loses the whole run.
-# Set SAVE_INT=100000 for a single final checkpoint at step 100000.
 RUN=("$PY" scripts/exp.py)
 [ "${DRY:-0}" = "1" ] && RUN=(echo "$PY" scripts/exp.py)
 
+# Differences from scripts/ogpo_multitask_4task.sh's command line, and ONLY these:
+#   + --collect.store_privileged_state / --collect.privileged_state_dim
+#   + --rl.privileged_backup
+#   - --collect.store_prefix_rep      (the privileged critic reads no prefix)
+#   = --rl.n_samples 1                (mt4's BON_N default; best-of-N scoring
+#                                      builds a prefix-embedding critic obs the
+#                                      privileged critic cannot read, so it is
+#                                      pinned rather than exposed)
 "${RUN[@]}" \
   "$CONFIG_NAME" \
   --project_name ogpo_multitask \
-  --group_name mt4_libero \
+  --group_name mt4_libero_privileged \
   --exp_name "$EXP_NAME" \
   --checkpoint_base_dir "$CKPT_BASE_DIR" \
   --seed "$SEED" \
@@ -250,7 +251,8 @@ RUN=("$PY" scripts/exp.py)
   --max_runtime 169200 \
   --collect.tasks "${TASKS[@]}" \
   --collect.eval_tasks "${EVAL_TASKS[@]}" \
-  --collect.store_prefix_rep \
+  --collect.store_privileged_state \
+  --collect.privileged_state_dim "$PSTATE_DIM" \
   --collect.collect_interval "$COLLECT_INT" \
   --collect.num_rollouts "$N_ROLLOUTS" \
   --collect.num_eval_rollouts "$EVAL_ROLLOUTS" \
@@ -261,6 +263,8 @@ RUN=("$PY" scripts/exp.py)
   --rl.discount 0.995 \
   --rl.online_ratio 1.0 \
   --rl.buffer_capacity 500000 \
+  --rl.n_samples 1 \
+  --rl.privileged_backup "$BACKUP" \
   --rl.policy.update_interval 10 \
   --rl.policy.training_start_step 900 \
   --rl.critic.td_weight_schedule.init_value "$TD_W" \
@@ -271,7 +275,7 @@ RUN=("$PY" scripts/exp.py)
   --rl.critic.batch_size 1024 \
   --rl.critic.pre_training_steps 0 \
   --rl.critic.use_bronet \
-  --rl.critic.bronet_hidden_dim 1024 \
+  --rl.critic.bronet_hidden_dim "$CRITIC_HID" \
   --rl.critic.inference_start_step 1 \
   --rl.group_num_samples 8 \
   --rl.clip_epsilon 0.1 \
@@ -282,6 +286,6 @@ RUN=("$PY" scripts/exp.py)
   --rl.dedup_group_prefix \
   --rl.use_success_buffer \
   --rl.critic.value_target_type one_hot \
-  --batch_size 32 \
+  --batch_size 128 \
   "${EXTRA_FLAGS[@]}" \
   "$@"

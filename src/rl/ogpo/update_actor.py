@@ -136,7 +136,12 @@ def sample_and_advantage(
     state_action_critic_state: training_utils.TrainState,  # UNDONATED
     value_state: training_utils.TrainState,                # UNDONATED
     policy_observation: _model.Observation,                # un-expanded (B); carries images
-    critic_prefix: at.Float[at.Array, "b embed"] | None,   # None => recompute; WP-C sidecar otherwise
+    # None            => recompute the prefix under current params
+    # array [b embed] => the buffer's stored EMA-computed prefix (WP-C sidecar)
+    # dict            => a COMPLETE critic observation, used verbatim (the
+    #                    privileged critic reads neither state nor prefix from
+    #                    the policy observation, so it supplies its own)
+    critic_prefix: at.Float[at.Array, "b embed"] | dict[str, at.Array] | None,
     ema: nnx.State,                                         # explicit _ema_sharding input (full OR trainable-only)
 ) -> tuple[
     # Outputs are at the EXPANDED batch (bg = B*G); `b` is reserved for the
@@ -178,20 +183,25 @@ def sample_and_advantage(
     # Critic observation. The recompute lives behind the `critic_prefix is None`
     # static branch so WP-C can supply the buffer's EMA-computed sidecar instead;
     # the None branch reproduces the mono jit's recompute under current params.
-    if critic_prefix is None:
-        current_model = nnx.merge(policy_state.model_def, policy_state.params)
-        current_model.eval()
-        prefix_rep = current_model.get_prefix_rep(policy_observation)
-        prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
-        prefix = jnp.mean(
-            prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1])), axis=1
-        )
+    # A dict sidecar short-circuits both: it IS the critic observation (the
+    # privileged critic's state is the simulator's, not the policy's).
+    if isinstance(critic_prefix, dict):
+        critic_observation = critic_prefix
     else:
-        prefix = critic_prefix
-    critic_observation = {
-        "state": policy_observation.state,
-        PREFIX_EMBEDDING_NAME: prefix,
-    }
+        if critic_prefix is None:
+            current_model = nnx.merge(policy_state.model_def, policy_state.params)
+            current_model.eval()
+            prefix_rep = current_model.get_prefix_rep(policy_observation)
+            prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            prefix = jnp.mean(
+                prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1])), axis=1
+            )
+        else:
+            prefix = critic_prefix
+        critic_observation = {
+            "state": policy_observation.state,
+            PREFIX_EMBEDDING_NAME: prefix,
+        }
 
     # Critics are frozen w.r.t. this train_step.
     state_action_critic = create_critic(state_action_critic_state, config)

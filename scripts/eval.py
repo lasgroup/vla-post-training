@@ -65,15 +65,19 @@ from src.rl.best_of_n.best_of_n_learner import BestofNLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
+from src.rl.ogpo.privileged.ogpo_privileged_learner import OGPOPrivilegedLearner
 import src.training.config as _config
 from src.training.collect import evaluate_policy
 from src.training.utils import init_logging, init_wandb
 
 
 def _make_agent(config: _config.OnlineTrainConfig):
-    # OGPOSFTLearnerConfig subclasses AdvantageWeightedSFTLearnerConfig, so it
-    # must be checked first. Mirror the dispatch in scripts/exp.py.
-    if isinstance(config.rl, _config.OGPOSFTLearnerConfig):
+    # Each config subclasses the one below it, so the most derived is checked
+    # first: OGPOPrivilegedLearnerConfig < OGPOSFTLearnerConfig <
+    # AdvantageWeightedSFTLearnerConfig. Mirror the dispatch in scripts/exp.py.
+    if isinstance(config.rl, _config.OGPOPrivilegedLearnerConfig):
+        algo_class = OGPOPrivilegedLearner
+    elif isinstance(config.rl, _config.OGPOSFTLearnerConfig):
         algo_class = OGPOAgentLearner
     elif isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig):
         algo_class = AdvantageWeightedSFTLearner

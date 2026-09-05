@@ -24,7 +24,6 @@ import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
-from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.ema_utils import compose_full_params
 from src.rl.filtered_sft_agent.update import train_step
@@ -32,6 +31,7 @@ from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
+from src.training.policy_utils import create_collection_policy
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
     Pi0ObservationWrapper,
@@ -41,6 +41,7 @@ from src.envs.wrappers import (
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.privileged_state import privileged_task_ids
 from src.training.runtime_state import load_resume_state
 
 
@@ -63,10 +64,18 @@ def filtered_sft_wrap_env(
                 base_env = TimeToSuccessAsRewardWrapper(
                     base_env, success_bonus=config.collect.success_reward_bonus
                 )
-            # Add Pi related obs to the environment
+            # Add Pi related obs to the environment. privileged_tasks stays
+            # None unless the run asked for the privileged critic, so the
+            # emitted observation is unchanged for every other recipe.
             base_env = Pi0ObservationWrapper(
                 env=base_env,
                 env_class=env_class,
+                privileged_tasks=(
+                    privileged_task_ids(config.collect.tasks)
+                    if config.collect.store_privileged_state
+                    else None
+                ),
+                privileged_state_dim=config.collect.privileged_state_dim,
             )
             # Add query-frequency wrapper to rollout action chunks.
             query_wrapper = (
@@ -213,6 +222,13 @@ def _get_obs_key_process_fn(domain: str):
 
 
 class FilteredSFTLearner(Agent):
+    # Observation keys that must bypass ``_policy_transforms`` in
+    # ``_save_episode_in_buffer``: the repack transform maps a fixed key set and
+    # silently drops everything else, so a key the CRITIC (not the policy) reads
+    # has to be popped before the transform and re-attached after — the same
+    # dance the prefix embedding already does inline. Base declares none.
+    _buffer_obs_passthrough_keys: tuple[str, ...] = ()
+
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
@@ -354,9 +370,12 @@ class FilteredSFTLearner(Agent):
         policy_checkpoint_dir = self._config.weight_loader.params_path[
             : -len("/params")
         ]
-        self._policy = policy_config.create_trained_policy(
+        # create_collection_policy == create_trained_policy unless the config is
+        # a LoRA one, whose adapters the pretrained checkpoint does not carry.
+        self._policy = create_collection_policy(
             self._config,
             policy_checkpoint_dir,
+            seed=self._config.seed,
         )
         # This learner always calls `infer_with_model(...)` with the current train-state model.
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
@@ -703,6 +722,19 @@ class FilteredSFTLearner(Agent):
         if is_success:
             self._save_episode_in_buffer(episode_data, task_description, is_success=True)
 
+    def _extra_transition_fields(
+        self, *, actions_out: np.ndarray, n_windows: int, act_h: int
+    ) -> dict[str, np.ndarray]:
+        """Per-transition buffer fields beyond the base schema. Base adds none.
+
+        ``actions_out`` is the transformed action tensor over the episode's
+        n_windows + act_h padded windows; subclasses that need a lookahead
+        (e.g. the action the policy took at the NEXT observation) slice it here.
+        Must stay in sync with the subclass's ``_make_buffer_dummy_data``.
+        """
+        del actions_out, n_windows, act_h
+        return {}
+
     def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
         # target_buffer allows PARL (and other wrappers) to redirect an episode
         # into a separate buffer without subclassing or duplicating preprocessing.
@@ -758,12 +790,16 @@ class FilteredSFTLearner(Agent):
             return obs, actions
 
         prefix_emb = _full_obs.pop(self.obs_key_process_fn(f"observation/{PREFIX_EMBEDDING_NAME}"), None)
+        passthrough_obs = {
+            k: _full_obs.pop(k) for k in self._buffer_obs_passthrough_keys if k in _full_obs
+        }
         actions_padded = np.concatenate([_actions, np.repeat(_actions[-1:], act_h, axis=0)], axis=0)
         _full_obs, actions_out = transform(
             {**_full_obs, "actions": actions_padded, "prompt": str(task_description)}
         )
         if prefix_emb is not None:
             _full_obs[PREFIX_EMBEDDING_NAME] = prefix_emb
+        _full_obs.update(passthrough_obs)
         _actions = actions_out[:n_windows]
 
         obs_index = np.arange(n_windows, dtype=np.int64)
@@ -786,6 +822,9 @@ class FilteredSFTLearner(Agent):
                 "discount": _discount.astype(np.float32),
                 "is_success": _is_success,
             }
+            | self._extra_transition_fields(
+                actions_out=actions_out, n_windows=n_windows, act_h=act_h
+            )
         )
         if target_buffer is None:
             self._collection_success_episodes += 1

@@ -35,9 +35,38 @@ from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
-class AdvantageWeightedSFTLearner(FilteredSFTLearner):
-    def __init__(self, config):
+@dataclasses.dataclass(frozen=True)
+class CriticSpec:
+    """Everything ``AdvantageWeightedSFTLearner.__init__`` needs to build its critics.
 
+    Returned by the overridable ``_build_critic_spec`` hook so a subclass can
+    swap the critic's observation schema and architecture without re-entering
+    the rest of __init__ (see ``src/rl/ogpo/privileged``).
+    """
+
+    dummy_obs: dict[str, Any]
+    dummy_act: Any
+    state_action_critic_def: Any
+    state_value_def: Any
+    # None unless the run stores a prefix rep in the buffer; sizes the buffer's
+    # prefix column in ``_make_buffer_dummy_data``.
+    prefix_embed_dim: int | None
+    # Width of the POLICY's proprioceptive state vector (not the critic's obs),
+    # used by the best-of-N collection path to pad raw env states.
+    transition_state_dim: int
+    # Optimizer for BOTH critics. None => built from config.rl.critic (every
+    # existing learner). Set only where the config-built optimizer is wrong for
+    # the critic's parameter layout — the per-task critic's global gradient clip.
+    critic_tx: Any | None = None
+
+
+class AdvantageWeightedSFTLearner(FilteredSFTLearner):
+    def _build_critic_spec(self, config) -> CriticSpec:
+        """Critic observation schema + network defs. Runs BEFORE ``super().__init__``.
+
+        Called on ``self`` before any instance state exists, so it must read
+        ``config`` only.
+        """
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
         prefix_rep = model.get_prefix_rep(fake_obs)[0]
@@ -62,9 +91,27 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         else:
             state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
 
-        self._prefix_embed_dim = None
+        prefix_embed_dim = None
         if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
-            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+            prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
+
+        return CriticSpec(
+            dummy_obs=dummy_obs,
+            dummy_act=dummy_act,
+            state_action_critic_def=state_action_critic_def,
+            state_value_def=state_value_def,
+            prefix_embed_dim=prefix_embed_dim,
+            transition_state_dim=int(dummy_obs["state"].shape[-1]),
+        )
+
+    def __init__(self, config):
+
+        critic_spec = self._build_critic_spec(config)
+        dummy_obs = critic_spec.dummy_obs
+        dummy_act = critic_spec.dummy_act
+        state_action_critic_def = critic_spec.state_action_critic_def
+        state_value_def = critic_spec.state_value_def
+        self._prefix_embed_dim = critic_spec.prefix_embed_dim
 
         super().__init__(config)
 
@@ -75,7 +122,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         )
         self._state_normalize = normalizer
         self._action_normalize = normalizer
-        self._transition_state_dim = int(dummy_obs["state"].shape[-1])
+        self._transition_state_dim = critic_spec.transition_state_dim
 
         q_init_rng, v_init_rng, self._rng = jax.random.split(self._rng, 3)
         self._state_action_critic_state, self._state_action_critic_state_sharding = (
@@ -86,6 +133,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 critic_def=state_action_critic_def,
                 dummy_obs=dummy_obs,
                 dummy_act=dummy_act,
+                tx=critic_spec.critic_tx,
             )
         )
 
@@ -95,6 +143,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             self._mesh,
             critic_def=state_value_def,
             dummy_obs=dummy_obs,
+            tx=critic_spec.critic_tx,
         )
         self._normalizer = Normalizer(
             ema_weight=self._config.rl.normalizer_config.ema_weight,

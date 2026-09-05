@@ -28,6 +28,7 @@ import numpy as np
 import pytest
 
 from src.envs.wrappers import TimeToSuccessAsRewardWrapper
+from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.value_distribution import get_value_bounds
 import src.training.config as _config
@@ -426,6 +427,8 @@ def test_oversample_flag_is_read_by_direct_attribute_access_not_getattr():
 
 def _learner_class_for(cfg):
     """Replicates the isinstance dispatch in scripts/exp.py:74-85, order included."""
+    if isinstance(cfg.rl, _config.OGPOPrivilegedLearnerConfig):
+        return "OGPOPrivilegedLearner"
     if isinstance(cfg.rl, _config.OGPOSFTLearnerConfig):
         return "OGPOAgentLearner"
     if isinstance(cfg.rl, _config.AdvantageWeightedSFTLearnerConfig):
@@ -449,6 +452,7 @@ def test_dispatch_for_every_registered_config_is_unchanged_by_the_new_entry():
         "pi05_libero_online_dsrl": "UNSUPPORTED",
         "pi05_libero_online_ogpo_sft": "OGPOAgentLearner",
         "pi05_libero_online_ogpo_ref": "OGPOAgentLearner",
+        "pi05_libero_online_ogpo_privileged": "OGPOPrivilegedLearner",
     }
     got = {name: _learner_class_for(_config.get_config(name)) for name in _REGISTERED}
     assert got == expected
@@ -937,6 +941,17 @@ def test_best_of_n_path_is_gated_on_n_samples_so_the_baseline_never_enters_it():
 # --------------------------------------------------------------------------------------
 
 
+def _ogpo_update_drop_key_call_sites():
+    """Every `drop_obs_keys=` argument passed to a buffer sample in `update()`."""
+    return [
+        ast.unparse(kw.value)
+        for node in ast.walk(_ogpo_update_ast())
+        if isinstance(node, ast.Call)
+        for kw in node.keywords
+        if kw.arg == "drop_obs_keys"
+    ]
+
+
 def _ogpo_update_ast():
     src = (_ROOT / "src" / "rl" / "ogpo" / "ogpo_learner.py").read_text()
     tree = ast.parse(src)
@@ -986,9 +1001,16 @@ def test_the_oversample_block_draws_from_the_success_buffer_not_the_online_one()
     body = ast.unparse(guard)
     assert "self._success_data_buffer.sample(" in body
     assert "self._online_data_buffer.sample(" not in body
-    # Same drop-key gate as the online critic batch, so the jit sees one input shape.
-    assert "_OGPO_CRITIC_DROP_OBS_KEYS" in body
-    assert "store_prefix_rep" in body
+    # Same drop-key gate as the online critic batch, so the jit sees one input
+    # shape. The gate itself lives in the `_critic_drop_obs_keys` hook (which
+    # the privileged learner overrides); what matters here is that this block
+    # calls the SAME hook every other critic sample in update() calls.
+    assert "self._critic_drop_obs_keys()" in body
+    hook_src = inspect.getsource(OGPOAgentLearner._critic_drop_obs_keys)
+    assert "_OGPO_CRITIC_DROP_OBS_KEYS" in hook_src
+    assert "store_prefix_rep" in hook_src
+    for sample_call in _ogpo_update_drop_key_call_sites():
+        assert sample_call == "self._critic_drop_obs_keys()"
 
 
 def test_no_registered_config_trips_the_new_fail_fast():

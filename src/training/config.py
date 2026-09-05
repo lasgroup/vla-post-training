@@ -314,6 +314,52 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class OGPOPrivilegedLearnerConfig(OGPOSFTLearnerConfig):
+    """OGPO with a privileged, per-task critic — a critic-capacity upper bound.
+
+    Everything about the ACTOR is unchanged: the same PPO surrogate, the same BC
+    anchor, the same group-relative advantage. Only what the critic sees, and
+    how its Q target is formed, differ:
+
+      * state: the simulator's privileged state (robot proprioception + object
+               poses) instead of the mean-pooled PaliGemma prefix + proprio.
+      * heads: one INDEPENDENT critic per training task, selected per sample,
+               instead of a single critic shared across tasks.
+
+    The TD target is the baseline's by default, so the two stacks differ only in
+    what the critic sees and how it is parameterized.
+
+    The privileged state does not exist outside the simulator, so this measures
+    how much the critic's representation is costing OGPO — it is not a
+    deployable configuration.
+    """
+
+    # Q backup at the next state:
+    #   "value"         — r + gamma * V(s'), the baseline OGPO backup. Default:
+    #                     the critic swap is the experiment, the target is held
+    #                     fixed against the baseline arm.
+    #   "next_action_q" — r + gamma * Q_target(s', a'), a' = the action the
+    #                     policy actually took at s', recorded at collection.
+    #                     Removes the V network from the backup. Opt-in: it adds
+    #                     a `next_actions` column to the replay buffer (one
+    #                     action chunk per transition, ~640 MB at capacity
+    #                     500k), which the "value" default does not allocate.
+    #                     NOT a policy rollout at TD time — the action is read
+    #                     out of the stored trajectory, so the runtime cost is
+    #                     one extra critic forward.
+    privileged_backup: str = "value"
+    # Width/depth of every per-task critic come from the shared critic.bronet_*
+    # knobs, so the two stacks stay directly comparable.
+
+    def __post_init__(self):
+        if self.privileged_backup not in ("next_action_q", "value"):
+            raise ValueError(
+                "privileged_backup must be 'next_action_q' or 'value', got "
+                f"{self.privileged_backup!r}"
+            )
+
+
+@dataclasses.dataclass(frozen=True)
 class DSRLLearnerConfig(RLAlgorithmConfig):
     actor_lr: float = 1e-4
     critic_lr: float = 3e-4
@@ -387,6 +433,15 @@ class CollectionConfig:
     success_reward_bonus: float = 0.0
     fix_mc_returns: bool = True
     store_prefix_rep: bool = False
+    # Privileged-critic diagnostic (src/rl/privileged_state.py): additionally
+    # emit the simulator's own state (robot proprio + object poses) as an
+    # observation key, and store it in the replay buffer. libero only. False
+    # leaves the collected observation and the buffer schema untouched.
+    store_privileged_state: bool = False
+    # Fixed width the privileged vector is zero-padded to. `object-state` is 14
+    # floats per object, so the raw width varies per task; 512 clears every
+    # libero_90 scene with room to spare. Collection raises if a task exceeds it.
+    privileged_state_dim: int = 512
     eval_env_num: int = 4
     eval_interval: int = 300
     num_eval_rollouts: int = 32
@@ -583,6 +638,30 @@ def _make_ogpo_freeze_filter():
     )
 
 
+def _make_lora_backbone_freeze_filter():
+    """Freeze the PaliGemma LLM's *base* weights and the SigLIP tower, leaving
+    the LoRA adapters and the action expert trainable.
+
+    Same partition as ``_make_ogpo_freeze_filter`` plus a LoRA escape hatch: the
+    adapter params live inside the frozen ``.*llm.*`` subtree, so they have to be
+    excluded explicitly (mirrors ``Pi0Config.get_freeze_filter``). Unlike that
+    method we also freeze the image tower: LoRA adapters only exist in the LLM,
+    so leaving SigLIP trainable would turn the "PaliGemma tuned by LoRA" arm into
+    a full vision finetune and stop it sitting between the frozen and full arms.
+    """
+    import flax.nnx as nnx
+    import openpi.shared.nnx_utils as nnx_utils
+
+    gemma_params  = nnx_utils.PathRegex(".*llm.*")
+    action_expert = nnx_utils.PathRegex(".*llm.*_1.*")
+    lora_params   = nnx_utils.PathRegex(".*lora.*")
+    img_params    = nnx_utils.PathRegex(".*PaliGemma/img.*")
+    return nnx.Any(
+        nnx.All(gemma_params, nnx.Not(action_expert), nnx.Not(lora_params)),
+        img_params,
+    )
+
+
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS.extend(
     [
@@ -591,9 +670,39 @@ _CONFIGS.extend(
         #
         # These train configs define the hyperparameters for online data collection and fine-tuning.
         # 1. Filtered SFT
+        # Backbone-tuning ablation. All three arms run the same filtered-SFT
+        # recipe and always train the action expert; they differ only in how much
+        # of PaliGemma moves (scripts/fsft_{none,lora,full}.sh):
+        #   pi05_libero_online_filtered_sft                  full: no freeze
+        #     filter, so the LLM stack 0 and the SigLIP tower are finetuned too.
+        #   pi05_libero_online_filtered_sft_frozen_backbone  none: PaliGemma LLM
+        #     + SigLIP frozen (and cast to bf16), action expert only.
+        #   pi05_libero_online_filtered_sft_lora_backbone    lora: rank-16
+        #     adapters on the PaliGemma LLM, base weights + SigLIP frozen.
         make_base_libero_config(
             name="pi05_libero_online_filtered_sft",
             rl_config=FilteredSFTLearnerConfig(),
+        ),
+        make_base_libero_config(
+            name="pi05_libero_online_filtered_sft_frozen_backbone",
+            rl_config=FilteredSFTLearnerConfig(),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        make_base_libero_config(
+            name="pi05_libero_online_filtered_sft_lora_backbone",
+            rl_config=FilteredSFTLearnerConfig(),
+            # gemma_2b_lora adds rank-16 attn+ffn adapters to the PaliGemma LLM
+            # only; the action expert stays gemma_300m and is fully trainable.
+            # The pretrained checkpoint has no adapter weights -- they are
+            # initialized fresh by the model and skipped by the weight loader
+            # (`CheckpointWeightLoader` merges anything matching `.*lora.*`).
+            model=pi0_config.Pi0Config(
+                pi05=True,
+                action_horizon=10,
+                discrete_state_input=False,
+                paligemma_variant="gemma_2b_lora",
+            ),
+            freeze_filter=_make_lora_backbone_freeze_filter(),
         ),
         make_base_molmo_config(
             name="pi05_molmo_online_filtered_sft",
@@ -682,6 +791,20 @@ _CONFIGS.extend(
                     ),
                 ),
             ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        # OGPO with the privileged per-task critic (critic-capacity upper
+        # bound). Deliberately a clone of `pi05_libero_online_ogpo_sft` apart
+        # from the critic: scripts/ogpo_privileged.sh passes the same recipe
+        # flags as scripts/ogpo_multitask_4task.sh, so the ONLY difference
+        # between the two runs is what the critic sees and how it bootstraps.
+        make_base_libero_config(
+            name="pi05_libero_online_ogpo_privileged",
+            rl_config=OGPOPrivilegedLearnerConfig(
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+                group_num_samples=8,
+            ),
+            collect=CollectionConfig(store_privileged_state=True),
             freeze_filter=_make_ogpo_freeze_filter(),
         ),
     ]

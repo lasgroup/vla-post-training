@@ -1,9 +1,16 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 import gymnasium as gym
 import jax
 import logging
 import math
 import numpy as np
+
+from src.rl.privileged_state import (
+    PRIVILEGED_STATE_NAME,
+    PRIVILEGED_TASK_ID_NAME,
+    UNKNOWN_TASK_ID,
+    extract_libero_privileged_state,
+)
 
 
 class GymnasiumEnvAdapter(gym.Env):
@@ -252,13 +259,41 @@ class TimeToSuccessAsRewardWrapper(gym.Wrapper):
 
 
 class Pi0ObservationWrapper(gym.ObservationWrapper):
+    """Reduce the raw env observation to the pi0 policy inputs.
+
+    ``privileged_tasks`` opts the wrapper into ALSO emitting the simulator's own
+    state (see ``src/rl/privileged_state.py``) alongside the policy inputs, for
+    the privileged-critic diagnostic. Left at ``None`` — every pre-existing call
+    site — the emitted observation is exactly the three policy keys as before.
+    """
+
     def __init__(
         self,
         env: gym.Env,
         env_class: str,
+        privileged_tasks: Sequence[str] | None = None,
+        privileged_state_dim: int = 0,
     ):
         super().__init__(env)
         self._env_class = env_class
+        self._privileged_tasks = (
+            None if privileged_tasks is None else list(privileged_tasks)
+        )
+        self._privileged_state_dim = int(privileged_state_dim)
+        if self._privileged_tasks is not None:
+            if self._env_class != "libero":
+                raise NotImplementedError(
+                    "Privileged state extraction is only implemented for the libero "
+                    f"domain (got {self._env_class!r})."
+                )
+            if self._privileged_state_dim <= 0:
+                raise ValueError(
+                    "privileged_state_dim must be positive when privileged_tasks is set."
+                )
+        # Task of the CURRENT episode, captured from the reset options (the
+        # vector env passes one task_id per env). -1 until the first reset with
+        # options, and for any task outside the run's train-task list.
+        self._privileged_task_id = UNKNOWN_TASK_ID
 
         dummy_obs, _ = env.reset()
         final_obs = self.observation(dummy_obs)
@@ -277,11 +312,33 @@ class Pi0ObservationWrapper(gym.ObservationWrapper):
 
         self.observation_space = gym.spaces.Dict(spaces)
 
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
+        # gym.ObservationWrapper.reset does not expose the options to
+        # observation(), so latch the episode's task here.
+        if self._privileged_tasks is not None:
+            task_id = None if options is None else options.get("task_id")
+            self._privileged_task_id = (
+                float(self._privileged_tasks.index(str(task_id)))
+                if str(task_id) in self._privileged_tasks
+                else UNKNOWN_TASK_ID
+            )
+        return super().reset(seed=seed, options=options)
+
     def observation(self, observation):
-        return obs_to_pi_zero_input(
+        pi_zero_obs = obs_to_pi_zero_input(
             observation,
             env_class=self._env_class,
         )
+        if self._privileged_tasks is not None:
+            pi_zero_obs[f"observation/{PRIVILEGED_STATE_NAME}"] = (
+                extract_libero_privileged_state(
+                    observation, self._privileged_state_dim
+                )
+            )
+            pi_zero_obs[f"observation/{PRIVILEGED_TASK_ID_NAME}"] = np.array(
+                [self._privileged_task_id], dtype=np.float32
+            )
+        return pi_zero_obs
 
 
 class WarmUpOnResetWrapper(gym.Wrapper):

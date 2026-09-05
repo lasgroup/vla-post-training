@@ -115,10 +115,15 @@ def init_state_action_critic_train_state(
     critic_def: StateActionCriticDef,
     dummy_obs: ObsType,
     dummy_act: ActionType,
+    tx: optax.GradientTransformation | None = None,
 ) -> tuple[training_utils.TrainState, Any]:
-    tx = _optimizer.create_optimizer(
-        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
-    )
+    # `tx` overrides the config-built optimizer. Only the per-task critic uses
+    # it (its parameter tree holds T disjoint critics, which a single global
+    # gradient clip would couple); None is every other caller's path.
+    if tx is None:
+        tx = _optimizer.create_optimizer(
+            config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
+        )
     ema_decay = _critic_ema_decay(config)
     dummy_act = flatten_action_horizon(dummy_act)
     dummy_act = jax.tree.map(lambda x: x.reshape(*x.shape[:-1], -1), dummy_act)
@@ -154,10 +159,13 @@ def init_state_value_train_state(
     *,
     critic_def: StateValueDef,
     dummy_obs: ObsType,
+    tx: optax.GradientTransformation | None = None,
 ) -> tuple[training_utils.TrainState, Any]:
-    tx = _optimizer.create_optimizer(
-        config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
-    )
+    # See init_state_action_critic_train_state: None is every existing caller.
+    if tx is None:
+        tx = _optimizer.create_optimizer(
+            config.rl.critic.optimizer, config.rl.critic.lr_schedule, weight_decay_mask=None
+        )
     ema_decay = _critic_ema_decay(config)
 
     def init(obs, rng) -> training_utils.TrainState:

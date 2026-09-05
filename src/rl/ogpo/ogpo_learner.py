@@ -241,6 +241,21 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             donate_argnums=(),
         )
 
+    def _critic_drop_obs_keys(self) -> tuple[str, ...]:
+        """Observation keys the critic sample drops before its device_put.
+
+        With the stored prefix present the critic reads it directly (AWR:261-263)
+        and never touches images, so dropping them keeps the 224x224 tensors off
+        the GPU for the 1024-row critic sample. Without it the critic recompute
+        (AWR:265-269) needs data["image"] (MODEL:116), so images have to stay.
+        Overridden by critics that read neither (privileged critic).
+        """
+        return (
+            _OGPO_CRITIC_DROP_OBS_KEYS
+            if self._config.collect.store_prefix_rep
+            else ()
+        )
+
     def _burst_critic_update_fn(self):
         """Jitted critic update for the burst. With ``burst_use_mc_targets``,
         a SECOND jit is built from a config whose td_weight schedule is pinned
@@ -314,11 +329,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         for _ in range(n):
             batch = self._online_data_buffer.sample(
                 batch_size=critic_batch_size,
-                drop_obs_keys=(
-                    _OGPO_CRITIC_DROP_OBS_KEYS
-                    if self._config.collect.store_prefix_rep
-                    else ()
-                ),
+                drop_obs_keys=self._critic_drop_obs_keys(),
             )
             critic_rng, self._rng = jax.random.split(self._rng, 2)
             with sharding.set_mesh(self._mesh):
@@ -383,11 +394,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
         critic_online_batch = (
             self._online_data_buffer.sample(
                 batch_size=critic_batch_size,
-                drop_obs_keys=(
-                    _OGPO_CRITIC_DROP_OBS_KEYS
-                    if self._config.collect.store_prefix_rep
-                    else ()
-                ),
+                drop_obs_keys=self._critic_drop_obs_keys(),
             )
             if update_critic
             else None
@@ -415,11 +422,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 if utd_i > 0:
                     critic_online_batch = self._online_data_buffer.sample(
                         batch_size=critic_batch_size,
-                        drop_obs_keys=(
-                            _OGPO_CRITIC_DROP_OBS_KEYS
-                            if self._config.collect.store_prefix_rep
-                            else ()
-                        ),
+                        drop_obs_keys=self._critic_drop_obs_keys(),
                     )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
@@ -453,11 +456,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             ):
                 critic_success_batch = self._success_data_buffer.sample(
                     batch_size=critic_batch_size,
-                    drop_obs_keys=(
-                        _OGPO_CRITIC_DROP_OBS_KEYS
-                        if self._config.collect.store_prefix_rep
-                        else ()
-                    ),
+                    drop_obs_keys=self._critic_drop_obs_keys(),
                 )
                 critic_rng, self._rng = jax.random.split(self._rng, 2)
                 with sharding.set_mesh(self._mesh):
