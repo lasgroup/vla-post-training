@@ -22,8 +22,10 @@
 #         ~3.35G trainable. This is what fsft_libero_babel.sh ran.
 #
 # Everything else is fsft_libero_babel.sh's recipe verbatim (5k steps, collect
-# every 500, lr 2.5e-5, batch 256, libero_90_38), so the three arms differ from
-# the existing FSFT baseline in exactly one field.
+# every 500, lr 2.5e-5, batch 256), so the three arms differ from the existing
+# FSFT baseline in exactly one field. The exception is the task set: training
+# now defaults to 4 tasks (libero_90_82/79/31/38) rather than libero_90_38
+# alone, so these runs are not comparable to the earlier single-task numbers.
 #
 # STATE=1 additionally gives the POLICY the proprioceptive state as pi0.5's
 # discrete language tokens (default 0 = the state-blind pi05_libero recipe, which
@@ -136,8 +138,17 @@ if [ ! -f "$LIBERO_CONFIG_PATH/config.yaml" ]; then
   printf 'n\n' | "$PY" -c "import libero.libero" >/dev/null 2>&1 || true
 fi
 
-TASKS=("${TASKS[@]:-libero_90_38}")
-EVAL_TASKS=("${EVAL_TASKS[@]:-${TASKS[@]}}")
+# Default training set: 4 LIBERO-90 tasks. Note this is NOT written as
+# `("${TASKS[@]:-a b c}")` -- inside double quotes that default collapses into a
+# single argv word ("a b c"), which openpi would reject as one bogus task name.
+# Branch on whether the caller set anything instead. `${TASKS+x}` (not
+# `${#TASKS[@]}`) is the test that survives `set -u` when TASKS is unset.
+if [ -z "${TASKS+x}" ]; then
+  TASKS=(libero_90_82 libero_90_79 libero_90_31 libero_90_38)
+fi
+if [ -z "${EVAL_TASKS+x}" ]; then
+  EVAL_TASKS=("${TASKS[@]}")
+fi
 
 echo "[fsft] node=$(hostname) job=${SLURM_JOB_ID:-none} pg_tune=$PG_TUNE state=$STATE config=$CONFIG_NAME exp=$EXP_NAME gpu=$GPU fsdp=$FSDP"
 
