@@ -1,4 +1,3 @@
-import dataclasses
 import copy
 import functools
 import gc
@@ -116,15 +115,6 @@ def _load_weights_and_validate(
     )
 
 
-def _copy_nnx_state(state: nnx.State) -> nnx.State:
-    def _copy_value(_k, v):
-        if hasattr(v, "value") and hasattr(v, "replace"):
-            return v.replace(v.value.copy())
-        return v
-
-    return state.map(_copy_value)
-
-
 @at.typecheck
 def init_train_state(
     config: OnlineTrainConfig,
@@ -208,7 +198,9 @@ def _get_obs_key_process_fn(domain: str):
 class FilteredSFTLearner(Agent):
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
-        self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
+        self.post_step_action_filter = _get_post_step_action_filter(
+            self._config.collect.domain
+        )
         self.obs_key_process_fn = _get_obs_key_process_fn(self._config.collect.domain)
 
         if self._config.batch_size % jax.device_count() != 0:
@@ -219,7 +211,11 @@ class FilteredSFTLearner(Agent):
         if not jax_cache_dir:
             user = os.environ.get("USER", "unknown")
             capstor_cache = epath.Path(f"/capstor/scratch/cscs/{user}/jax-cache")
-            jax_cache_dir = str(capstor_cache if capstor_cache.parent.exists() else epath.Path("/tmp/jax-cache"))
+            jax_cache_dir = str(
+                capstor_cache
+                if capstor_cache.parent.exists()
+                else epath.Path("/tmp/jax-cache")
+            )
         jax.config.update("jax_compilation_cache_dir", jax_cache_dir)
         self._rng = jax.random.key(self._config.seed)
         init_rng, self._rng = jax.random.split(self._rng, 2)
@@ -268,19 +264,28 @@ class FilteredSFTLearner(Agent):
                 )
 
         # initialize data loader
-        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
+        assert 0.0 <= self._config.rl.online_ratio <= 1.0, (
+            "Online ratio must be between 0 and 1."
+        )
         self._data_config = self._config.data.create(
             self._config.assets_dirs,
             self._config.model,
         )
-        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
+        self._offline_batch_size = max(
+            len(jax.devices()),
+            int(self._config.batch_size * (1 - self._config.rl.online_ratio)),
+        )
 
         if self._config.rl.online_ratio < 1.0:
             self._data_loader = create_data_loader(
-                config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
+                config,
+                batch_size=self._offline_batch_size,
+                sharding=self._data_sharding,
+                shuffle=True,
             )
             self._data_iter = iter(self._data_loader)
         else:
+
             class DummyDataLoader:
                 def __init__(self, data_config):
                     self._data_config = data_config
@@ -339,21 +344,15 @@ class FilteredSFTLearner(Agent):
             else:
                 self.training_steps = restored_train_step
 
-            self._resume_restore_ema = False
-            self._resume_ema_decay = None
-            if self._train_state.ema_decay is not None:
-                self._resume_restore_ema = True
-                self._resume_ema_decay = self._train_state.ema_decay
-                self._train_state = dataclasses.replace(
-                    self._train_state, ema_params=None, ema_decay=None
-                )
-                logging.info(
-                    "Temporarily disabling EMA after resume; will re-enable after first update."
+            if (
+                self._train_state.ema_params is None
+                or self._train_state.ema_decay is None
+            ):
+                raise RuntimeError(
+                    "resumed filtered-SFT checkpoint is missing EMA params/decay"
                 )
         else:
             self.training_steps = 0
-            self._resume_restore_ema = False
-            self._resume_ema_decay = None
 
         jax.block_until_ready(self._train_state)
         logging.info(
@@ -388,29 +387,46 @@ class FilteredSFTLearner(Agent):
         self._drop_policy_model()
 
         # prepare transforms for preprocessing episode data into model input format
-        self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
+        self._policy_transforms = self._get_policy_transforms(
+            self._config.collect.domain
+        )
 
         # prepare reward model
-        self.reward_model = lambda episode_data, is_success: is_success  # dummy reward model for now
+        self.reward_model = (
+            lambda episode_data, is_success: is_success
+        )  # dummy reward model for now
 
     def _get_policy_transforms(self, domain: str):
         if domain == "libero":
-            return _transforms.compose([*self._data_config.repack_transforms.inputs, *self._policy._input_transform.transforms])
+            return _transforms.compose(
+                [
+                    *self._data_config.repack_transforms.inputs,
+                    *self._policy._input_transform.transforms,
+                ]
+            )
         if domain == "molmo":
             # TODO: extract these transforms from the policy config instead of hardcoding the order here.
             # Unfortunately, the policy input transforms do not match what was used for training:
             # padding should occur before normalization, and delta actions should be considered.
             delta_action_mask = _transforms.make_bool_mask(7, -1)
             input_transforms = [
-                copy.deepcopy(self._policy._input_transform.transforms[1]),  # droid inputs
-                _transforms.DeltaActions(delta_action_mask),                 # delta actions
+                copy.deepcopy(
+                    self._policy._input_transform.transforms[1]
+                ),  # droid inputs
+                _transforms.DeltaActions(delta_action_mask),  # delta actions
                 copy.deepcopy(self._policy._input_transform.transforms[6]),  # padding
                 copy.deepcopy(self._policy._input_transform.transforms[2]),  # normalize
-                copy.deepcopy(self._policy._input_transform.transforms[4]),  # resizeimages
-                copy.deepcopy(self._policy._input_transform.transforms[0]),  # inject prompt
+                copy.deepcopy(
+                    self._policy._input_transform.transforms[4]
+                ),  # resizeimages
+                copy.deepcopy(
+                    self._policy._input_transform.transforms[0]
+                ),  # inject prompt
                 copy.deepcopy(self._policy._input_transform.transforms[5]),  # tokenizer
             ]
-            return _transforms.compose([*self._data_config.repack_transforms.inputs, *input_transforms])
+            return _transforms.compose(
+                [*self._data_config.repack_transforms.inputs, *input_transforms]
+            )
         raise NotImplementedError(f"Unknown domain: {domain}")
 
     def _drop_policy_model(self):
@@ -503,8 +519,16 @@ class FilteredSFTLearner(Agent):
         # With per-step collection enabled, each env step contains a short chunk of
         # observations. Use the most recent one for policy inference.
         obs = jax.tree_util.tree_map(lambda x: x[:, -1], observations)
-        h, w = int(self._config.collect.resize_image_h), int(self._config.collect.resize_image_w)
-        resize_fn = lambda x: image_tools.convert_to_uint8(image_tools.resize_with_pad(x, h, w))
+        h, w = (
+            int(self._config.collect.resize_image_h),
+            int(self._config.collect.resize_image_w),
+        )
+
+        def resize_fn(image):
+            return image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(image, h, w)
+            )
+
         obs = {k: resize_fn(v) if "image" in k else v for k, v in obs.items()}
         obs["prompt"] = task_description
         return obs
@@ -513,8 +537,16 @@ class FilteredSFTLearner(Agent):
     def _batch_transform_inputs(inputs: dict, batch_size: int) -> dict:
         for key in ("image_mask", "image_masks"):
             if key in inputs:
-                inputs[key] = {k: np.full((batch_size,), bool(v), dtype=bool) for k, v in inputs[key].items()}
-        for key in ("tokenized_prompt", "tokenized_prompt_mask", "token_ar_mask", "token_loss_mask"):
+                inputs[key] = {
+                    k: np.full((batch_size,), bool(v), dtype=bool)
+                    for k, v in inputs[key].items()
+                }
+        for key in (
+            "tokenized_prompt",
+            "tokenized_prompt_mask",
+            "token_ar_mask",
+            "token_loss_mask",
+        ):
             if key in inputs and inputs[key] is not None:
                 arr = np.asarray(inputs[key])
                 if arr.ndim == 1:
@@ -686,10 +718,9 @@ class FilteredSFTLearner(Agent):
             next_prefix = prefix
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
-
-        assert env_index in range(
-            len(self._episode_storage)
-        ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        assert env_index in range(len(self._episode_storage)), (
+            f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
+        )
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
@@ -697,13 +728,22 @@ class FilteredSFTLearner(Agent):
         if self._config.rl.save_episodes_to_path is not None:
             if not hasattr(self, "n_saved_episodes"):
                 self.n_saved_episodes = 0
-            with open(os.path.join(self._config.rl.save_episodes_to_path, f'episode_{self.n_saved_episodes}.pkl'), 'wb') as f:
-                pickle.dump({
-                    "episode_data": episode_data,
-                    "task_description": task_description,
-                }, f)
+            with open(
+                os.path.join(
+                    self._config.rl.save_episodes_to_path,
+                    f"episode_{self.n_saved_episodes}.pkl",
+                ),
+                "wb",
+            ) as f:
+                pickle.dump(
+                    {
+                        "episode_data": episode_data,
+                        "task_description": task_description,
+                    },
+                    f,
+                )
             self.n_saved_episodes += 1
-            # episode_data is a list of dicts with 
+            # episode_data is a list of dicts with
             #   observation (dict contrianing visual/proprioception)
             #   next_observation (as above)
             #   action
@@ -738,9 +778,8 @@ class FilteredSFTLearner(Agent):
         )
 
     def _save_episode_in_buffer(self, episode_data, task_description):
-
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
-            "Only Filtered SFT config should be passed " "to the filtered SFT agent"
+            "Only Filtered SFT config should be passed to the filtered SFT agent"
         )
 
         if self._config.collect.store_prefix_rep:
@@ -763,17 +802,45 @@ class FilteredSFTLearner(Agent):
             return
 
         # process elements to account for action chunks
-        _obs = {self.obs_key_process_fn(k): v[:n_windows] for k, v in episode_data["observation"].items()}
-        _next_obs = {self.obs_key_process_fn(k): v[act_h-1:n_windows+act_h-1] for k, v in episode_data["next_observation"].items()}
-        _actions = np.stack([episode_data["action"][start : start + act_h] for start in range(n_windows)])
+        _obs = {
+            self.obs_key_process_fn(k): v[:n_windows]
+            for k, v in episode_data["observation"].items()
+        }
+        _next_obs = {
+            self.obs_key_process_fn(k): v[act_h - 1 : n_windows + act_h - 1]
+            for k, v in episode_data["next_observation"].items()
+        }
+        _actions = np.stack(
+            [
+                episode_data["action"][start : start + act_h]
+                for start in range(n_windows)
+            ]
+        )
         _actions = self.post_step_action_filter(_actions)
-        _reward = np.asarray([(episode_data["reward"][start : start + act_h] * w_gammas).sum() for start in range(n_windows)])
-        _discount = np.asarray([0.0 if np.any(done[start : start + act_h]) else last_gamma for start in range(n_windows)])
-        _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
+        _reward = np.asarray(
+            [
+                (episode_data["reward"][start : start + act_h] * w_gammas).sum()
+                for start in range(n_windows)
+            ]
+        )
+        _discount = np.asarray(
+            [
+                0.0 if np.any(done[start : start + act_h]) else last_gamma
+                for start in range(n_windows)
+            ]
+        )
+        _mc_return = (
+            (all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1]
+            / all_gammas
+        )[:n_windows]
 
         # if the reward is constant, set the MC returns to reward/(1-gamma)
-        if self._config.collect.fix_mc_returns and np.all(episode_data["reward"] == episode_data["reward"][0]):
-            _mc_return = np.full_like(_mc_return, episode_data["reward"][0] / (1 - self._config.rl.discount))
+        if self._config.collect.fix_mc_returns and np.all(
+            episode_data["reward"] == episode_data["reward"][0]
+        ):
+            _mc_return = np.full_like(
+                _mc_return, episode_data["reward"][0] / (1 - self._config.rl.discount)
+            )
 
         def transform(input):
             obs = self._policy_transforms(input)
@@ -784,8 +851,20 @@ class FilteredSFTLearner(Agent):
         prefix_emb = _obs.pop(PREFIX_EMBEDDING_NAME, None)
         next_prefix_emb = _next_obs.pop(PREFIX_EMBEDDING_NAME, None)
         # process observations and actions according to pi0 preprocessing
-        _next_obs, _ = transform({**_next_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
-        _obs, _actions = transform({**_obs, "actions": np.array(_actions, copy=True), "prompt": str(task_description)})
+        _next_obs, _ = transform(
+            {
+                **_next_obs,
+                "actions": np.array(_actions, copy=True),
+                "prompt": str(task_description),
+            }
+        )
+        _obs, _actions = transform(
+            {
+                **_obs,
+                "actions": np.array(_actions, copy=True),
+                "prompt": str(task_description),
+            }
+        )
         if prefix_emb is not None:
             _obs[PREFIX_EMBEDDING_NAME] = prefix_emb
             _next_obs[PREFIX_EMBEDDING_NAME] = next_prefix_emb
@@ -850,15 +929,6 @@ class FilteredSFTLearner(Agent):
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
-        if self._resume_restore_ema:
-            self._train_state = dataclasses.replace(
-                self._train_state,
-                ema_decay=self._resume_ema_decay,
-                ema_params=_copy_nnx_state(self._train_state.params),
-            )
-            self._resume_restore_ema = False
-            self._resume_ema_decay = None
-            self._refresh_train_step()
         info = info | {
             "online_buffer_size": jnp.asarray(
                 float(self._online_data_buffer.size), dtype=jnp.float32

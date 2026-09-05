@@ -30,6 +30,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import (
     filtered_sft_wrap_env,
 )
 import src.training.config as _config
+from scripts.filtered_sft_agent.source_release import verify_source_release
 from src.training.collect import evaluate_policy
 from src.training.runtime_state import save_epoch_state
 from src.training.utils import init_logging, init_wandb
@@ -97,28 +98,50 @@ def _run_eval(
         )
     )
     logging.info("%s metrics at step %d: %s", event, step, eval_metrics)
-    wandb.log(eval_metrics if event == "eval" else {f"final/{k}": v for k, v in eval_metrics.items()}, step=step)
+    wandb.log(
+        eval_metrics
+        if event == "eval"
+        else {f"final/{k}": v for k, v in eval_metrics.items()},
+        step=step,
+    )
     _write_jsonl(metrics_path, {"event": event, "step": int(step), **eval_metrics})
     return eval_metrics
 
 
 def main(config: _config.OnlineTrainConfig):
     init_logging()
+    source_receipt = verify_source_release()
+    logging.info("Verified immutable source release %s", source_receipt["source_sha"])
     logging.info("Running dataset-only preloaded SFT on: %s", platform.node())
     logging.info("Config: %s", config)
 
     rl_config = config.rl
     if not isinstance(rl_config, _config.FilteredSFTLearnerConfig):
-        raise TypeError(f"preloaded SFT requires FilteredSFTLearnerConfig, got {type(rl_config)}")
+        raise TypeError(
+            f"preloaded SFT requires FilteredSFTLearnerConfig, got {type(rl_config)}"
+        )
     if rl_config.preload_episodes_from_path is None:
-        raise ValueError("--rl.preload_episodes_from_path is required for preloaded SFT")
+        raise ValueError(
+            "--rl.preload_episodes_from_path is required for preloaded SFT"
+        )
     if rl_config.online_ratio <= 0.0:
-        raise ValueError("preloaded SFT requires --rl.online_ratio > 0; use 1.0 for dataset-only training")
+        raise ValueError(
+            "preloaded SFT requires --rl.online_ratio > 0; use 1.0 for dataset-only training"
+        )
     if config.num_train_steps <= 0:
-        raise ValueError("--num_train_steps must be positive for preloaded SFT training")
+        raise ValueError(
+            "--num_train_steps must be positive for preloaded SFT training"
+        )
 
     agent = FilteredSFTLearner(config)
-    agent.preload_episodes()
+    restored_buffer_size = int(agent._online_data_buffer.size)
+    if agent._resuming and restored_buffer_size > 0:
+        logging.info(
+            "Using restored preloaded replay buffer with %d transitions; skipping duplicate preload.",
+            restored_buffer_size,
+        )
+    else:
+        agent.preload_episodes()
     buffer_size = int(agent._online_data_buffer.size)
     if buffer_size <= 0:
         raise RuntimeError(
@@ -180,7 +203,9 @@ def main(config: _config.OnlineTrainConfig):
             if step % config.log_interval == 0:
                 all_keys = set().union(*(d.keys() for d in infos))
                 nan = jnp.array(float("nan"))
-                normalized = [{k: d.get(k, nan) for k in sorted(all_keys)} for d in infos]
+                normalized = [
+                    {k: d.get(k, nan) for k in sorted(all_keys)} for d in infos
+                ]
                 stacked_infos = common_utils.stack_forest(normalized)
                 reduced_info = jax.device_get(jax.tree.map(jnp.nanmean, stacked_infos))
                 reduced_info = _to_float_dict(reduced_info)
@@ -191,10 +216,16 @@ def main(config: _config.OnlineTrainConfig):
                 )
                 pbar.write(f"Step {step}: {info_str}")
                 wandb.log(reduced_info, step=step)
-                _write_jsonl(metrics_path, {"event": "log", "step": int(step), **reduced_info})
+                _write_jsonl(
+                    metrics_path, {"event": "log", "step": int(step), **reduced_info}
+                )
                 infos = []
 
-            if periodic_eval_enabled and eval_env is not None and step % config.collect.eval_interval == 0:
+            if (
+                periodic_eval_enabled
+                and eval_env is not None
+                and step % config.collect.eval_interval == 0
+            ):
                 _run_eval(
                     agent=agent,
                     eval_env=eval_env,
@@ -204,26 +235,27 @@ def main(config: _config.OnlineTrainConfig):
                     event="eval",
                 )
 
-            if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-                logging.info("Saving checkpoint at step %d", step)
-                agent.save_checkpoint(step=step)
-                # Runtime state is useful for requeue-safe launches, but keep this secondary to the model checkpoint.
-                try:
-                    save_epoch_state(agent, config)
-                except Exception:
-                    logging.exception("Failed to save runtime state; model checkpoint was still requested")
+            completed_step = int(agent.training_steps)
+            if (
+                completed_step % config.save_interval == 0
+                or completed_step == config.num_train_steps
+            ):
+                logging.info("Saving checkpoint at completed step %d", completed_step)
+                save_epoch_state(agent, config)
 
         agent._checkpoint_manager.wait_until_finished()
 
         if final_eval_enabled:
             if eval_env is None:
                 eval_env = _make_eval_env(config)
-            logging.info("Running final evaluation rollouts; this does not add data to the training buffer.")
+            logging.info(
+                "Running final evaluation rollouts; this does not add data to the training buffer."
+            )
             final_eval_metrics = _run_eval(
                 agent=agent,
                 eval_env=eval_env,
                 config=config,
-                step=int(config.num_train_steps - 1),
+                step=int(agent.training_steps),
                 metrics_path=metrics_path,
                 event="final_eval",
             )
@@ -231,9 +263,15 @@ def main(config: _config.OnlineTrainConfig):
         if eval_env is not None:
             eval_env.close()
 
+    final_step = int(agent.training_steps)
+    if final_step != int(config.num_train_steps):
+        raise RuntimeError(
+            f"training stopped at completed step {final_step}; "
+            f"expected {int(config.num_train_steps)}"
+        )
     summary = {
         "event": "training_complete",
-        "final_step": int(config.num_train_steps - 1),
+        "final_step": final_step,
         "online_buffer_size": int(agent._online_data_buffer.size),
         "checkpoint_dir": str(config.checkpoint_dir),
         "metrics_path": str(metrics_path),

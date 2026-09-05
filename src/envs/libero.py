@@ -15,41 +15,62 @@ from src.envs.wrappers import (
 
 
 class LiberoWrapper(gym.Wrapper):
-
     def __init__(self, **args):
         self._args = args
         env = OffScreenRenderEnv(**args)
         super().__init__(env)
         self.rng, _ = seeding.np_random(0)
+        self._init_state_index = None
+        self._task_id = None
 
     def seed(self, seed=None):
         if seed is not None:
             self.rng, _ = seeding.np_random(seed)
 
-    def reset(self, seed=None, options={}):
-        task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
+    def reset(self, seed=None, options=None):
+        if seed is not None:
+            self.seed(seed)
+        options = {} if options is None else options
+        task_id = options.get("task_id", "libero_90_0")
         task_id = int(task_id.split("_")[-1])
         task_suite = benchmark.get_benchmark_dict()["libero_90"]()
         task = task_suite.get_task(task_id)
-        self._args["bddl_file_name"] = (
-            pathlib.Path(get_libero_path("bddl_files"))
-            / task.problem_folder
-            / task.bddl_file
-        )
-        env = OffScreenRenderEnv(**self._args)
-        super().__init__(env)
+        if task_id != self._task_id:
+            self.env.close()
+            self._args["bddl_file_name"] = (
+                pathlib.Path(get_libero_path("bddl_files"))
+                / task.problem_folder
+                / task.bddl_file
+            )
+            env = OffScreenRenderEnv(**self._args)
+            super().__init__(env)
+            self._task_id = task_id
         self.env.reset()
         init_states = get_task_init_states(task_suite, task_id)
-        random_index = self.rng.integers(low=0, high=init_states.shape[0])
-        init_state = init_states[random_index]
+        requested_index = options.get("init_state_index")
+        if requested_index is None:
+            init_state_index = int(self.rng.integers(low=0, high=init_states.shape[0]))
+        else:
+            init_state_index = int(requested_index)
+            if not 0 <= init_state_index < init_states.shape[0]:
+                raise IndexError(
+                    f"init_state_index={init_state_index} outside [0, {init_states.shape[0]}) "
+                    f"for libero_90_{task_id}"
+                )
+        self._init_state_index = init_state_index
+        init_state = init_states[init_state_index]
         obs = self.env.set_init_state(init_state)
         self._task_description = task.language
-        info = {"task_description": self._task_description}
+        info = {
+            "task_description": self._task_description,
+            "init_state_index": init_state_index,
+        }
         return obs, info
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
         info["task_description"] = self._task_description
+        info["init_state_index"] = self._init_state_index
         return obs, reward, done, False, info
 
 
@@ -80,7 +101,7 @@ def make_env_libero(config, tasks, num_devices: int = 4):
     warm_start_action = get_libero_warm_start_action()
 
     task = tasks[0]
-    task_suite_name = "_".join(task.split("_")[:-1]) 
+    task_suite_name = "_".join(task.split("_")[:-1])
     task_id = int(task.split("_")[-1])
     task_suite = benchmark_dict[task_suite_name]()
     task = task_suite.get_task(task_id)
