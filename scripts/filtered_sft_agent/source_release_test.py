@@ -86,6 +86,7 @@ def _release(tmp_path: Path, monkeypatch):
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "Add runtime release")
     source_sha = _git(root, "rev-parse", "HEAD")
+    _git(root, "remote", "add", "origin", str(root))
     _git(root, "checkout", "-q", "--detach", source_sha)
     _git(root / "openpi", "checkout", "-q", "--detach", openpi_sha)
     _git(root / "molmospaces", "checkout", "-q", "--detach", molmospaces_sha)
@@ -153,6 +154,14 @@ def _release(tmp_path: Path, monkeypatch):
 def test_source_release_accepts_hash_bound_runtime(tmp_path, monkeypatch):
     _, _, receipt = _release(tmp_path, monkeypatch)
     assert source_release.verify_source_release() == receipt
+
+
+def test_source_release_rejects_forged_repository_identity(tmp_path, monkeypatch):
+    _, receipt_path, receipt = _release(tmp_path, monkeypatch)
+    receipt["source_repository"] = "https://forged.invalid/not-the-checkout.git"
+    _rewrite_receipt(receipt_path, receipt, monkeypatch)
+    with pytest.raises(ValueError, match="repository.*configured origin"):
+        source_release.verify_source_release()
 
 
 def test_source_release_rejects_tampered_runtime_file(tmp_path, monkeypatch):

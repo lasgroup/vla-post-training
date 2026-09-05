@@ -276,6 +276,11 @@ def verify_source_release() -> dict[str, Any]:
         or not receipt["source_repository"]
     ):
         raise ValueError("source release repository is missing")
+    configured_repository = _git(root, "remote", "get-url", "origin")
+    if receipt["source_repository"] != configured_repository:
+        raise ValueError(
+            "source release repository does not match the checkout configured origin"
+        )
     if Path(str(receipt.get("source_root"))).resolve(strict=True) != root:
         raise ValueError("source release root does not match VLA_SOURCE_ROOT")
 
