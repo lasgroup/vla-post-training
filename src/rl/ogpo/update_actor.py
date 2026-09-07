@@ -56,7 +56,7 @@ from src.rl.ogpo.sampling import (
     score_chain_under_model,
     sum_log_prob,
 )
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME, pool_prefix_rep
 from src.training.config import OnlineTrainConfig, OGPOSFTLearnerConfig
 
 
@@ -193,8 +193,10 @@ def sample_and_advantage(
             current_model.eval()
             prefix_rep = current_model.get_prefix_rep(policy_observation)
             prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
-            prefix = jnp.mean(
-                prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1])), axis=1
+            prefix = pool_prefix_rep(
+                prefix_rep.reshape((prefix_rep.shape[0], -1, prefix_rep.shape[-1])),
+                config.collect.prefix_pooling,
+                config.model.max_token_len,
             )
         else:
             prefix = critic_prefix

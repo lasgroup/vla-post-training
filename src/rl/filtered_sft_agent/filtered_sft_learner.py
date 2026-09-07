@@ -40,7 +40,7 @@ from src.envs.wrappers import (
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME, pool_prefix_rep
 from src.rl.privileged_state import privileged_task_ids
 from src.training.runtime_state import load_resume_state
 
@@ -694,13 +694,13 @@ class FilteredSFTLearner(Agent):
         next_prefix = np.asarray(next_prefix, dtype=np.float32)
         if next_prefix.ndim == 3:
             next_prefix = next_prefix[0]
-        next_prefix = next_prefix.reshape((-1, next_prefix.shape[-1])).mean(axis=0)
+        next_prefix = self._pool_stored_prefix(next_prefix)
 
         for idx in reversed(range(len(episode_data))):
             ep = episode_data[idx]
             ep["action"], prefix = ep["action"]
             prefix = np.asarray(prefix, dtype=np.float32)
-            prefix = prefix.reshape((-1, prefix.shape[-1])).mean(axis=0)
+            prefix = self._pool_stored_prefix(prefix)
             horizon = next(iter(ep["observation"].values())).shape[0]
             ep["observation"][f"observation/{PREFIX_EMBEDDING_NAME}"] = np.repeat(
                 prefix[None, ...], horizon, axis=0
@@ -709,6 +709,14 @@ class FilteredSFTLearner(Agent):
                 next_prefix[None, ...], horizon, axis=0
             )
             next_prefix = prefix
+
+    def _pool_stored_prefix(self, prefix: np.ndarray) -> np.ndarray:
+        """(S, E) raw prefix from the env wrapper -> the pooled critic input."""
+        return pool_prefix_rep(
+            prefix.reshape((-1, prefix.shape[-1])),
+            self._config.collect.prefix_pooling,
+            self._config.model.max_token_len,
+        )
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
 

@@ -433,6 +433,10 @@ class CollectionConfig:
     success_reward_bonus: float = 0.0
     fix_mc_returns: bool = True
     store_prefix_rep: bool = False
+    # How the stored prefix rep is pooled into the critic input: "mean" (one mean
+    # over image + language tokens) or "image_text_mean" (image and language
+    # tokens pooled separately, concatenated). See src/rl/prefix_embedding.py.
+    prefix_pooling: str = "mean"
     # Privileged-critic diagnostic (src/rl/privileged_state.py): additionally
     # emit the simulator's own state (robot proprio + object poses) as an
     # observation key, and store it in the replay buffer. libero only. False

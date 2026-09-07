@@ -28,7 +28,7 @@ from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.ema_utils import compose_full_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME, pool_prefix_rep, pooled_prefix_dim
 from src.training.config import BestofNLearnerConfig
 
 
@@ -44,7 +44,9 @@ class BestofNLearner(FilteredSFTLearner):
         prefix_rep = model.get_prefix_rep(fake_obs)[0]
         del model
         assert prefix_rep.ndim == 3, f"Expected prefix_rep to have shape (batch, seq_len, embed_dim), but got {prefix_rep.shape}"
-        prefix_embedding_shape = tuple(prefix_rep.shape[2:])
+        prefix_embedding_shape = (
+            pooled_prefix_dim(int(prefix_rep.shape[-1]), config.collect.prefix_pooling),
+        )
         dummy_obs = {
             "state": fake_obs.state,
             PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
@@ -223,8 +225,12 @@ class BestofNLearner(FilteredSFTLearner):
         obs = _model.Observation.from_dict(observation)
         prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
         prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        prefix = jnp.mean(prefix, axis=1)
-        return prefix
+        return self._pool_prefix(prefix)
+
+    def _pool_prefix(self, prefix):
+        return pool_prefix_rep(
+            prefix, self._config.collect.prefix_pooling, self._config.model.max_token_len
+        )
 
     def _get_policy_model(self, policy_state: training_utils.TrainState) -> _model.BaseModel:
         """Merge policy params into a model. Call once per update() to avoid duplicates."""
@@ -449,7 +455,7 @@ class BestofNLearner(FilteredSFTLearner):
             )
             prefix = np.asarray(prefix)
             if prefix.ndim == 3:
-                prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
+                prefix = self._pool_prefix(prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]))
             critic_obs[PREFIX_EMBEDDING_NAME] = jnp.repeat(
                 jnp.asarray(prefix), n_samples, axis=0
             )
