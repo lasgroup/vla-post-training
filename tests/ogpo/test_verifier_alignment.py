@@ -443,6 +443,8 @@ def _learner_class_for(cfg):
 def test_dispatch_for_every_registered_config_is_unchanged_by_the_new_entry():
     expected = {
         "pi05_libero_online_filtered_sft": "FilteredSFTLearner",
+        "pi05_libero_online_filtered_sft_frozen_backbone": "FilteredSFTLearner",
+        "pi05_libero_online_filtered_sft_lora_backbone": "FilteredSFTLearner",
         "pi05_molmo_online_filtered_sft": "FilteredSFTLearner",
         "pi05_libero_online_aw_sft": "AdvantageWeightedSFTLearner",
         "pi05_libero_online_mpo_sft": "AdvantageWeightedSFTLearner",
@@ -451,6 +453,7 @@ def test_dispatch_for_every_registered_config_is_unchanged_by_the_new_entry():
         "pi05_molmo_online_best_of_n": "BestofNLearner",
         "pi05_libero_online_dsrl": "UNSUPPORTED",
         "pi05_libero_online_ogpo_sft": "OGPOAgentLearner",
+        "pi05_molmo_online_ogpo_sft": "OGPOAgentLearner",
         "pi05_libero_online_ogpo_ref": "OGPOAgentLearner",
         "pi05_libero_online_ogpo_privileged": "OGPOPrivilegedLearner",
     }

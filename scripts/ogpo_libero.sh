@@ -3,7 +3,7 @@
 #SBATCH --qos=maxlab_qos
 #SBATCH --nodelist=babel-m9-16
 #SBATCH --job-name=ogpo_mt4
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:1
 #SBATCH --constraint=VRAM_96GB
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=400G

@@ -565,14 +565,15 @@ def make_base_libero_config(
 
 
 def make_base_molmo_config(
-        name: str, rl_config: RLAlgorithmConfig
+        name: str, rl_config: RLAlgorithmConfig, **kwargs
 ) -> OnlineTrainConfig:
     """
     Factory function to generate a base OnlineTrainConfig for Molmo.
     Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+
+    Extra kwargs are forwarded to OnlineTrainConfig (e.g. freeze_filter).
     """
-    return OnlineTrainConfig(
-        name=name,
+    defaults = dict(
         model=pi0_config.Pi0Config(
             pi05=True, action_horizon=15, discrete_state_input=False
         ),
@@ -604,14 +605,15 @@ def make_base_molmo_config(
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=10_000,
         num_workers=4,  # override default num_workers
-        rl=rl_config,
         collect=CollectionConfig(
             domain="molmo",
             max_episode_steps=450,
             resize_image_h=224,
             resize_image_w=224,
-        )
+        ),
     )
+    defaults.update(kwargs)
+    return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
 def _make_ogpo_freeze_filter():
@@ -749,6 +751,16 @@ _CONFIGS.extend(
         # action heads are trainable. See docs/ogpo_agent_plan.md.
         make_base_libero_config(
             name="pi05_libero_online_ogpo_sft",
+            rl_config=OGPOSFTLearnerConfig(
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+                group_num_samples=8,
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        # Molmo twin of `pi05_libero_online_ogpo_sft` (scripts/ogpo_molmo.sh):
+        # same learner/recipe, only the domain-side base differs.
+        make_base_molmo_config(
+            name="pi05_molmo_online_ogpo_sft",
             rl_config=OGPOSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
