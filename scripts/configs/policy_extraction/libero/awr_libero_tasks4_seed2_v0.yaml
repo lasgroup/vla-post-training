@@ -1,7 +1,7 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_aw_sft
 project_name: vla-post-training
-group_name: policy_extraction_tasks4_parl_libero_v0_seed2
+group_name: policy_extraction_tasks4_awr_libero_v0_seed2
 params:
   log_interval: [25]
   num_train_steps: [500000]
