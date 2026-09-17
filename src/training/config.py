@@ -156,6 +156,21 @@ class CriticTrainingConfig:
 @dataclasses.dataclass(frozen=True)
 class FilteredSFTLearnerConfig(RLAlgorithmConfig):
     policy: PolicyTrainingConfig = PolicyTrainingConfig()
+    # Classifier-free guidance on the language prompt. cfg_dropout_prob masks the
+    # prompt out of a fraction of training samples so the model also learns the
+    # unconditional branch; cfg_scale != 1.0 guides sampling with the prompt
+    # dropped in the unconditional branch. Several scales sweep the eval, each
+    # reported under eval/cfg<scale>/. Guidance applies to eval only unless
+    # cfg_guide_collection is set (requires a single scale).
+    cfg_dropout_prob: float = 0.0
+    cfg_scale: tuple[float, ...] = (1.0,)
+    cfg_guide_collection: bool = False
+
+    def __post_init__(self):
+        if not self.cfg_scale:
+            raise ValueError("rl.cfg_scale must not be empty.")
+        if self.cfg_guide_collection and len(self.cfg_scale) > 1:
+            raise ValueError("rl.cfg_guide_collection requires a single rl.cfg_scale.")
 
 
 @dataclasses.dataclass(frozen=True)

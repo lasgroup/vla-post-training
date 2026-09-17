@@ -704,7 +704,7 @@ class DSRLLearner(Agent):
 
         self._collection_success_episodes += int(is_success)
 
-    def start_data_collection(self, step: int | None = None):
+    def start_data_collection(self, step: int | None = None, *, evaluation: bool = False):
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
 

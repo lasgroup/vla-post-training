@@ -1,5 +1,6 @@
 from typing import Any
 import jax
+import logging
 import numpy as np
 from src.envs.venv import BaseVectorEnv
 from src.rl.agent import Agent
@@ -20,6 +21,10 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
+# Keeps eval initial states apart from the collection seeds at the same step.
+_EVAL_SEED_OFFSET = 1_000_000
+
+
 def evaluate_policy(
     agent: Agent, env: BaseVectorEnv, config, step: int
 ):
@@ -36,7 +41,7 @@ def evaluate_policy(
     for t in config.collect.eval_tasks:
         repeated_task_ids.extend([t] * num_rollouts_per_task)
     num_rollouts = num_rollouts_per_task * len(config.collect.eval_tasks)
-    agent.start_data_collection()
+    agent.start_data_collection(evaluation=True)
 
     with tqdm.tqdm(total=num_rollouts, desc="eval") as pbar:
 
@@ -111,6 +116,35 @@ def evaluate_policy(
         metrics["eval/mean_success_episode_length"] = np.mean(successful_episode_lengths)
     metrics["eval/total_collected_episodes"] = agent.total_collected_episodes
     metrics.update({f"eval/success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
+    return metrics
+
+
+def _tag_metrics(metrics: dict[str, Any], scale: float) -> dict[str, Any]:
+    tag = f"cfg{scale:g}"
+    return {
+        f"eval/{tag}/{k.removeprefix('eval/')}" if k.startswith("eval/") else f"{tag}/{k}": v
+        for k, v in metrics.items()
+    }
+
+
+def evaluate_policy_sweep(
+    agent: Agent, env: BaseVectorEnv, config, step: int
+) -> dict[str, Any]:
+    """Evaluate once per guidance scale. With a single scale this is evaluate_policy."""
+    scales = getattr(agent, "cfg_scales", [1.0])
+    if len(scales) == 1:
+        return evaluate_policy(agent=agent, env=env, config=config, step=step)
+
+    # Same initial states and action noise for every scale, so only guidance differs.
+    rng_state = agent.rng_state_json()
+    metrics = {}
+    for i, scale in enumerate(scales):
+        agent.set_cfg_scale(scale)
+        agent.set_rng_state_json(rng_state)
+        env.seed(config.seed + _EVAL_SEED_OFFSET + step)
+        logging.info("Evaluating at cfg_scale=%g (%d of %d)", scale, i + 1, len(scales))
+        metrics.update(_tag_metrics(evaluate_policy(agent=agent, env=env, config=config, step=step), scale))
+    agent.set_cfg_scale(scales[0])
     return metrics
 
 

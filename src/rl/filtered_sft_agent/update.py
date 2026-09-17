@@ -32,6 +32,15 @@ def train_step(
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
+    if config.rl.cfg_dropout_prob > 0.0 and observation.tokenized_prompt_mask is not None:
+        train_rng, drop_rng = jax.random.split(train_rng)
+        drop = jax.random.bernoulli(
+            drop_rng, config.rl.cfg_dropout_prob, (observation.tokenized_prompt_mask.shape[0],)
+        )
+        observation = dataclasses.replace(
+            observation, tokenized_prompt_mask=observation.tokenized_prompt_mask & ~drop[:, None]
+        )
+
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
     loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)

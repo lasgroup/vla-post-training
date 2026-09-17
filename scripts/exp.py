@@ -62,7 +62,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
-from src.training.collect import collect_data, evaluate_policy
+from src.training.collect import collect_data, evaluate_policy_sweep
 from src.training.runtime_state import save_epoch_state, load_resume_state
 from src.training.utils import init_logging, Logger
 
@@ -134,7 +134,7 @@ def main(config: _config.OnlineTrainConfig):
                 config=config,
                 env_num=config.collect.eval_env_num,
             )
-            eval_info = evaluate_policy(
+            eval_info = evaluate_policy_sweep(
                 agent=agent,
                 env=eval_env,
                 config=config,

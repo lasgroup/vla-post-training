@@ -26,6 +26,7 @@ import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
+from src.rl.filtered_sft_agent.cfg_sampling import sample_actions_cfg
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.replay_buffer import ShardedReplayBuffer
 from src.rl.types import StepData
@@ -347,6 +348,13 @@ class FilteredSFTLearner(Agent):
         # Drop policy-owned model references to avoid keeping an extra model copy in memory.
         self._drop_policy_model()
 
+        self._cfg_scales = list(self._config.rl.cfg_scale)
+        self._cfg_scale = self._cfg_scales[0]
+        self._cfg_active = False
+        self._sample_actions_cfg = nnx.jit(
+            sample_actions_cfg, static_argnames=("num_steps", "cfg_scale", "return_prefix_rep")
+        )
+
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
 
@@ -504,7 +512,7 @@ class FilteredSFTLearner(Agent):
         sharding_spec = (
             self._data_sharding if batch_size % num_devices == 0 else None
         )
-        if not return_prefix_rep:
+        if not return_prefix_rep and not self._cfg_active:
             actions = self._policy.infer_with_model(
                 model=model,
                 obs=observations,
@@ -523,14 +531,26 @@ class FilteredSFTLearner(Agent):
             inputs = jax.device_put(inputs, sharding_spec)
         observation = _model.Observation.from_dict(inputs)
         _, sample_rng = jax.random.split(rng)
-        raw_actions, prefix = self._policy._sample_actions_with_model(
-            m=model,
-            observation=observation,
-            noise=noise,
-            rng=sample_rng,
-            return_prefix_rep=True,
-            **self._policy._sample_kwargs,
-        )
+        if self._cfg_active:
+            sampled = self._sample_actions_cfg(
+                model,
+                sample_rng,
+                observation,
+                noise=noise,
+                cfg_scale=self._cfg_scale,
+                return_prefix_rep=return_prefix_rep,
+                **self._policy._sample_kwargs,
+            )
+        else:
+            sampled = self._policy._sample_actions_with_model(
+                m=model,
+                observation=observation,
+                noise=noise,
+                rng=sample_rng,
+                return_prefix_rep=True,
+                **self._policy._sample_kwargs,
+            )
+        raw_actions, prefix = sampled if return_prefix_rep else (sampled, None)
         outputs = {"state": inputs["state"], "actions": raw_actions}
         if batch_size == 1:
             outputs = jax.tree.map(lambda x: np.asarray(x[0]), outputs)
@@ -538,6 +558,8 @@ class FilteredSFTLearner(Agent):
         actions = outputs["actions"]
         if batch_size == 1 and actions.ndim == 2:
             actions = actions[np.newaxis, ...]
+        if prefix is None:
+            return actions
         return actions, np.asarray(prefix, dtype=np.float32)
 
     def _generate_actions(
@@ -568,6 +590,13 @@ class FilteredSFTLearner(Agent):
         self, observations: np.ndarray | Dict, **kwargs
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
         return self._generate_actions(observations, **kwargs)
+
+    @property
+    def cfg_scales(self) -> list[float]:
+        return list(self._cfg_scales)
+
+    def set_cfg_scale(self, scale: float) -> None:
+        self._cfg_scale = float(scale)
 
     def _online_batch_to_sft_batch(
         self, online_batch: Dict[str, Any]
@@ -756,10 +785,11 @@ class FilteredSFTLearner(Agent):
         if target_buffer is None:
             self._collection_success_episodes += 1
 
-    def start_data_collection(self, step: int | None = None):
+    def start_data_collection(self, step: int | None = None, *, evaluation: bool = False):
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
+        self._cfg_active = self._cfg_scale != 1.0 and (evaluation or self._config.rl.cfg_guide_collection)
         assert self._train_state.ema_params is None, "EMA parameters should be offloaded except during data collection."
         ema_rep = jax.device_put(self._ema, self._replicated_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)
@@ -769,6 +799,7 @@ class FilteredSFTLearner(Agent):
         # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
+        self._cfg_active = False
         # offload EMA
         assert self._train_state.ema_params is not None, "EMA parameters should be on device during data collection."
         self._train_state = dataclasses.replace(self._train_state, ema_params=None)

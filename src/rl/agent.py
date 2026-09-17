@@ -49,7 +49,7 @@ class Agent(object):
         raise NotImplementedError
 
     @abstractmethod
-    def start_data_collection(self, step: int | None = None):
+    def start_data_collection(self, step: int | None = None, *, evaluation: bool = False):
         raise NotImplementedError
 
     @abstractmethod
