@@ -55,8 +55,9 @@ export NUM_STEPS="${NUM_STEPS:-1200}"
 export N_ROLLOUTS="${N_ROLLOUTS:-2}"
 export INIT_ROLLOUTS="${INIT_ROLLOUTS:-2}"
 
-# SLURM renumbers allocated GPUs inside the cgroup.
-export GPU="${GPU:-0}"
+# SLURM renumbers allocated GPUs inside the cgroup; take the whole list so a
+# --gres=gpu:2 allocation is actually visible to JAX (FSDP=2 needs both).
+export GPU="${GPU:-${CUDA_VISIBLE_DEVICES:-0}}"
 
 echo "[smoke] node=$(hostname) job=${SLURM_JOB_ID:-?} gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo n/a)"
 echo "[smoke] arm=$ARM steps=$NUM_STEPS rollouts/task=$N_ROLLOUTS init=$INIT_ROLLOUTS"
@@ -66,7 +67,9 @@ MEMLOG="/home/pchellap/logs/${SLURM_JOB_NAME:-mt4_ref_smoke}_${SLURM_JOB_ID:-0}_
 (
   echo "unix_s,gpu_used_MiB,gpu_total_MiB,host_used_MB"
   while true; do
-    G=$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+    # Max-used GPU across the allocation, not `head -1`: under FSDP the second
+    # card carries the same order of memory and GPU 0 alone under-reports the peak.
+    G=$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' | sort -t, -k1 -n | tail -1)
     H=$(free -m | awk '/^Mem:/{print $3}')
     echo "$(date +%s),${G:-,},${H}"
     sleep 15

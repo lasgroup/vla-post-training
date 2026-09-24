@@ -27,8 +27,46 @@
 #   QS         - int => --rl.critic.num_qs/num_vs <n> (default 2). With
 #                CONS=1, sign-unanimity across n heads is a much stricter
 #                gate (2 correlated heads share delusions — the CAB crash).
+#   FRESH      - 1 => --overwrite (WIPES the checkpoint dir, starts at step 0).
+#                Default is --resume, so re-running an arm continues it.
+#   TASK       - ONE LIBERO task id for collect.tasks AND collect.eval_tasks
+#                (default libero_90_44; a space-separated list renders as a
+#                single bad token -- multi-task goes through the trailing
+#                arguments below). The exp name stays stab_${ARM}, so put the
+#                task in ARM as the single-task campaign did
+#                (ARM=NCB_libero_90_38 TASK=libero_90_38 -> stab_NCB_libero_90_38).
+#                Mirrors the sibling vla_single_task checkout's recipe, which
+#                produced those checkpoints. TRAP (same as LORA, see
+#                ws_bcbb_pipeline.sh:20-24): a TASK exported in the submitting
+#                shell reaches every arm launched through this recipe,
+#                ws_bcbb_pipeline.sh included, and silently retargets it --
+#                the banner's task= field is the only tell.
+#   CKPT_BASE_DIR - checkpoint root (default $STORE_ROOT/checkpoints/stability_study);
+#                set it alone, not STORE_ROOT, to restore a run from another root.
+#   TD_W       - float => --rl.critic.td_weight_schedule.{init,end}_value <v>
+#                (default 1, i.e. 100% TD target -- reproduces prior behavior
+#                exactly). Emitted UNCONDITIONALLY: this flag was previously a
+#                fixed `1` that silently overrode any CONFIG_NAME's own
+#                td_weight_schedule default (e.g. pi05_libero_online_ogpo_ref's
+#                0.95), same contract as ogpo_multitask_4task.sh's TD_W.
+#   SUCC_BONUS - float => --collect.success_reward_bonus <v> (default 0,
+#                reproduces prior behavior exactly -- this flag was previously
+#                never emitted). Not baked into any registered config's own
+#                default (collect.success_reward_bonus is a global
+#                CollectionConfig default of 0.0), so it needs setting
+#                explicitly regardless of CONFIG_NAME -- mirrors
+#                ogpo_multitask_4task.sh's SUCC_BONUS (reference default 90).
+#   See scripts/stability_study_ref.sh for the reference-aligned single-task
+#   wrapper (CONFIG_NAME=pi05_libero_online_ogpo_ref, TD_W=0.95, SUCC_BONUS=90).
+#   DRY        - 1 => print the final command instead of running the entry
+#                point. Still seeds $LIBERO_CONFIG_PATH/config.yaml if it is
+#                missing (that block runs first, as in ogpo_multitask_4task.sh).
+#   Trailing arguments are appended verbatim after the flag block (tyro takes
+#   the last occurrence), e.g. `... bash scripts/stability_study.sh --rl.n_samples 8`
+#   -- the read-only probes use this for knobs the recipe does not expose.
 #
 # Usage:  ARM=N NORM=1 GPU=3 bash scripts/stability_study.sh
+#         ARM=N NORM=1 GPU=3 DRY=1 bash scripts/stability_study.sh   # print, don't run
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -36,6 +74,14 @@ set -euo pipefail
 : "${GPU:?set GPU (cuda device index)}"
 SEED="${SEED:-0}"
 EMA="${EMA:-0.99}"
+TASK="${TASK:-libero_90_44}"
+TD_W="${TD_W:-1}"
+SUCC_BONUS="${SUCC_BONUS:-0}"
+# Global (not per-device) policy batch: states per policy update. The actor
+# jit expands it to BATCH x rl.group_num_samples SDE chains -- the dominant
+# memory knob (mirrors ogpo_multitask_4task.sh's BATCH). Must divide
+# jax.device_count() (filtered_sft_learner.py:232).
+BATCH="${BATCH:-32}"
 
 # Non-interactive shells (nohup over ssh) miss ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"
@@ -43,7 +89,13 @@ export PATH="$HOME/.local/bin:$PATH"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 STORE_ROOT="${STORE_ROOT:-$PROJECT_DIR/run_store}"
 EXP_NAME="stab_${ARM}"
-CKPT_BASE_DIR="$STORE_ROOT/checkpoints/stability_study"
+# Overridable so a probe can restore a run whose checkpoints live under
+# another root while every cache (openpi assets, LIBERO config, wandb) stays
+# in the local store -- how the single-task campaign itself was launched
+# (sibling vla_single_task recipe :46). Redirecting STORE_ROOT instead moves
+# the openpi asset cache too and the policy-twin load then fails
+# (q_spread_stab job 10352338, _METADATA missing under .../cache/openpi).
+CKPT_BASE_DIR="${CKPT_BASE_DIR:-$STORE_ROOT/checkpoints/stability_study}"
 
 export CUDA_VISIBLE_DEVICES="$GPU"
 cd "$PROJECT_DIR"
@@ -82,6 +134,10 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.75}"
 export MUJOCO_EGL_DEVICE_ID="$GPU"
 
 EXTRA_FLAGS=()
+# Reference-alignment: unconditional, mirrors ogpo_multitask_4task.sh:221-222
+# (SUCC_BONUS is not baked into any config's own default -- see TD_W/SUCC_BONUS
+# header docs above).
+EXTRA_FLAGS+=(--collect.success_reward_bonus "$SUCC_BONUS")
 [ "${NORM:-0}" = "1" ] && EXTRA_FLAGS+=(--rl.normalize_group_advantage)
 [ -n "${CLIP_SYM:-}" ] && EXTRA_FLAGS+=(--rl.adv_clip_sym "$CLIP_SYM")
 [ -n "${ACCUM:-}" ] && EXTRA_FLAGS+=(--rl.policy_grad_accum "$ACCUM")
@@ -109,15 +165,58 @@ SAVE_INT="${SAVE_INT:-100000}"
 # Extra episodes at the step-0 collection ONLY (spark insurance: kills the
 # empty-success-buffer lottery; 100 extra => P(0 successes) ~ 0.2% at 5% SR).
 [ -n "${INIT_ROLLOUTS:-}" ] && EXTRA_FLAGS+=(--collect.num_initial_rollouts "$INIT_ROLLOUTS")
+# --- backbone LoRA (docs/changes/2026-08-29-backbone-lora/) ---
+# Emitted UNCONDITIONALLY, both branches (mirrors ogpo_multitask_4task.sh —
+# second copy, keep in sync): a real CLI flag, so the env var is authoritative
+# for any CONFIG_NAME. LORA=1 trains the 2B PaliGemma LLM backbone through
+# rank-16/alpha-16 adapters (+27.87M params); SigLIP and the base weights stay
+# frozen; the critic's prefix embeddings stay adapter-free (R1). NEW-RUN ONLY
+# (--resume across a LORA flip fails loudly in orbax). tyro renders the bool as
+# a flag PAIR — `--backbone_lora True` does not parse.
+# NOTE: --rl.dedup_group_prefix (below) is MEMORY-LOAD-BEARING when LORA=1.
+if [ "${LORA:-0}" = "1" ]; then
+  EXTRA_FLAGS+=(--backbone_lora)
+else
+  EXTRA_FLAGS+=(--no-backbone_lora)
+fi
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
          "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" \
          "$WANDB_DIR" "$WANDB_CACHE_DIR" "$WANDB_CONFIG_DIR"
 
-echo "[stability-study] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED ema=$EMA extra=${EXTRA_FLAGS[*]:-none}"
+# LIBERO prompts interactively on first import if its config file is missing —
+# fatal in a batch job (EOFError; q_spread_stab job 10352129 died there on a
+# redirected STORE_ROOT). Seed the default config beforehand, exactly as
+# ogpo_multitask_4task.sh:253-254 and the sibling vla_single_task recipe do.
+if [ ! -f "$LIBERO_CONFIG_PATH/config.yaml" ]; then
+  printf 'n\n' | uv run python -c "import libero.libero" >/dev/null 2>&1 || true
+fi
 
-uv run "$ENTRY" \
+# Checkpoint mode. --resume by default so re-running an interrupted arm
+# continues it; --overwrite rmtrees the checkpoint dir (openpi
+# checkpoints.py:26-29). Safe on a first launch: openpi downgrades resume to a
+# fresh start when the dir is absent or holds no checkpoints. FRESH=1 opts back
+# into the wipe; an explicit CKPT_MODE_FLAG wins over both. (Deliberately a
+# second copy of ogpo_multitask_4task.sh's block: the two recipes' env preambles
+# have already diverged and are not being unified here — OQ-2.)
+if [ -n "${CKPT_MODE_FLAG:-}" ]; then
+  :
+elif [ "${FRESH:-0}" = "1" ]; then
+  CKPT_MODE_FLAG=--overwrite
+else
+  CKPT_MODE_FLAG=--resume
+fi
+
+echo "[stability-study] node=$(hostname) gpu=$GPU arm=$ARM task=$TASK seed=$SEED ema=$EMA extra=${EXTRA_FLAGS[*]:-none}"
+echo "[stability-study] checkpoint mode=$CKPT_MODE_FLAG $([ "$CKPT_MODE_FLAG" = "--overwrite" ] && echo '(WIPES the checkpoint dir)' || echo '(continues an existing run; FRESH=1 to wipe)')"
+
+# ENTRY swaps the python entry point for the read-only probes (same contract as
+# ogpo_multitask_4task.sh); DRY=1 prints the command instead of running it.
+RUN=(uv run "$ENTRY")
+[ "${DRY:-0}" = "1" ] && RUN=(echo uv run "$ENTRY")
+
+"${RUN[@]}" \
   "$CONFIG_NAME" \
   --project_name ogpo_stability \
   --group_name stability_study \
@@ -125,7 +224,7 @@ uv run "$ENTRY" \
   --checkpoint_base_dir "$CKPT_BASE_DIR" \
   --seed "$SEED" \
   --fsdp_devices 1 \
-  --overwrite \
+  "$CKPT_MODE_FLAG" \
   --log_interval 25 \
   --save_interval "$SAVE_INT" \
   --keep_period "$SAVE_INT" \
@@ -133,8 +232,8 @@ uv run "$ENTRY" \
   --ema_decay "$EMA" \
   --lr_schedule.value 2.5e-5 \
   --max_runtime 169200 \
-  --collect.tasks libero_90_44 \
-  --collect.eval_tasks libero_90_44 \
+  --collect.tasks "$TASK" \
+  --collect.eval_tasks "$TASK" \
   --collect.store_prefix_rep \
   --collect.collect_interval "$COLLECT_INT" \
   --collect.num_rollouts "$N_ROLLOUTS" \
@@ -147,8 +246,8 @@ uv run "$ENTRY" \
   --rl.buffer_capacity 250000 \
   --rl.policy.update_interval 10 \
   --rl.policy.training_start_step 900 \
-  --rl.critic.td_weight_schedule.init_value 1 \
-  --rl.critic.td_weight_schedule.end_value 1 \
+  --rl.critic.td_weight_schedule.init_value "$TD_W" \
+  --rl.critic.td_weight_schedule.end_value "$TD_W" \
   --rl.critic.td_weight_schedule.switch_step 999999 \
   --rl.critic.no-use_distributional_critic \
   --rl.critic.num_value_bins 1 \
@@ -166,5 +265,6 @@ uv run "$ENTRY" \
   --rl.dedup_group_prefix \
   --rl.use_success_buffer \
   --rl.critic.value_target_type one_hot \
-  --batch_size 32 \
-  "${EXTRA_FLAGS[@]}"
+  --batch_size "$BATCH" \
+  "${EXTRA_FLAGS[@]}" \
+  "$@"

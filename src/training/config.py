@@ -153,6 +153,27 @@ class CriticTrainingConfig:
     # --- conservative twin-critic AWR knobs (defaults reproduce current behavior) ---
     q_bootstrap_reduction: str | None = None  # V-ensemble reduction for Q target; None -> `reduction`
     per_critic_value_target: bool = False  # True: V_i regresses to Q_i (needs num_vs == num_qs)
+    # Per-task critics (multi-task): T disjoint Q ensembles and T disjoint V
+    # ensembles with NO shared parameters, one per distinct collect.tasks entry,
+    # routed per sample by a `task_index` transition field in the replay buffer
+    # (src/rl/networks/per_task_critic.py, src/rl/task_registry.py). A sample of
+    # task t is only ever scored by task t's critics, in the TD update and in
+    # the OGPO advantage alike. Slots are keyed on the task ID (libero_90_79),
+    # not the prompt string. Also switches the critic loss to a per-task mean
+    # averaged over the tasks present in the batch, and the critic grad clip to
+    # one clip_by_global_norm per task subtree (a single global clip would let
+    # task A's gradient magnitude throttle task B's update). Must equal the
+    # number of distinct collect.tasks ids (asserted at learner construction;
+    # the registry must be full after the first collection round).
+    # Cost: T x the critic forward/backward and T x critic params+Adam+EMA.
+    # Analytic, NOT measured: the mt4 recipe forces --rl.critic.use_bronet
+    # --rl.critic.bronet_hidden_dim 1024 (2 heads), ~0.42 GB today -> ~1.7 GB at
+    # T=4; the 10-head `_ref` path is ~9 GB at T=4. Measure before an
+    # unfrozen-backbone arm. New-run only:
+    # the critic param tree changes shape, so a single-critic checkpoint or
+    # buffer shard does not resume into it. OGPO only. None = today's shared
+    # critics, bit-identical. docs/changes/2026-08-21-per-task-critics/.
+    num_tasks: int | None = None
 
 
 # Define hyperparameter structures for your algorithms
@@ -234,6 +255,9 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # instead of running G redundant prefix forwards on identical observations.
     # Semantically equivalent (allclose, certified by tests/ogpo/
     # test_group_dedup.py); big win for group_num_samples > 1.
+    # MEMORY-LOAD-BEARING when backbone_lora is on: with adapters trainable the
+    # rescorer's prefix pass is a live backward, so dedup-off pays G backbone
+    # backwards per update instead of one (docs/changes/2026-08-29-backbone-lora/).
     dedup_group_prefix: bool = False
     # Multitask: normalize advantages by the per-task std within the batch
     # (tasks identified by tokenized prompt). Equalizes advantage scale across
@@ -258,8 +282,12 @@ class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
     # (q95 - q05) spread, floored at ``normalizer_config.min_scale``. Pins the
     # advantage scale (= effective policy LR) against critic-spread drift.
     # Reuses the inherited ``normalizer_config`` (q_up/q_low/min_scale/
-    # ema_weight). The running scale is NOT checkpointed: after a resume it
-    # re-warms from min_scale within ~1/(1-ema_weight) policy updates.
+    # ema_weight). The running scale PERSISTS across a resume: it rides in the
+    # resume manifest's ``extra`` block (OGPOAgentLearner.save_extra_resume_state,
+    # even when the success buffer is off) and is restored in __init__. Only a
+    # resume from a manifest written before 2026-08-27 has no ``extra``; that
+    # path warns and re-warms from min_scale within ~1/(1-ema_weight) policy
+    # updates, as every resume used to.
     normalize_group_advantage: bool = False
     # Symmetric per-sample advantage clip, applied AFTER normalization. Bounds
     # the worst single-sample gradient contribution (the PPO analog of AWR's
@@ -391,6 +419,11 @@ class CollectionConfig:
     eval_interval: int = 300
     num_eval_rollouts: int = 32
     max_episode_steps: int = 400  # used to auto-compute value bounds
+    # Multiplies the domain's TimeLimit truncation (the libero suite map at
+    # envs/libero.py:126-138, molmo's 450) AND the T in the discount>=1
+    # value-bound fallback, so the two cannot drift. 1 == today's behavior;
+    # bounds are T-independent for discount < 1, so this only lengthens episodes.
+    episode_steps_multiplier: int = 1
 
     def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers
@@ -447,9 +480,29 @@ class OnlineTrainConfig(TrainConfig):
     requeue_before_eval: bool = False
     free_buffer_before_eval: bool = False
     default_prompt: str | None = None
+    # Backbone LoRA (docs/changes/2026-08-29-backbone-lora/). A REWRITE flag,
+    # not a passive field: __post_init__ restates BOTH model.paligemma_variant
+    # ("gemma_2b_lora") and freeze_filter (adapter-aware) so the two can never
+    # disagree — disagreement is the CLI trap the guard below rejects. Cost:
+    # +27.87M trainable params (+6.5%), ~+0.5 GB steady state, and a newly-live
+    # backward through the 2B backbone in jit-2a/2b (activation cost is the real
+    # unknown; measure with scripts/exp_ogpo_unfrozen_backbone_memdiag.py).
+    # Requires an OGPOSFTLearnerConfig; see the raise in __post_init__.
+    backbone_lora: bool = False
     
     def __post_init__(self):
         super().__post_init__()
+
+        if self.collect.episode_steps_multiplier < 1:
+            # gymnasium's TimeLimit truncates on elapsed >= max_episode_steps, so
+            # 0 or negative truncates every episode at step 0 -- a run that trains
+            # and means nothing. A typo'd EP_MULT=0 must die here, not at eval.
+            raise ValueError(
+                f"collect.episode_steps_multiplier must be >= 1, got "
+                f"{self.collect.episode_steps_multiplier}. Set "
+                "--collect.episode_steps_multiplier 1 (default) or a positive "
+                "multiplier (EP_MULT in scripts/ogpo_multitask_4task.sh)."
+            )
 
         if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
             if self.rl.critic.use_distributional_critic:
@@ -466,9 +519,103 @@ class OnlineTrainConfig(TrainConfig):
                     "use_distributional_critic=True requires num_value_bins > 1; "
                     "set rl.critic.num_value_bins (e.g. 51) in the config."
                 )
+            if self.rl.critic.num_tasks is not None:
+                # Mirror image of the footgun above: per-task critics live in the
+                # AWR critic module (src/rl/advantage_weighted_sft/update_critic.py);
+                # the best-of-N copy is untouched and would silently ignore the flag.
+                # The learner-level check (which subclasses actually thread
+                # task_index) is in AdvantageWeightedSFTLearner.__init__.
+                if not isinstance(self.rl, OGPOSFTLearnerConfig):
+                    raise ValueError(
+                        f"rl.critic.num_tasks={self.rl.critic.num_tasks} is only "
+                        "implemented for OGPOSFTLearnerConfig (per-task critics, "
+                        "docs/changes/2026-08-21-per-task-critics/); "
+                        f"{type(self.rl).__name__} would silently ignore it. "
+                        "Set rl.critic.num_tasks=None."
+                    )
+                if self.rl.critic.num_tasks < 1:
+                    raise ValueError(
+                        f"rl.critic.num_tasks must be >= 1 or None, got {self.rl.critic.num_tasks}."
+                    )
             # Value bounds are resolved lazily in get_value_bounds(), not cached
             # here: caching into value_lower/upper_bound would suppress
             # re-resolution after tyro/YAML overrides.
+
+        # --- Backbone LoRA (docs/changes/2026-08-29-backbone-lora/) ----------
+        if self.backbone_lora:
+            if not isinstance(self.rl, OGPOSFTLearnerConfig):
+                # Same footgun-rejection shape as the critic.num_tasks branch
+                # above: the flag rewrites freeze_filter to the OGPO
+                # backbone-frozen filter, and on any other online config the
+                # filter is nnx.Nothing (everything trainable), so the rewrite
+                # would FREEZE ~430M params that train today and look normal.
+                raise ValueError(
+                    "backbone_lora=True is only defined for OGPOSFTLearnerConfig: "
+                    "it rewrites freeze_filter to the OGPO backbone-frozen filter, "
+                    f"which would FREEZE parameters {type(self.rl).__name__} trains "
+                    "today. Drop --backbone_lora, or use one of the OGPO configs "
+                    "(pi05_libero_online_ogpo_sft / _sft_pertask / _ref)."
+                )
+            if not isinstance(self.model, pi0_config.Pi0Config):
+                raise ValueError(
+                    "backbone_lora=True sets model.paligemma_variant='gemma_2b_lora', "
+                    f"which only exists on Pi0Config; got {type(self.model).__name__}. "
+                    "Drop --backbone_lora."
+                )
+            # dataclasses.replace, NOT a restated Pi0Config: replace preserves
+            # pi05=True / action_horizon / discrete_state_input, which
+            # make_base_libero_config sets wholesale and a restated model would
+            # silently drop. Idempotent by construction (tyro re-instantiates
+            # the dataclass, re-running this rewrite on its own output).
+            object.__setattr__(
+                self, "model",
+                dataclasses.replace(self.model, paligemma_variant="gemma_2b_lora"),
+            )
+            object.__setattr__(
+                self, "freeze_filter", _make_ogpo_freeze_filter(allow_lora=True)
+            )
+
+        # Guard, evaluated AFTER the rewrite so it also certifies it. Catches
+        # the trap that is otherwise live: `--model.paligemma_variant
+        # gemma_2b_lora` without the flag leaves the 10 adapter leaves matched
+        # by the freeze filter -> randomly initialized (openpi lora.py inits
+        # BOTH factors normal(0.01)), never loaded from the checkpoint
+        # (weight_loaders back-fills them as ShapeDtypeStructs), never trained.
+        # KL, clipfrac, alive-fraction and every grad norm look normal.
+        if (
+            isinstance(self.model, pi0_config.Pi0Config)
+            and "lora" in self.model.paligemma_variant
+        ):
+            import flax.nnx as nnx
+
+            freezes = nnx.filterlib.to_predicate(self.freeze_filter)
+            # All 10 adapter leaves of the gemma_2b_lora tree, not one probe: a
+            # filter freezing only a SUBSET (e.g. just the FFN adapters, or
+            # just the lora_b factors) would slip a single-path probe and
+            # recreate the trap for that subset (verifier finding F2,
+            # docs/changes/2026-08-29-backbone-lora/VERIFICATION.md).
+            probe_paths = (
+                ("PaliGemma", "llm", "layers", "attn", "q_einsum", "lora_a"),
+                ("PaliGemma", "llm", "layers", "attn", "q_einsum", "lora_b"),
+                ("PaliGemma", "llm", "layers", "attn", "kv_einsum", "lora_a"),
+                ("PaliGemma", "llm", "layers", "attn", "kv_einsum", "lora_b"),
+                ("PaliGemma", "llm", "layers", "attn", "attn_vec_einsum", "lora_a"),
+                ("PaliGemma", "llm", "layers", "attn", "attn_vec_einsum", "lora_b"),
+                ("PaliGemma", "llm", "layers", "mlp", "gating_einsum_lora_a"),
+                ("PaliGemma", "llm", "layers", "mlp", "gating_einsum_lora_b"),
+                ("PaliGemma", "llm", "layers", "mlp", "linear_lora_a"),
+                ("PaliGemma", "llm", "layers", "mlp", "linear_lora_b"),
+            )
+            probe_leaf = nnx.VariableState(nnx.Param, 0.0)
+            if any(freezes(p, probe_leaf) for p in probe_paths):
+                raise ValueError(
+                    f"model.paligemma_variant={self.model.paligemma_variant!r} "
+                    "creates LoRA adapters, but freeze_filter freezes them — a "
+                    "randomly perturbed, permanently untrainable backbone with "
+                    "normal-looking metrics. Pass --backbone_lora instead of "
+                    "setting --model.paligemma_variant by hand: it rewrites the "
+                    "variant AND the freeze filter together."
+                )
 
 
 def make_base_libero_config(
@@ -559,7 +706,7 @@ def make_base_molmo_config(
     )
 
 
-def _make_ogpo_freeze_filter():
+def _make_ogpo_freeze_filter(*, allow_lora: bool = False):
     """Freeze PaliGemma LLM (except the action expert) and the SigLIP vision
     tower. The action expert lives at LLM stack index 1 — matched by the
     ``.*llm.*_1.*`` path regex, mirroring ``Pi0Config.get_freeze_filter``.
@@ -569,7 +716,21 @@ def _make_ogpo_freeze_filter():
       * the small action heads: state_proj, action_in_proj,
         action_time_mlp_in/out, action_out_proj
     Everything else (PaliGemma LLM stack index 0, SigLIP image tower) is
-    frozen and cast to bfloat16 by ``init_train_state``.
+    frozen.
+
+    ``allow_lora=True`` punches one hole: the ``.*lora.*`` leaves on LLM stack 0
+    stay TRAINABLE (rank-16 adapters on q/kv/attn_vec einsums + both FFN
+    matmuls, all 18 layers — 10 leaves, 27.87M params). Every other polarity is
+    unchanged, so trainable goes 19 -> 29 leaves / 430.10M -> 457.97M params;
+    SigLIP and the 9 stack-0 base leaves stay frozen. Set only by
+    ``OnlineTrainConfig.__post_init__`` when ``backbone_lora`` is on
+    (docs/changes/2026-08-29-backbone-lora/).
+
+    Deliberately NOT built from ``Pi0Config.get_freeze_filter()``: that filter
+    returns ``nnx.Nothing`` the moment the variant flips back to ``gemma_2b``,
+    which would silently unfreeze the WHOLE backbone. This form is
+    inert-but-safe under the same flip — a tree with no lora leaves gets exactly
+    the ``allow_lora=False`` behavior (tests/ogpo/test_backbone_lora_config.py).
     """
     import flax.nnx as nnx
     import openpi.shared.nnx_utils as nnx_utils
@@ -577,8 +738,11 @@ def _make_ogpo_freeze_filter():
     gemma_params  = nnx_utils.PathRegex(".*llm.*")
     action_expert = nnx_utils.PathRegex(".*llm.*_1.*")
     img_params    = nnx_utils.PathRegex(".*PaliGemma/img.*")
+    llm_backbone = [gemma_params, nnx.Not(action_expert)]
+    if allow_lora:
+        llm_backbone.append(nnx.Not(nnx_utils.PathRegex(".*lora.*")))
     return nnx.Any(
-        nnx.All(gemma_params, nnx.Not(action_expert)),
+        nnx.All(*llm_backbone),
         img_params,
     )
 
@@ -643,6 +807,28 @@ _CONFIGS.extend(
             rl_config=OGPOSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
                 group_num_samples=8,
+            ),
+            freeze_filter=_make_ogpo_freeze_filter(),
+        ),
+        # OGPO with PER-TASK critics for the 4-task LIBERO arm
+        # (scripts/ogpo_multitask_4task.sh): identical to `pi05_libero_online_ogpo_sft`
+        # except rl.critic.num_tasks=4 -- one disjoint Q/V pair per task, routed by
+        # the buffer's task_index (see CriticTrainingConfig.num_tasks) -- and the
+        # 4-task collect/eval set baked in, because num_tasks must equal the number
+        # of distinct collect.tasks (asserted at learner construction) and the
+        # single-task CollectionConfig default would make the name unrunnable on
+        # its own. Same dataclass, so the isinstance dispatch in scripts/exp.py:74-85
+        # is untouched. Rationale: docs/changes/2026-08-21-per-task-critics/.
+        make_base_libero_config(
+            name="pi05_libero_online_ogpo_sft_pertask",
+            rl_config=OGPOSFTLearnerConfig(
+                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
+                group_num_samples=8,
+                critic=CriticTrainingConfig(num_tasks=4),
+            ),
+            collect=CollectionConfig(
+                tasks=["libero_90_79", "libero_90_31", "libero_90_82", "libero_90_38"],
+                eval_tasks=["libero_90_79", "libero_90_31", "libero_90_82", "libero_90_38"],
             ),
             freeze_filter=_make_ogpo_freeze_filter(),
         ),

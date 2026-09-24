@@ -19,13 +19,14 @@ import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
 from src.rl.best_of_n.update_critic import (
     init_state_action_critic_train_state,
+    summarize_critic_values,
     init_state_value_train_state,
     train_q_step,
     train_value_step,
     _build_pi0_backbone_critic_defs,
 )
-from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.ema_utils import compose_full_params
+from src.rl.lora_utils import zero_lora_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
@@ -191,15 +192,21 @@ class BestofNLearner(FilteredSFTLearner):
     def save_checkpoint(self, step: int | None = None):
         if step is None:
             step = self.training_steps
-        super().save_checkpoint(step=step)
+        # rl_state FIRST: openpi pins max_to_keep=1, so super().save_checkpoint()
+        # deletes the previous step the moment it commits. Writing the critics
+        # before that means a crash between the two leaves the previous step
+        # complete instead of leaving the newest step critic-less. Kept in step
+        # with advantage_weighted_sft_learner.py's copy of this block; the
+        # existing-path skip below is this copy's own divergence and still only
+        # skips the rl_state write, never the orbax commit.
         path = self._rl_checkpoint_path(step)
-        if path.exists():
-            return
-        self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
-        self._rl_state_checkpointer.save(
-            path,
-            self._rl_checkpoint_state(),
-        )
+        if not path.exists():
+            self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
+            self._rl_state_checkpointer.save(
+                path,
+                self._rl_checkpoint_state(),
+            )
+        super().save_checkpoint(step=step)
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
@@ -216,7 +223,9 @@ class BestofNLearner(FilteredSFTLearner):
             observation: dict[str, Any],
             policy_state: training_utils.TrainState,
     ) -> at.Float[at.Array, "batch embed"] | None:
-        model = self._get_policy_model(policy_state)
+        # R1 (docs/changes/2026-08-29-backbone-lora/): critic-prefix producer —
+        # the prefix must come from the UNADAPTED backbone (zero_lora=True).
+        model = self._get_policy_model(policy_state, zero_lora=True)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert
@@ -226,8 +235,16 @@ class BestofNLearner(FilteredSFTLearner):
         prefix = jnp.mean(prefix, axis=1)
         return prefix
 
-    def _get_policy_model(self, policy_state: training_utils.TrainState) -> _model.BaseModel:
-        """Merge policy params into a model. Call once per update() to avoid duplicates."""
+    def _get_policy_model(
+        self, policy_state: training_utils.TrainState, *, zero_lora: bool = False
+    ) -> _model.BaseModel:
+        """Merge policy params into a model. Call once per update() to avoid duplicates.
+
+        ``zero_lora=True`` is for CRITIC-PREFIX producers only (R1,
+        docs/changes/2026-08-29-backbone-lora/): the adapters are zeroed so the
+        prefix comes from the unadapted backbone. Never set it on an
+        action-sampling path (_get_on_policy_action).
+        """
         # Instance method (was @staticmethod) so the compose can read self._config.trainable_filter.
         # Keep the else fallback byte-identical: both callers reach this on the TRAINING path
         # (_update_critics -> _get_on_policy_action / _recompute_prefix_embedding) with ema_params=None,
@@ -239,6 +256,8 @@ class BestofNLearner(FilteredSFTLearner):
             if policy_state.ema_params is not None
             else policy_state.params
         )
+        if zero_lora:
+            params = zero_lora_params(params)
         model = nnx.merge(policy_state.model_def, params)
         model.eval()
         return model
@@ -305,13 +324,18 @@ class BestofNLearner(FilteredSFTLearner):
 
         return policy_observation, critic_observation, actions
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(
+        self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None
+    ):
         assert env_index in range(len(self._episode_storage)), \
             f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
-        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
+        # task_id: pass-through only (per-task critics are config-blocked for BofN).
+        self._save_episode_in_buffer(
+            episode_data, task_description, is_success=is_success, task_id=task_id
+        )
 
     @staticmethod
     def _pad_last_dim(arr: np.ndarray, target_dim: int) -> np.ndarray:
@@ -355,6 +379,9 @@ class BestofNLearner(FilteredSFTLearner):
 
         # Build policy model once for prefix embedding. Compose only in the is-not-None branch (keep the
         # else fallback byte-identical) — same load-bearing None-guard as _get_policy_model (B2).
+        # R1 (docs/changes/2026-08-29-backbone-lora/): prefix-only model — the
+        # adapters are zeroed so the critic scores candidates on
+        # unadapted-backbone features. Exact identity on a lora-less tree.
         params = (
             compose_full_params(
                 self._train_state.params, self._train_state.ema_params, self._config.trainable_filter
@@ -362,8 +389,8 @@ class BestofNLearner(FilteredSFTLearner):
             if self._train_state.ema_params is not None
             else self._train_state.params
         )
-        policy_model = nnx.merge(self._train_state.model_def, params)
-        policy_model.eval()
+        prefix_model = nnx.merge(self._train_state.model_def, zero_lora_params(params))
+        prefix_model.eval()
 
         for task, indices in task_to_indices.items():
             group_obs = jax.tree.map(lambda x: np.asarray(x)[indices], observations)
@@ -445,7 +472,7 @@ class BestofNLearner(FilteredSFTLearner):
             }
             obs_for_prefix = _model.Observation.from_dict(inputs)
             prefix = self._get_prefix_rep_with_model(
-                m=policy_model, observation=obs_for_prefix
+                m=prefix_model, observation=obs_for_prefix
             )
             prefix = np.asarray(prefix)
             if prefix.ndim == 3:
@@ -486,14 +513,18 @@ class BestofNLearner(FilteredSFTLearner):
             # q_logits: [num_qs, batch] for Gaussian or [num_qs, batch, K] for Categorical
 
             # 4. Reduce ensemble, select best per env
-            rl_config = self._config.rl
-            _lower, _upper = get_value_bounds(self._config)
-            q_dist = make_value_distribution(
-                q_logits, rl_config.critic.num_value_bins, _lower, _upper
+            # Honour critic.reduction instead of hardcoding min. With num_qs=10
+            # and reduction="mean" (the reference stack) min-over-heads ranks each
+            # candidate by whichever head happens to dislike it most -- head-
+            # selection noise where the mean would average it down. Configs that
+            # leave reduction at its "min" default are unchanged.
+            scores = np.asarray(
+                summarize_critic_values(
+                    q_logits,
+                    self._config,
+                    critic_reduction=self._config.rl.critic.reduction,
+                )
             )
-            scores = np.asarray(q_dist.mean())  # [num_qs, batch] or [batch]
-            if scores.ndim > 1:
-                scores = scores.min(axis=0)
             scores = scores.reshape(group_env_num, n_samples)
             best_idx = scores.argmax(axis=1)
 

@@ -8,6 +8,9 @@ This learner inherits the dual-critic + EMA + checkpointing plumbing from
 """
 import dataclasses
 import functools
+import logging
+from pathlib import Path
+from typing import Any
 
 import flax.nnx as nnx
 import jax
@@ -32,8 +35,10 @@ from src.rl.ogpo.update_actor import (
     sample_and_advantage,
     train_step as ogpo_train_step,
 )
+from src.rl.networks.per_task_critic import TASK_INDEX_NAME
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OGPOSFTLearnerConfig
+from src.training.runtime_state import success_shard_dir, success_shard_path
 
 
 # jit-4 (param_norm) cadence, in units of policy updates. 1 = every policy update (default: identical
@@ -45,7 +50,48 @@ _PARAM_NORM_EVERY_N = 1
 _OGPO_CRITIC_DROP_OBS_KEYS = ("image", "image_mask")
 
 
+def _rebase_task_ranges(
+    saved_ranges: dict[str, list[tuple[int, int]]],
+    saved_total_inserted: int,
+    restored_total_inserted: int,
+    valid_start: int,
+) -> dict[str, list[tuple[int, int]]]:
+    """Move persisted success-buffer ordinal ranges onto the restored buffer.
+
+    `restore_shards` replays the shards from ordinal 0, so a transition's restored
+    ordinal is its original minus the number of transitions that were never
+    persisted; that count is 0 unless `save_shard`'s delta clip fired
+    (replay_buffer.py:213), and it is the same for every transition that is still
+    live, so the rebase is one uniform shift rather than a rebuild.
+
+    The `hi` clamp is LOAD-BEARING: `_balanced_success_ordinals` clamps only the
+    low end (against `valid_start`), so an `hi` past `total_inserted` survives
+    into `sample(ordinals=...)` and raises "ordinals reference evicted or
+    unwritten transitions" (replay_buffer.py:168-169). Certified by
+    tests/ogpo/test_resume_hardening.py.
+    """
+    shift = restored_total_inserted - saved_total_inserted
+    rebased: dict[str, list[tuple[int, int]]] = {}
+    for task, ranges in saved_ranges.items():
+        kept = []
+        for lo, hi in ranges:
+            lo_shifted = lo + shift
+            hi_shifted = min(hi + shift, restored_total_inserted)
+            # Wholly evicted, or emptied by the clamp.
+            if hi_shifted <= valid_start or hi_shifted <= lo_shifted:
+                continue
+            kept.append((lo_shifted, hi_shifted))
+        if kept:
+            rebased[task] = kept
+    return rebased
+
+
 class OGPOAgentLearner(AdvantageWeightedSFTLearner):
+    # Per-task critics: OGPO threads the buffer's task_index through its actor
+    # path (_online_batch_to_sft_batch 4-tuple -> jit-1 sidecar), so it is the
+    # one learner that may run with rl.critic.num_tasks set (AWR:38-45).
+    _supports_per_task_critics: bool = True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert isinstance(self._config.rl, OGPOSFTLearnerConfig), (
@@ -101,13 +147,18 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             self._config = orig_config
         # Running scale for the EMA-quantile advantage normalizer (host-side
         # Python float, AWR-normalizer semantics: the scale used by an update
-        # is the one accumulated BEFORE it). Not checkpointed — re-warms from
-        # min_scale within ~1/(1-ema_weight) policy updates after a resume.
+        # is the one accumulated BEFORE it).
         self._adv_scale = float(self._config.rl.normalizer_config.min_scale)
+        if self._resuming:
+            # After the config swap above is undone (the success buffer must
+            # already exist) and after the _adv_scale default, which it replaces.
+            self._restore_extra_resume_state()
         self._train_step = functools.partial(ogpo_train_step, self._config)
         self._refresh_update_functions()
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(
+        self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None
+    ):
         # Mirror the AWR parent, but additionally copy successful episodes into
         # the success buffer BEFORE the parent consumes/clears episode storage.
         # _save_episode_in_buffer -> _attach_prefix_embeddings_to_episode_data
@@ -128,6 +179,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 task_description,
                 is_success=True,
                 target_buffer=self._success_data_buffer,
+                task_id=task_id,
             )
             after = self._success_data_buffer.total_inserted
             # Record which ordinal range belongs to this task, for
@@ -140,6 +192,129 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
             is_success=is_success,
             env_index=env_index,
             task_description=task_description,
+            task_id=task_id,
+        )
+
+    def save_extra_resume_state(self, step: int) -> dict[str, Any]:
+        """Success buffer, its task ranges, and the advantage-normalizer scale.
+
+        Called from `save_epoch_state` before the orbax commit, so the shard is
+        durable for `step` whichever side of the commit a crash lands on. Without
+        this a resume runs a different algorithm for ~one collection interval:
+        the BC anchor falls back to the mostly-failed online batch and
+        `critic_success_oversample` silently no-ops until the buffer refills.
+        """
+        # _adv_scale rides even with the success buffer off: a NORM run that
+        # resumed without it would restart the normalizer at min_scale, i.e. an
+        # effective-LR spike on the very knob that exists to stop scale drift.
+        extra: dict[str, Any] = {"adv_scale": float(self._adv_scale)}
+        if self._success_data_buffer is None:
+            return extra
+        self._success_data_buffer.save_shard(success_shard_path(self._config, step))
+        extra |= {
+            "success_shard_dir": str(success_shard_dir(self._config)),
+            "success_total_inserted": int(self._success_data_buffer.total_inserted),
+            "success_task_ranges": {
+                task: [[int(lo), int(hi)] for lo, hi in ranges]
+                for task, ranges in self._success_task_ranges.items()
+            },
+            "success_rng_state_json": self._success_data_buffer.rng_state_json(),
+        }
+        return extra
+
+    def _restore_extra_resume_state(self) -> None:
+        """Counterpart of `save_extra_resume_state`, run from `__init__`."""
+        extra = self._resume_state.extra
+        step = int(self._resume_state.step)
+        if not extra:
+            # best-effort: manifests written before resume hardening have no
+            # `extra` block. That is every in-flight run and both --resume
+            # analysis probes (scripts/probe_counterfactual_rollouts.py,
+            # scripts/probe_value_next_spread.py); raising here would make the
+            # change un-adoptable mid-run. Degrade to the pre-change resume.
+            logging.warning(
+                "Resume manifest at step %d has no `extra` block (written before "
+                "resume hardening): starting the success buffer empty and "
+                "_adv_scale at min_scale, exactly as pre-change resumes did.",
+                step,
+            )
+            return
+
+        self._adv_scale = float(extra["adv_scale"])
+
+        has_success_state = "success_shard_dir" in extra
+        if self._success_data_buffer is None:
+            if has_success_state:
+                raise ValueError(
+                    f"Resume manifest at step {step} carries success-buffer state, "
+                    "but this run has rl.use_success_buffer off, so there is no "
+                    "buffer to restore it into and the BC anchor would silently "
+                    "differ from the run being resumed. Resume with "
+                    "--rl.use_success_buffer, or start over with --overwrite "
+                    "(FRESH=1 in the shell recipes)."
+                )
+            return
+        if not has_success_state:
+            raise ValueError(
+                f"Resume manifest at step {step} carries no success-buffer state "
+                "(rl.use_success_buffer was off when it was written), but this run "
+                "has it on. Resume with --rl.no-use_success_buffer, or start over "
+                "with --overwrite (FRESH=1 in the shell recipes)."
+            )
+
+        shard_dir = Path(extra["success_shard_dir"])
+        saved_total = int(extra["success_total_inserted"])
+        if not shard_dir.exists():
+            raise FileNotFoundError(
+                f"Resume manifest at step {step} declares success-buffer shards in "
+                f"{shard_dir}, but that directory does not exist. Restore it from "
+                "the run's checkpoint tree, or start over with --overwrite "
+                "(FRESH=1 in the shell recipes)."
+            )
+        self._success_data_buffer.restore_shards(
+            shard_dir,
+            rng_state_json=extra["success_rng_state_json"],
+            max_step=step,
+        )
+        restored_total = int(self._success_data_buffer.total_inserted)
+        if saved_total > 0 and restored_total == 0:
+            raise FileNotFoundError(
+                f"Resume manifest at step {step} declares {saved_total} success "
+                f"transitions, but {shard_dir} holds no shard at or below step "
+                f"{step}. Restore the missing shards, or start over with "
+                "--overwrite (FRESH=1 in the shell recipes)."
+            )
+        if restored_total != saved_total:
+            logging.warning(
+                "Success buffer restored %d transitions against %d persisted "
+                "(save_shard's delta clip dropped %d, replay_buffer.py:213); "
+                "rebasing the task ranges by %d.",
+                restored_total,
+                saved_total,
+                saved_total - restored_total,
+                restored_total - saved_total,
+            )
+        # Ranges and buffer restore as a package: a restored buffer with stale
+        # ranges makes balance_success_buffer_tasks sample only post-resume
+        # successes out of a buffer holding all of them — a silent distribution
+        # change, worse than restoring neither.
+        self._success_task_ranges = _rebase_task_ranges(
+            {
+                task: [(int(lo), int(hi)) for lo, hi in ranges]
+                for task, ranges in extra["success_task_ranges"].items()
+            },
+            saved_total_inserted=saved_total,
+            restored_total_inserted=restored_total,
+            valid_start=int(self._success_data_buffer.valid_start),
+        )
+        logging.info(
+            "Restored success buffer at step %d: %d transitions, %d live, "
+            "%d tasks with live ranges, adv_scale=%.6g.",
+            step,
+            restored_total,
+            self._success_data_buffer.size,
+            len(self._success_task_ranges),
+            self._adv_scale,
         )
 
     def _refresh_update_functions(self):
@@ -163,6 +338,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                 self._data_sharding,                        # policy_observation
                 self._data_sharding,                        # critic_prefix (None-passthrough @ WP-A)
                 self._ema_sharding,                         # ema (explicit)
+                self._data_sharding,                        # task_index (per-task critics; None-passthrough)
             ),
             out_shardings=(
                 self._replicated_sharding,                  # x_chain
@@ -503,7 +679,9 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                     # rep, threaded past Observation.from_dict. It is None when store_prefix_rep is off, so
                     # jit-1 recomputes under current params (None -> array is a deliberate recompile). The base
                     # 2-tuple (FSL:572) is untouched for siblings (G3).
-                    policy_observation, actions_demo, critic_prefix = self._online_batch_to_sft_batch(online_batch)
+                    policy_observation, actions_demo, critic_prefix, task_index = (
+                        self._online_batch_to_sft_batch(online_batch)
+                    )
                     # Success-buffer BC: once the success buffer holds a full batch, the
                     # BC anchor regresses onto successful trajectories instead of the
                     # (mostly failed) online batch. The PPO path is untouched — only the
@@ -528,7 +706,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                             batch_size=online_batch_size,
                             ordinals=ordinals,
                         )
-                        bc_observation, bc_actions, _ = self._online_batch_to_sft_batch(
+                        bc_observation, bc_actions, _, _ = self._online_batch_to_sft_batch(
                             success_batch
                         )
                     policy_rng, self._rng = jax.random.split(self._rng, 2)
@@ -548,6 +726,7 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
                         policy_observation,
                         critic_prefix,
                         ema_dev,                         # r/o (jit-1 donate_argnums=())
+                        task_index,                      # per-task critics sidecar (None when off)
                     )
                     # LOAD-BEARING: release the 11.3 GiB device EMA BEFORE jit-2 so it is off-device
                     # through the binding jit-2/jit-3. A held handle would pin it (JAX does not offload a
@@ -721,14 +900,25 @@ class OGPOAgentLearner(AdvantageWeightedSFTLearner):
 
     def _online_batch_to_sft_batch(
         self, online_batch: dict
-    ) -> tuple[_model.Observation, _model.Actions, at.Float[at.Array, "b embed"] | None]:
+    ) -> tuple[
+        _model.Observation,
+        _model.Actions,
+        at.Float[at.Array, "b embed"] | None,
+        at.Int[at.Array, " b"] | None,
+    ]:
         # The base (FSL:572-578) returns only (Observation, actions); Observation.from_dict
         # (MODEL:110-129) drops the stored "prefix_embedding" key. OGPO threads that stored EMA-computed
         # rep as a third sidecar element so jit-1 can skip the current-params PaliGemma recompute. The
         # base 2-tuple stays intact for the siblings (G3); only OGL.update() (OGPO-owned) reads this
-        # 3-tuple. next_observation prefix is NOT needed: the actor path scores Q/V on the CURRENT state
+        # tuple. next_observation prefix is NOT needed: the actor path scores Q/V on the CURRENT state
         # only (next-obs prefix is a critic-path concern, AWR:263).
+        # Fourth element: the buffer's task_index (a transition field, so it is
+        # top-level in the batch) for per-task critics; None when they are off.
+        # Keyed on the batch, not on self: the key is present iff the buffer was
+        # built with rl.critic.num_tasks set (FSL:464-468), and the override
+        # stays self-free so test_split_equivalence can call it unbound.
         observation = _model.Observation.from_dict(online_batch["observation"])
         actions = online_batch["actions"]
         stored_prefix = online_batch["observation"].get(PREFIX_EMBEDDING_NAME)
-        return observation, actions, stored_prefix
+        task_index = online_batch[TASK_INDEX_NAME] if TASK_INDEX_NAME in online_batch else None
+        return observation, actions, stored_prefix, task_index

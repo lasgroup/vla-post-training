@@ -258,7 +258,9 @@ def _render_worker(rank, num_devices, resolution, num_steps_wait, task, n_steps,
 
         cfg = SimpleNamespace(
             collect=SimpleNamespace(
-                env_resolution=resolution, num_steps_wait=num_steps_wait
+                env_resolution=resolution,
+                num_steps_wait=num_steps_wait,
+                episode_steps_multiplier=1,
             )
         )
         env_fn = make_env_libero(cfg, tasks=[task], num_devices=num_devices)
@@ -465,7 +467,9 @@ def run_teardown(args) -> int:
 
     cfg = SimpleNamespace(
         collect=SimpleNamespace(
-            env_resolution=args.resolution, num_steps_wait=args.num_steps_wait
+            env_resolution=args.resolution,
+            num_steps_wait=args.num_steps_wait,
+            episode_steps_multiplier=1,
         )
     )
     env_fn = make_env_libero(cfg, tasks=[args.task], num_devices=args.num_devices)

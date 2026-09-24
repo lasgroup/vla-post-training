@@ -71,9 +71,12 @@ def main() -> int:
     from src.envs.libero import make_env_libero
     from src.envs.venv import SubprocVectorEnv
 
-    # Minimal stub config: make_env_libero only reads env_resolution + num_steps_wait.
+    # Minimal stub config: make_env_libero only reads env_resolution,
+    # num_steps_wait and episode_steps_multiplier.
     config = types.SimpleNamespace(
-        collect=types.SimpleNamespace(env_resolution=args.resolution, num_steps_wait=10)
+        collect=types.SimpleNamespace(
+            env_resolution=args.resolution, num_steps_wait=10, episode_steps_multiplier=1
+        )
     )
     env_fn = make_env_libero(config, tasks=[args.task], num_devices=num_devices)
     env_fns = [(lambda rank=i: env_fn(rank)) for i in range(args.env_num)]

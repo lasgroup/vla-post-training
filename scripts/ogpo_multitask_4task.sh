@@ -28,6 +28,12 @@
 #   FSDP          - fsdp_devices (default 1; set to the number of GPUs in GPU)
 #   ARM           - run name suffix (default v0)
 #   SEED          - default 0
+#   TASKS         - space-separated train task ids (default: the 4-task set).
+#                   EVAL_TASKS, the banner and PER_TASK_CRITIC's slot count all
+#                   follow it. Per-task rollout knobs do NOT rescale themselves.
+#   BATCH         - global policy batch = states per policy update (default 32).
+#                   Actor memory scales with BATCH x rl.group_num_samples.
+#   EP_MULT       - multiplies the episode TimeLimit truncation (libero_90: 400 -> 400*EP_MULT). Default 1.
 #   N_ROLLOUTS    - rollouts PER TASK per collection round (default 5)
 #   INIT_ROLLOUTS - EXTRA per-task episodes at step 0 only (default 10; empty to skip)
 #   COLLECT_INT   - collection interval (default 10000)
@@ -39,14 +45,28 @@
 #   BURST         - critic-only steps after each collection round (default 1000)
 #   MT_ADV        - 1 => per-task advantage normalization (default 1)
 #   MT_BAL        - 1 => task-balanced success-buffer BC (default 1)
+#   PER_TASK_CRITIC - 1 => one disjoint Q/V critic pair PER TASK, routed by the
+#                   buffer's task_index (rl.critic.num_tasks=${#TASKS[@]}; default 0
+#                   = shared critics). Emitted unconditionally, so it overrides the
+#                   config's own value either way (incl. the _pertask config).
+#                   Needs BON_N=1 with HELDOUT=1 (held-out tasks have no critic).
+#                   docs/changes/2026-08-21-per-task-critics/
 #   HELDOUT       - 1 => eval also on the 25-task held-out block (default 0:
 #                   eval on the 4 train tasks only). With HELDOUT=1 consider
 #                   EVAL_ROLLOUTS=8 — eval cost is EVAL_ROLLOUTS x 29 episodes.
 #   EVAL_ROLLOUTS - eval episodes PER TASK (default 32, the study's EMA eval)
+#   MAX_RUNTIME   - seconds before the loop saves and exits for requeue at the
+#                   next collect/eval boundary (default 169200 = 47 h, sized for
+#                   the 48 h sbatch). MUST be under the sbatch --time, else SLURM
+#                   SIGKILLs mid-step and the progress since the last 10k save is
+#                   lost. With --time=25:00:00 use MAX_RUNTIME=86400 (24 h).
 #   NUM_STEPS     - train steps (default 100000). Set 100001 so the loop
 #                   reaches step 100000 and the final checkpoint gets an
 #                   in-run eval (the eval loop skips the last step otherwise).
 #   CKPT_BASE_DIR - checkpoint root (default: your group_data dir, see below)
+#   FRESH         - 1 => --overwrite (WIPES the checkpoint dir and starts at
+#                   step 0). Default is --resume, so resubmitting an interrupted
+#                   run continues it instead of destroying it.
 #   DRY           - 1 => print the final command instead of running it
 #
 # Usage:  GPU=0 bash scripts/ogpo_multitask_4task.sh
@@ -61,7 +81,14 @@ FSDP="${FSDP:-1}"
 
 # The 4-task LIBERO train set (keep identical to the multitask configs so
 # runs are comparable with the FSFT/AWR/BofN campaigns).
-TASKS=(libero_90_79 libero_90_31 libero_90_82 libero_90_38)
+# Overridable by a space-separated TASKS env var for a different train set --
+# EVAL_TASKS, the [mt4] banner and PER_TASK_CRITIC's slot count all derive from
+# this array, so overriding here keeps every downstream count consistent (a
+# trailing `--collect.tasks` on the CLI would not: tyro takes the last flag but
+# the banner and ${#TASKS[@]} would still report the 4-task default).
+# REMINDER: N_ROLLOUTS / INIT_ROLLOUTS / EVAL_ROLLOUTS are PER TASK, so a
+# different task count changes the episode totals -- rescale them too.
+read -ra TASKS <<< "${TASKS:-libero_90_79 libero_90_31 libero_90_82 libero_90_38}"
 # Held-out eval block shared by the multitask YAMLs (generalization eval).
 HELDOUT_TASKS=(
   libero_90_34 libero_90_37 libero_90_4 libero_90_71 libero_90_66
@@ -99,6 +126,11 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 export WANDB_DIR="${WANDB_DIR:-$STORE_ROOT/wandb}"
 export WANDB_CACHE_DIR="${WANDB_CACHE_DIR:-$STORE_ROOT/cache/wandb}"
 export WANDB_CONFIG_DIR="${WANDB_CONFIG_DIR:-$STORE_ROOT/config/wandb}"
+# 2026-08-24: wandb.init() spawns wandb-core and polls for its port file for
+# 30 s by default. That file lands under WANDB_DIR (NFS home), so a slow mount
+# fails the job before a single training step -- job 10208253 died exactly
+# there after a 71-minute venv import. 300 s is still far under any real run.
+export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-300}"
 
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export PYOPENGL_PLATFORM="$MUJOCO_GL"
@@ -141,6 +173,34 @@ INIT_ROLLOUTS="${INIT_ROLLOUTS-10}"
 # --- multi-task knobs ---
 [ "${MT_ADV:-1}" = "1" ] && EXTRA_FLAGS+=(--rl.normalize_advantage_per_task)
 [ "${MT_BAL:-1}" = "1" ] && EXTRA_FLAGS+=(--rl.balance_success_buffer_tasks)
+# Per-task critics. Emitted UNCONDITIONALLY (same contract as the reference-
+# alignment block below): the env var is authoritative for any CONFIG_NAME, so
+# PER_TASK_CRITIC=0 against pi05_libero_online_ogpo_sft_pertask yields shared
+# critics, and =1 against the default config yields per-task ones. The slot
+# count is the distinct train-task count, which the learner asserts.
+if [ "${PER_TASK_CRITIC:-0}" = "1" ]; then
+  EXTRA_FLAGS+=(--rl.critic.num_tasks "${#TASKS[@]}")
+else
+  EXTRA_FLAGS+=(--rl.critic.num_tasks None)
+fi
+# --- backbone LoRA (docs/changes/2026-08-29-backbone-lora/) ---
+# Emitted UNCONDITIONALLY, both branches, same contract as PER_TASK_CRITIC
+# above: it is a real CLI flag (not a config-name swap), so the env var stays
+# authoritative for ANY CONFIG_NAME and the "reproduce the baseline stack by
+# env vars alone" contract holds. LORA=1 trains the 2B PaliGemma LLM backbone
+# through rank-16/alpha-16 adapters on stack 0 (+27.87M params, +6.5%); SigLIP
+# and the base weights stay frozen; the critic's prefix embeddings stay
+# adapter-free (R1). NEW-RUN ONLY: the checkpoint tree gains 10 leaves, so
+# --resume across a LORA flip fails loudly in orbax (intended). tyro renders
+# the bool as a flag PAIR — the value form (`--backbone_lora True`) does not
+# parse; these two spellings are the only valid ones.
+# NOTE: --rl.dedup_group_prefix (below) is MEMORY-LOAD-BEARING when LORA=1 —
+# dedup-off pays G backbone backwards per update instead of one.
+if [ "${LORA:-0}" = "1" ]; then
+  EXTRA_FLAGS+=(--backbone_lora)
+else
+  EXTRA_FLAGS+=(--no-backbone_lora)
+fi
 # --- reference-alignment knobs (docs/changes/2026-08-20-ogpo-reference-alignment) ---
 # Every default below reproduces the pre-alignment recipe EXACTLY. These flags are
 # emitted UNCONDITIONALLY, not only when set away from the default: the aligned
@@ -169,9 +229,19 @@ TD_W="${TD_W:-1}"              # reference blends MC in via a separate loss; 0.9
 CONFIG_NAME="${CONFIG_NAME:-pi05_libero_online_ogpo_sft}"
 
 N_ROLLOUTS="${N_ROLLOUTS:-5}"
+# Global (not per-device) policy batch: the count of STATES per policy update.
+# The actor jit expands it to BATCH x rl.group_num_samples SDE chains, so this
+# is the dominant memory knob -- 32 -> 128 takes 256 -> 1024 chains. Must be
+# divisible by jax.device_count() (filtered_sft_learner.py:232).
+BATCH="${BATCH:-32}"
+# Episode truncation multiplier (collect.episode_steps_multiplier). 2 doubles
+# the TimeLimit; failed rollouts then take up to 2x wall time during
+# collection and eval on low-SR tasks.
+EP_MULT="${EP_MULT:-1}"
 COLLECT_INT="${COLLECT_INT:-10000}"
 EVAL_ROLLOUTS="${EVAL_ROLLOUTS:-32}"
 NUM_STEPS="${NUM_STEPS:-100000}"
+MAX_RUNTIME="${MAX_RUNTIME:-169200}"
 
 mkdir -p "$OPENPI_DATA_HOME" "$HF_HOME" "$LIBERO_CONFIG_PATH" "$CKPT_BASE_DIR" \
          "$UV_CACHE_DIR" "$TORCH_HOME" "$TRITON_CACHE_DIR" "$MPLCONFIGDIR" \
@@ -184,11 +254,33 @@ if [ ! -f "$LIBERO_CONFIG_PATH/config.yaml" ]; then
   printf 'n\n' | uv run python -c "import libero.libero" >/dev/null 2>&1 || true
 fi
 
+# Checkpoint mode. --resume by default so a resubmitted (requeued, preempted,
+# hand-restarted) run continues rather than being destroyed -- --overwrite
+# rmtrees the checkpoint dir (openpi checkpoints.py:26-29). Safe on a first
+# launch: openpi downgrades resume to a fresh start when the dir is absent or
+# holds no checkpoints (:22-33, :56-61). FRESH=1 opts back into the wipe. An
+# explicit CKPT_MODE_FLAG (the read-only probes pass --resume) still wins. The
+# two are mutually exclusive (openpi config.py:558 raises if both are set), so
+# this is one flag, not two booleans.
+if [ -n "${CKPT_MODE_FLAG:-}" ]; then
+  :
+elif [ "${FRESH:-0}" = "1" ]; then
+  CKPT_MODE_FLAG=--overwrite
+else
+  CKPT_MODE_FLAG=--resume
+fi
+
 echo "[mt4] node=$(hostname) gpu=$GPU arm=$ARM seed=$SEED tasks=${#TASKS[@]} eval_tasks=${#EVAL_TASKS[@]} rollouts/task=$N_ROLLOUTS ckpt=$CKPT_BASE_DIR"
+echo "[mt4] checkpoint mode=$CKPT_MODE_FLAG $([ "$CKPT_MODE_FLAG" = "--overwrite" ] && echo '(WIPES the checkpoint dir)' || echo '(continues an existing run; FRESH=1 to wipe)')"
 echo "[mt4] extra=${EXTRA_FLAGS[*]:-none}"
 
-RUN=(uv run scripts/exp.py)
-[ "${DRY:-0}" = "1" ] && RUN=(echo uv run scripts/exp.py)
+# ENTRY: swap the entry point while keeping this exact flag block. Used by the
+# read-only analysis probes (scripts/probe_counterfactual_rollouts.py), which
+# take the same tyro CLI as exp.py, so there is no second copy of the config to
+# drift. Default is unchanged.
+ENTRY="${ENTRY:-scripts/exp.py}"
+RUN=(uv run "$ENTRY")
+[ "${DRY:-0}" = "1" ] && RUN=(echo uv run "$ENTRY")
 
 "${RUN[@]}" \
   "$CONFIG_NAME" \
@@ -198,14 +290,15 @@ RUN=(uv run scripts/exp.py)
   --checkpoint_base_dir "$CKPT_BASE_DIR" \
   --seed "$SEED" \
   --fsdp_devices "$FSDP" \
-  --overwrite \
+  "$CKPT_MODE_FLAG" \
   --log_interval 25 \
   --save_interval 100000 \
   --keep_period 100000 \
   --num_train_steps "$NUM_STEPS" \
   --ema_decay 0.99 \
   --lr_schedule.value 2.5e-5 \
-  --max_runtime 169200 \
+  --max_runtime "$MAX_RUNTIME" \
+  --collect.episode_steps_multiplier "$EP_MULT" \
   --collect.tasks "${TASKS[@]}" \
   --collect.eval_tasks "${EVAL_TASKS[@]}" \
   --collect.store_prefix_rep \
@@ -240,6 +333,6 @@ RUN=(uv run scripts/exp.py)
   --rl.dedup_group_prefix \
   --rl.use_success_buffer \
   --rl.critic.value_target_type one_hot \
-  --batch_size 32 \
+  --batch_size "$BATCH" \
   "${EXTRA_FLAGS[@]}" \
   "$@"

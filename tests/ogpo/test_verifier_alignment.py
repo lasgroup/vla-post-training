@@ -449,6 +449,8 @@ def test_dispatch_for_every_registered_config_is_unchanged_by_the_new_entry():
         "pi05_libero_online_dsrl": "UNSUPPORTED",
         "pi05_libero_online_ogpo_sft": "OGPOAgentLearner",
         "pi05_libero_online_ogpo_ref": "OGPOAgentLearner",
+        # per-task critics (docs/changes/2026-08-21-per-task-critics/): same dataclass as _sft.
+        "pi05_libero_online_ogpo_sft_pertask": "OGPOAgentLearner",
     }
     got = {name: _learner_class_for(_config.get_config(name)) for name in _REGISTERED}
     assert got == expected
@@ -897,26 +899,33 @@ def test_bronet_ensembles_build_and_emit_ten_heads():
 # --------------------------------------------------------------------------------------
 
 
-def test_best_of_n_collection_scoring_ignores_critic_reduction():
-    """`AdvantageWeightedSFTLearner.sample_actions` hardcodes `scores.min(axis=0)` and
-    never consults `rl.critic.reduction`. Harmless while `n_samples == 1` (the path is
-    skipped) or `reduction == "min"`; the ref config sets n_samples=8 AND reduction=mean,
-    so collection now selects on min-of-10 while every other consumer of the same Q
-    ensemble uses mean-of-10. Pinned, not asserted-away."""
-    src = (_ROOT / "src" / "rl" / "advantage_weighted_sft"
-           / "advantage_weighted_sft_learner.py").read_text()
-    tree = ast.parse(src)
-    fn = next(
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "sample_actions"
-    )
-    body = ast.unparse(fn)
-    assert "scores.min(axis=0)" in body
-    assert "critic.reduction" not in body
+def test_best_of_n_collection_scoring_honours_critic_reduction():
+    """Both Best-of-N scoring blocks must consult `rl.critic.reduction`, not hardcode min.
+
+    Was pinned as a known divergence: `sample_actions` hardcoded `scores.min(axis=0)`
+    while the ref config sets n_samples=8 AND reduction="mean", so collection selected
+    on min-of-10 while every other consumer of the same Q ensemble used mean-of-10.
+    Fixed in docs/changes/2026-08-23-bon-reduction-fix; this now guards the fix, in
+    BOTH copies of the clone family (fixing one and not the other is the recurring
+    failure mode here).
+    """
+    for rel in (
+        ("src", "rl", "advantage_weighted_sft", "advantage_weighted_sft_learner.py"),
+        ("src", "rl", "best_of_n", "best_of_n_learner.py"),
+    ):
+        src = (_ROOT.joinpath(*rel)).read_text()
+        tree = ast.parse(src)
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "sample_actions"
+        )
+        body = ast.unparse(fn)
+        assert "scores.min(axis=0)" not in body, rel[-1]
+        assert "critic.reduction" in body, rel[-1]
 
     ref = _config.get_config("pi05_libero_online_ogpo_ref").rl
     assert ref.n_samples > 1 and ref.critic.reduction == "mean"
-    # The two aggregates genuinely differ at n=10.
+    # The two aggregates genuinely differ at n=10, so the distinction is not academic.
     heads = np.random.RandomState(3).randn(10, 5)
     assert not np.allclose(heads.min(axis=0), heads.mean(axis=0))
 

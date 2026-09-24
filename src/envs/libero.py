@@ -99,7 +99,7 @@ def make_env_libero(config, tasks, num_devices: int = 4):
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
-    max_steps = get_max_steps_libero(task_suite_name)
+    max_steps = get_max_steps_libero(task_suite_name) * config.collect.episode_steps_multiplier
 
     def env_fn(rank: int):
         args = env_args.copy()

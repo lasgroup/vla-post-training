@@ -13,7 +13,9 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 from jax.experimental import mesh_utils
+from orbax.checkpoint.checkpoint_utils import construct_restore_args
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -28,7 +30,9 @@ from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.ema_utils import compose_full_params
 from src.rl.filtered_sft_agent.update import train_step
+from src.rl.lora_utils import zero_lora_b_params, zero_lora_params
 from src.rl.replay_buffer import ShardedReplayBuffer
+from src.rl.task_registry import TaskRegistry
 from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
 from src.training.data_loader import create_data_loader
@@ -41,7 +45,13 @@ from src.envs.wrappers import (
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.runtime_state import load_resume_state
+from src.training.runtime_state import (
+    ResumeState,
+    load_resume_state,
+    resolve_resume_step,
+    resume_state_path,
+    step_manifest_steps,
+)
 
 
 def filtered_sft_wrap_env(
@@ -159,6 +169,17 @@ def init_train_state(
             model = nnx.merge(graphdef, state)
 
         params = nnx.state(model)
+        # R3 (docs/changes/2026-08-29-backbone-lora/): zero `lora_b` so the
+        # model at step 0 IS the loaded SFT policy. openpi's LoRAConfig has a
+        # single init_fn for both factors, so as shipped `lora_b` is
+        # normal(0.01) — a randomly perturbed policy at step 0. Zeroing BOTH
+        # factors would dead-end adapter gradients (each factor's grad is
+        # proportional to the other); a-random/b-zero is the standard LoRA
+        # init. Fresh-init only by construction: the resume path returns at
+        # the `if resume:` short-circuit below and orbax overwrites the whole
+        # tree; the jax.eval_shape pass is shape-only (zeros_like preserves
+        # shape/dtype). Exact identity on a lora-less tree.
+        params = zero_lora_b_params(params)
         # Convert frozen params to bfloat16.
         params = nnx_utils.state_map(
             params,
@@ -180,6 +201,11 @@ def init_train_state(
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
     if resume:
+        # `state_sharding` is a RESTORE CONTRACT on this path, not just the jits'
+        # `in_shardings`: `_restore_state_sharded` turns it into orbax restore
+        # args, which is what makes the restored arrays land on THIS run's mesh
+        # instead of on the device ids recorded in the checkpoint. Changing what
+        # this returns changes where a resumed checkpoint is placed.
         return train_state_shape, state_sharding
 
     partial_params = _load_weights_and_validate(
@@ -198,6 +224,106 @@ def init_train_state(
     return train_state, state_sharding
 
 
+def _params_item_sharding(
+    state_sharding: training_utils.TrainState,
+    trainable_filter: nnx.filterlib.Filter,
+    replicated_sharding: jax.sharding.NamedSharding,
+) -> nnx.State:
+    """Restore sharding for the on-disk `params` (EMA) item, mirroring the save.
+
+    `save_checkpoint` (FSL:854-870) writes that item MIXED: trainable leaves come
+    from `self._ema` after a REPLICATED `device_put`, frozen and non-Param leaves
+    from the FSDP-sharded `train_state.params`. Asking for the same composition on
+    restore -- through the same `compose_full_params`, so the two stay symmetric by
+    construction -- keeps a same-`fsdp_devices` resume placement-identical to what
+    the `_sharding`-metadata fallback produced before this helper existed.
+
+    A uniform `fsdp_sharding` target would be shorter but would change even the
+    working single-GPU path: the ~11.3 GiB trainable EMA would land FSDP-sharded
+    and then be all-gathered by the replicated `device_put` at FSL:447-449, an
+    unmeasured peak-init spike on a path where `del ema_dev` (OGL:734) is already
+    load-bearing to hold the ~34.7 GiB floor.
+
+    Certified by tests/ogpo/test_cross_topology_resume_verifier.py (leaf-for-leaf
+    against what `save_checkpoint` writes); at real pi0.5 scale, peak device memory
+    and placement matched the pre-change restore at 1 and 2 GPUs
+    (docs/changes/2026-09-21-fsdp-topology-resume/VERIFICATION.md, B.5).
+    """
+    replicated = jax.tree.map(lambda _: replicated_sharding, state_sharding.params)
+    return compose_full_params(state_sharding.params, replicated, trainable_filter)
+
+
+def _restore_state_sharded(
+    checkpoint_manager: ocp.CheckpointManager,
+    state: training_utils.TrainState,
+    state_sharding: training_utils.TrainState,
+    *,
+    trainable_filter: nnx.filterlib.Filter,
+    replicated_sharding: jax.sharding.NamedSharding,
+    step: int | None = None,
+) -> training_utils.TrainState:
+    """openpi's `restore_state` plus explicit, current-mesh `restore_args`.
+
+    openpi's version (openpi/src/openpi/training/checkpoints.py:89-107) passes the
+    restore target and NO restore args, so every leaf falls back to the sharding
+    recorded in the checkpoint's `_sharding` metadata file, which orbax rebuilds
+    from the SAVED device ids. Resuming under a different `fsdp_devices` then dies
+    inside orbax ("sharding passed to deserialization should be ... Got None", job
+    10324589, 2026-09-05) or, in the 1->2 direction, at the first jit that touches
+    a leaf the current mesh wants sharded. Passing the args restores onto this
+    run's mesh instead, so a run checkpointed at N devices resumes at any M.
+
+    Annotating the target's leaves is NOT an alternative: `PyTreeCheckpointHandler`
+    never derives restore args from its item (only `StandardCheckpointHandler`
+    does), so the args have to be built and passed. Measured on CPU with two forced
+    devices -- bare target: not resharded; annotated target: not resharded;
+    explicit restore args: resharded (docs/changes/2026-09-21-fsdp-topology-resume/).
+
+    Lives here rather than in openpi so that submodule stays clean
+    (docs/code/best_practices.md:316-318). `data_loader`, which openpi's signature
+    takes and immediately `del`s, is dropped.
+
+    vs openpi's version: identical values and placement at an unchanged
+    `fsdp_devices` (tests/ogpo/test_cross_topology_resume_verifier.py,
+    `test_same_topology_restore_is_identical_to_openpi_restore_state`); STRICTER on
+    a target-vs-stored leaf SHAPE mismatch, which now raises where openpi's returned
+    the stored shape unvalidated (same file, `test_new_path_is_STRICTER_than_old_...`).
+    """
+    with at.disable_typechecking():
+        # openpi privates, deliberately (best_practices.md:319-320): the public
+        # `restore_state` has no seam for restore args, and the two-item split has
+        # to be applied to the shape tree and the sharding tree in exactly the same
+        # way or the args would not line up with the items. The guard is required
+        # because `dataclasses.replace` inside `_split_params` re-runs TrainState's
+        # beartype-checked `__init__` outside a tree-unflatten stack (which is what
+        # `at._check_dataclass_annotations` whitelists), and `step: at.Int[...]`
+        # rejects a NamedSharding -- openpi guards its own call the same way
+        # (checkpoints.py:97).
+        train_state, params = _checkpoints._split_params(state)
+        train_state_sharding, _ = _checkpoints._split_params(state_sharding)
+        params_sharding = _params_item_sharding(
+            state_sharding, trainable_filter, replicated_sharding
+        )
+        restored = checkpoint_manager.restore(
+            step,
+            args=ocp.args.Composite(
+                train_state=ocp.args.PyTreeRestore(
+                    item=train_state,
+                    restore_args=construct_restore_args(
+                        train_state, train_state_sharding
+                    ),
+                ),
+                params=ocp.args.PyTreeRestore(
+                    item={"params": params},
+                    restore_args=construct_restore_args(
+                        {"params": params}, {"params": params_sharding}
+                    ),
+                ),
+            ),
+        )
+    return _checkpoints._merge_params(restored["train_state"], restored["params"])
+
+
 def _get_post_step_action_filter(domain: str):
     if domain == "libero":
         # see https://arxiv.org/pdf/2501.09747, Appendix C - clipping low-magnitude actions
@@ -213,6 +339,16 @@ def _get_obs_key_process_fn(domain: str):
 
 
 class FilteredSFTLearner(Agent):
+    # Per-task critics (rl.critic.num_tasks): the buffer gains a `task_index`
+    # transition field and _save_episode_in_buffer stamps it from a first-seen
+    # registry. Both are instance-attribute gates, NOT config reads: `rl.critic`
+    # exists only on the AWR/BofN config branches, so a plain filtered-SFT run has
+    # no such field and a direct read would raise (getattr defaults are banned).
+    # AdvantageWeightedSFTLearner sets both BEFORE super().__init__ (the buffer is
+    # allocated inside it), the same pattern as `_prefix_embed_dim` (AWR:64-67).
+    _num_critic_tasks: int | None = None
+    _task_registry: TaskRegistry | None = None
+
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
@@ -274,28 +410,35 @@ class FilteredSFTLearner(Agent):
 
         self._online_data_buffer = self._get_online_replay_buffer()
         if self._resuming:
-            self._resume_state = load_resume_state(self._config)
+            self._resume_state = self._resolve_resume_state()
             self._online_data_buffer.restore_shards(
                 self._resume_state.replay_shard_dir,
                 rng_state_json=self._resume_state.replay_rng_state_json,
+                max_step=self._resume_state.step,
             )
         self._collection_success_episodes = 0
 
-        # Initialize train state.
+        # Initialize train state. Both returns MUST come from this one call: on
+        # resume `_restore_state_sharded` zips them, and `tx` / `ema_decay` are
+        # static TrainState fields compared by identity, so a sharding tree from a
+        # second `init_train_state` call raises "Mismatch custom dataclass node data".
         self._train_state, self._train_state_sharding = init_train_state(
             self._config, init_rng, self._mesh, resume=self._resuming
         )
         if self._resuming:
-            self._train_state = _checkpoints.restore_state(
+            self._train_state = _restore_state_sharded(
                 self._checkpoint_manager,
                 self._train_state,
-                self._data_loader,
+                self._train_state_sharding,
+                trainable_filter=self._config.trainable_filter,
+                replicated_sharding=self._replicated_sharding,
                 step=self._resume_state.step,
             )
             logging.info(
-                "Restored training checkpoint from %s at committed step %d",
+                "Restored training checkpoint from %s at committed step %d onto mesh %s",
                 self._config.checkpoint_dir,
                 self._resume_state.step,
+                dict(self._mesh.shape),
             )
             self.training_steps = int(self._resume_state.step)
             self.total_collected_episodes = self._resume_state.total_collected_episodes
@@ -354,8 +497,29 @@ class FilteredSFTLearner(Agent):
         policy_checkpoint_dir = self._config.weight_loader.params_path[
             : -len("/params")
         ]
-        self._policy = policy_config.create_trained_policy(
+        # The model this loads is DROPPED at _drop_policy_model() below — the
+        # policy exists only for its input/output transforms and norm stats.
+        # Load it with a lora-less twin of the config: create_trained_policy
+        # goes through BaseModelConfig.load (openpi model.py:233-240), which
+        # has no lora `missing_regex` and raises on the checkpoint's missing
+        # lora keys ("symmetric difference of key sets: {'lora'}"). Nothing on
+        # this path reads paligemma_variant. backbone_lora=False must ride in
+        # the replace, or __post_init__ rewrites the variant right back
+        # (tests/ogpo/test_backbone_lora_config.py::test_policy_twin_config_is_lora_less
+        # mirrors this expression — keep in sync). Unconditional: for non-LoRA
+        # configs the twin is a valued no-op.
+        policy_train_config = dataclasses.replace(
             self._config,
+            backbone_lora=False,
+            model=dataclasses.replace(
+                self._config.model,
+                paligemma_variant=self._config.model.paligemma_variant.removesuffix(
+                    "_lora"
+                ),
+            ),
+        )
+        self._policy = policy_config.create_trained_policy(
+            policy_train_config,
             policy_checkpoint_dir,
         )
         # This learner always calls `infer_with_model(...)` with the current train-state model.
@@ -364,6 +528,53 @@ class FilteredSFTLearner(Agent):
 
         # prepare transforms for preprocessing episode data into model input format
         self._policy_transforms = self._get_policy_transforms(self._config.collect.domain)
+
+    def _resolve_resume_state(self) -> ResumeState:
+        """Pick the newest step that is complete on disk and load its manifest.
+
+        The pointer manifest can name a step whose orbax commit never happened
+        (killed inside save_epoch_state), so the step to resume is resolved from
+        what is actually there rather than from the pointer alone.
+        """
+        pointer_step = None
+        if resume_state_path(self._config).exists():
+            pointer_step = int(load_resume_state(self._config).step)
+        manifest_steps = step_manifest_steps(self._config)
+        orbax_steps = {int(s) for s in self._checkpoint_manager.all_steps()}
+        step = resolve_resume_step(
+            orbax_steps=orbax_steps,
+            manifest_steps=manifest_steps,
+            required_ok=lambda s: all(p.exists() for p in self._resume_required_paths(s)),
+            pointer_step=pointer_step,
+        )
+        if pointer_step is not None and step < pointer_step:
+            logging.warning(
+                "Resuming at step %d, behind the manifest pointer's step %d: that "
+                "step is missing an orbax checkpoint or a learner sidecar (the "
+                "process died inside save_epoch_state). Everything collected after "
+                "step %d is discarded.",
+                step,
+                pointer_step,
+                step,
+            )
+        elif pointer_step is not None and step > pointer_step:
+            logging.warning(
+                "Resuming at step %d, ahead of the manifest pointer's step %d: step "
+                "%d is fully durable and the pointer refresh is what did not run "
+                "(the process died between the two). Nothing is lost.",
+                step,
+                pointer_step,
+                step,
+            )
+        logging.info(
+            "Resume resolved to step %d (orbax steps=%s, per-step manifests=%s)",
+            step,
+            sorted(orbax_steps),
+            sorted(manifest_steps),
+        )
+        return load_resume_state(
+            self._config, step=step if step in manifest_steps else None
+        )
 
     def _get_policy_transforms(self, domain: str):
         if domain == "libero":
@@ -440,7 +651,7 @@ class FilteredSFTLearner(Agent):
             dummy_obs_dict["image"] = jax.tree.map(
                 lambda v: v.astype(np.uint8), dummy_obs_dict["image"]
             )
-        return {
+        dummy = {
             "observations": dummy_obs_dict,
             "actions": np.zeros(act_spec.shape, dtype=act_spec.dtype),
             "reward": np.zeros((1,), dtype=np.float32),
@@ -448,6 +659,12 @@ class FilteredSFTLearner(Agent):
             "discount": np.zeros((1,), dtype=np.float32),
             "is_success": np.zeros((1,), dtype=np.float32),
         }
+        if self._num_critic_tasks is not None:
+            # Per-task critics: which critic slot owns this transition. A
+            # transition field (not an observation key) so it survives
+            # sample(drop_obs_keys=...) and lands top-level in every batch.
+            dummy["task_index"] = np.zeros((1,), dtype=np.int32)
+        return dummy
 
     def _get_online_replay_buffer(
         self,
@@ -542,14 +759,42 @@ class FilteredSFTLearner(Agent):
             inputs = jax.device_put(inputs, sharding_spec)
         observation = _model.Observation.from_dict(inputs)
         _, sample_rng = jax.random.split(rng)
-        raw_actions, prefix = self._policy._sample_actions_with_model(
-            m=model,
-            observation=observation,
-            noise=noise,
-            rng=sample_rng,
-            return_prefix_rep=True,
-            **self._policy._sample_kwargs,
-        )
+        if self._config.backbone_lora:
+            # R1 (docs/changes/2026-08-29-backbone-lora/): the critic's prefix
+            # must come from the UNADAPTED backbone, but the ACTIONS from the
+            # adapted policy — and sample_actions returns both out of ONE
+            # prefix forward (openpi pi0.py). So split: actions from the full
+            # model, the prefix from a second, adapter-zeroed, prefix-only
+            # forward. Cost: one extra 968-token stack-0 forward per policy
+            # query at batch=env_num (compute_v_t runs only the action expert,
+            # so the prefix pass IS the backbone cost of a query — this
+            # roughly doubles it). NOTE this fires at EVAL queries too —
+            # _generate_actions passes return_prefix_rep=store_prefix_rep and
+            # evaluate_policy discards the prefix — so eval pays the doubled
+            # backbone cost for nothing (verifier finding F3; threading an
+            # eval flag through is a deferred optimization). Gated on the
+            # flag so every non-LoRA arm keeps the fused call below,
+            # bit-for-bit.
+            raw_actions = self._policy._sample_actions_with_model(
+                m=model,
+                observation=observation,
+                noise=noise,
+                rng=sample_rng,
+                return_prefix_rep=False,
+                **self._policy._sample_kwargs,
+            )
+            base_model = nnx.merge(train_state.model_def, zero_lora_params(params))
+            base_model.eval()
+            prefix = self._get_prefix_rep_with_model(m=base_model, observation=observation)
+        else:
+            raw_actions, prefix = self._policy._sample_actions_with_model(
+                m=model,
+                observation=observation,
+                noise=noise,
+                rng=sample_rng,
+                return_prefix_rep=True,
+                **self._policy._sample_kwargs,
+            )
         outputs = {"state": inputs["state"], "actions": raw_actions}
         if batch_size == 1:
             outputs = jax.tree.map(lambda x: np.asarray(x[0]), outputs)
@@ -563,7 +808,12 @@ class FilteredSFTLearner(Agent):
         self,
         observations: np.ndarray | Dict,
         task_description: list[str],
+        task_id: list[str] | None = None,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        # task_id: slot-aligned task ids from collect.py. Unused on this path --
+        # the prompt is what conditions the policy; the id is consumed only by
+        # the best-of-N Q-scoring override (AWR) for per-task critic routing.
+        del task_id
         rng, self._rng = jax.random.split(self._rng)
         processed_obs = self._process_obs_for_pi0(
             observations, task_description=task_description
@@ -595,6 +845,25 @@ class FilteredSFTLearner(Agent):
             _model.Observation.from_dict(online_batch["observation"]),
             online_batch["actions"],
         )
+
+    def save_extra_resume_state(self, step: int) -> dict[str, Any]:
+        """Learner-owned payload for the resume manifest's `extra` block.
+
+        Called by `save_epoch_state` before the orbax commit, so anything written
+        here is durable for `step` on either side of a crash. Everything this
+        learner needs already lives in the checkpoint and the online shard;
+        `OGPOAgentLearner` is the only override (success buffer, its task ranges,
+        and the advantage-normalizer scale).
+        """
+        return {}
+
+    def _resume_required_paths(self, step: int) -> list[epath.Path]:
+        """Learner-owned sidecars that must exist for `step` to be resumable.
+
+        The resume resolver skips a step whose orbax checkpoint committed but
+        whose sidecars did not. This learner writes none.
+        """
+        return []
 
     def save_checkpoint(self, step: int | None = None):
         state_to_save = self._train_state
@@ -659,12 +928,18 @@ class FilteredSFTLearner(Agent):
         processed_obs = self._process_obs_for_pi0(next_observation, task_description)
         # G4: the stored prefix rep is what the critic trains on — it must come from the FULL EMA model,
         # so compose the frozen leaves back from live params (the EMA is trainable-only after Phase E).
+        # R1 (docs/changes/2026-08-29-backbone-lora/): additionally zero any
+        # LoRA leaves — the critic's features come from the UNADAPTED backbone,
+        # matching the per-step prefixes produced in _sample_action. Exact
+        # identity on a lora-less tree.
         model = nnx.merge(
             self._train_state.model_def,
-            compose_full_params(
-                self._train_state.params,
-                self._train_state.ema_params,
-                self._config.trainable_filter,
+            zero_lora_params(
+                compose_full_params(
+                    self._train_state.params,
+                    self._train_state.ema_params,
+                    self._config.trainable_filter,
+                )
             ),
         )
         model.eval()
@@ -691,7 +966,9 @@ class FilteredSFTLearner(Agent):
             )
             next_prefix = prefix
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(
+        self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None
+    ):
 
         assert env_index in range(
             len(self._episode_storage)
@@ -701,9 +978,30 @@ class FilteredSFTLearner(Agent):
         self._episode_storage[env_index] = []
         # filtered SFT keeps only successful episodes.
         if is_success:
-            self._save_episode_in_buffer(episode_data, task_description, is_success=True)
+            self._save_episode_in_buffer(
+                episode_data, task_description, is_success=True, task_id=task_id
+            )
 
-    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
+    def _task_slot(self, task_id: str | None) -> int:
+        """Critic slot for ``task_id`` under per-task critics (registry on).
+
+        Keyed on the task ID (``libero_90_79``), NOT on ``task_description``:
+        libero_90 language strings are not unique (79 and 82 share one), and a
+        prompt-keyed registry silently merged them (verifier finding F1). A
+        missing id is a caller bug, never a fallback to the prompt.
+        """
+        if task_id is None:
+            raise ValueError(
+                "Per-task critics (rl.critic.num_tasks) need the task ID, but "
+                "task_id=None was passed. collect.py must pass "
+                "task_id=current_task_ids[env_index] to save_episode and "
+                "task_id=current_task_ids to sample_actions."
+            )
+        return self._task_registry.index_for(str(task_id))
+
+    def _save_episode_in_buffer(
+        self, episode_data, task_description, is_success: bool = False, target_buffer=None, task_id=None
+    ):
         # target_buffer allows PARL (and other wrappers) to redirect an episode
         # into a separate buffer without subclassing or duplicating preprocessing.
 
@@ -769,24 +1067,31 @@ class FilteredSFTLearner(Agent):
         obs_index = np.arange(n_windows, dtype=np.int64)
         next_obs_index = obs_index + act_h
         _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
+        # Per-task critics: stamp the slot for this episode's task ID. First-seen
+        # assignment; a task beyond rl.critic.num_tasks raises (no fallback
+        # slot). Idempotent, so OGPO's success-buffer pass followed by the
+        # online-buffer pass for the same episode yields the same slot.
+        if self._task_registry is not None:
+            _task_index = np.full((n_windows,), self._task_slot(task_id), dtype=np.int32)
         # Subclasses (e.g. Best-of-N with cached prefixes) may declare observation keys
         # that are never read during training; drop them so what we store matches the
         # buffer schema built by _make_buffer_dummy_data. Base class declares none.
         for k in getattr(self, "_buffer_obs_drop_keys", ()):
             _full_obs.pop(k, None)
         buf = target_buffer if target_buffer is not None else self._online_data_buffer
-        buf.insert(
-            {
-                "observations": _full_obs,
-                "obs_index": obs_index,
-                "next_obs_index": next_obs_index,
-                "actions": _actions.astype(np.float32),
-                "reward": _reward.astype(np.float32),
-                "mc_return": _mc_return.astype(np.float32),
-                "discount": _discount.astype(np.float32),
-                "is_success": _is_success,
-            }
-        )
+        insert_data = {
+            "observations": _full_obs,
+            "obs_index": obs_index,
+            "next_obs_index": next_obs_index,
+            "actions": _actions.astype(np.float32),
+            "reward": _reward.astype(np.float32),
+            "mc_return": _mc_return.astype(np.float32),
+            "discount": _discount.astype(np.float32),
+            "is_success": _is_success,
+        }
+        if self._task_registry is not None:
+            insert_data["task_index"] = _task_index
+        buf.insert(insert_data)
         if target_buffer is None:
             self._collection_success_episodes += 1
 
@@ -799,6 +1104,22 @@ class FilteredSFTLearner(Agent):
         self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)
 
     def end_data_collection(self, step: int | None = None) -> int:
+        # Per-task critics: after a COLLECTION round (step given; eval calls this
+        # without one) every collect.tasks id must own a slot. Collection cycles
+        # through all of collect.tasks, so an unfilled registry means an id<->slot
+        # drift (e.g. ids collapsing onto one key) -- the 3-critics-for-4-tasks
+        # failure, caught here instead of 100k steps later.
+        if self._task_registry is not None and step is not None:
+            n_reg, n_slots = len(self._task_registry), self._num_critic_tasks
+            if n_reg != n_slots:
+                raise ValueError(
+                    f"Per-task critics: after the collection round at step {step} the "
+                    f"task registry holds {n_reg} of {n_slots} slots "
+                    f"({sorted(self._task_registry.tasks)}) but collect.tasks has "
+                    f"{sorted(set(self._config.collect.tasks))}. Every train task must be "
+                    "collected and registered in the first round; check that collect.py "
+                    "passes task_id and that num_tasks == len(set(collect.tasks))."
+                )
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]

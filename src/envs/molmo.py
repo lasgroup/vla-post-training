@@ -336,7 +336,7 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
         # Add timelimit wrapper
         env = TimeLimit(
             env,
-            max_episode_steps=450,
+            max_episode_steps=450 * config.collect.episode_steps_multiplier,
         )
         return env
 

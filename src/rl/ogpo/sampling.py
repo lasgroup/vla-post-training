@@ -252,7 +252,10 @@ def sample_chain_with_logprob_grouped(
     noise key, same per-step RNG split structure, same scan — except the
     PaliGemma prefix (SigLIP + Gemma over images/text) runs ONCE at batch B and
     its KV cache is tiled to B*group, instead of running ``group`` redundant
-    times on identical observations. Pure performance: no algorithmic change.
+    times on identical observations. Pure performance: no algorithmic change
+    (and MEMORY-load-bearing once the backbone carries trainable LoRA adapters
+    -- dedup-off pays ``group`` backbone backwards per update; see
+    docs/changes/2026-08-29-backbone-lora/).
     Bit-parity caveat: batch-size-dependent XLA tiling can introduce float-ulp
     differences in v_t, so equality is allclose (certified by
     tests/ogpo/test_group_dedup.py), not bitwise.

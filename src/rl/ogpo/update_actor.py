@@ -24,9 +24,14 @@ the BC anchor accumulated into the donated PPO grads) so the two full fp32 weigh
 gradient trees and their activation sets are never co-resident — the jit-2 arena
 fix (docs/plans/ogpo-memory/analysis-jit2-forensics.md).
 
-The PaliGemma backbone is expected to be frozen via ``config.freeze_filter``;
-this train step does not assume anything about which parameters are
-trainable beyond ``config.trainable_filter``.
+This train step assumes nothing about which parameters are trainable beyond
+``config.trainable_filter``. The PaliGemma base backbone and SigLIP are frozen
+via ``config.freeze_filter``; with ``backbone_lora`` on
+(docs/changes/2026-08-29-backbone-lora/) the LLM stack-0 LoRA adapters are
+additionally trainable, which makes the prefix forwards inside the
+differentiated ``loss_fn``s live backward paths (the frozen-backbone case
+treats them as constants). The critic's prefix embedding stays adapter-free
+either way (R1) — see the ``critic_prefix is None`` recompute below.
 """
 import dataclasses
 
@@ -47,6 +52,7 @@ from src.rl.advantage_weighted_sft.update_critic import (
     summarize_critic_values,
 )
 from src.rl.ema_utils import compose_full_params
+from src.rl.lora_utils import LORA_FILTER, zero_lora_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.ogpo.sampling import (
     compute_prefix_cache,
@@ -56,6 +62,7 @@ from src.rl.ogpo.sampling import (
     score_chain_under_model,
     sum_log_prob,
 )
+from src.rl.networks.per_task_critic import TASK_INDEX_NAME
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import OnlineTrainConfig, OGPOSFTLearnerConfig
 
@@ -138,6 +145,7 @@ def sample_and_advantage(
     policy_observation: _model.Observation,                # un-expanded (B); carries images
     critic_prefix: at.Float[at.Array, "b embed"] | None,   # None => recompute; WP-C sidecar otherwise
     ema: nnx.State,                                         # explicit _ema_sharding input (full OR trainable-only)
+    task_index: at.Int[at.Array, " b"] | None = None,       # per-task critics sidecar; None => shared critics
 ) -> tuple[
     # Outputs are at the EXPANDED batch (bg = B*G); `b` is reserved for the
     # un-expanded inputs above. With G=1 the two coincide, but G>1 must not
@@ -178,8 +186,14 @@ def sample_and_advantage(
     # Critic observation. The recompute lives behind the `critic_prefix is None`
     # static branch so WP-C can supply the buffer's EMA-computed sidecar instead;
     # the None branch reproduces the mono jit's recompute under current params.
+    # R1 (docs/changes/2026-08-29-backbone-lora/): the critic's prefix comes
+    # from the UNADAPTED backbone — LoRA leaves are zeroed for this forward
+    # only (exact identity on a lora-less tree, so the non-LoRA path is
+    # bit-identical to before). The policy forwards below keep the adapters.
     if critic_prefix is None:
-        current_model = nnx.merge(policy_state.model_def, policy_state.params)
+        current_model = nnx.merge(
+            policy_state.model_def, zero_lora_params(policy_state.params)
+        )
         current_model.eval()
         prefix_rep = current_model.get_prefix_rep(policy_observation)
         prefix_rep = prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
@@ -192,6 +206,14 @@ def sample_and_advantage(
         "state": policy_observation.state,
         PREFIX_EMBEDDING_NAME: prefix,
     }
+    # Per-task critics (rl.critic.num_tasks): the buffer's task_index rides in as
+    # a second sidecar (same None-passthrough pattern as critic_prefix) and joins
+    # the critic observation BEFORE the G-expansion below, so each of a state's
+    # G samples is scored by that state's own task critics. Trailing/defaulted
+    # so the 7-positional callers (tests, composed train_step) and the arity-3
+    # rng split above are untouched. The None branch is bit-identical to before.
+    if task_index is not None:
+        critic_observation[TASK_INDEX_NAME] = task_index
 
     # Critics are frozen w.r.t. this train_step.
     state_action_critic = create_critic(state_action_critic_state, config)
@@ -593,16 +615,29 @@ def bc_grad_accumulate(
     # Total loss = pg + bc_coeff*bc (bit-identical to the mono `loss`); grad_norm
     # is computed over the COMBINED grads (post-accumulation). The PPO-only and
     # BC-only norms ride alongside it as grad_norm_pg (set in jit-2a) and
-    # grad_norm_bc, and their angle as grad_cos_pg_bc. loss_aux is the 25-key
+    # grad_norm_bc, and their angle as grad_cos_pg_bc. loss_aux is the 27-key
     # jit-2 aux schema: 21 in from jit-2a (20 PPO + grad_norm_pg) plus bc_loss +
-    # grad_norm + grad_norm_bc + grad_cos_pg_bc here. The learner/composer info
-    # dict is therefore 36 keys (was 33): + loss + param_norm + 9 sampler_aux.
+    # grad_norm + grad_norm_bc + grad_cos_pg_bc + grad_norm_lora +
+    # grad_norm_rest here. The learner/composer info dict is therefore 38 keys:
+    # + loss + param_norm + 9 sampler_aux.
     loss = pg_loss + rl.bc_coeff * bc_loss
+    # Adapter-vs-rest decomposition of the COMBINED gradient (R6,
+    # docs/changes/2026-08-29-backbone-lora/). The clip is one
+    # optax.clip_by_global_norm over the whole trainable tree, so with adapters
+    # live the action expert's effective step depends on adapter gradients from
+    # step 1 — these two keys are the only way to see that interaction. The
+    # filters are disjoint, so grad_norm**2 == grad_norm_lora**2 +
+    # grad_norm_rest**2 exactly (tests/ogpo/test_backbone_lora_grads.py).
+    # grad_norm_lora is 0.0 by construction on a tree with no adapters.
     loss_aux = pg_aux | {
         "bc_loss": bc_loss,
         "grad_norm": optax.global_norm(grads),
         "grad_norm_bc": grad_norm_bc,
         "grad_cos_pg_bc": grad_cos_pg_bc,
+        "grad_norm_lora": optax.global_norm(nnx.filter_state(grads, LORA_FILTER)),
+        "grad_norm_rest": optax.global_norm(
+            nnx.filter_state(grads, nnx.Not(LORA_FILTER))
+        ),
     }
     return grads, loss, loss_aux
 
@@ -675,10 +710,15 @@ def train_step(
     # happened OUTSIDE this function). ema_params passes through unchanged.
     critic_prefix = critic_observation[PREFIX_EMBEDDING_NAME]
     ema = policy_state.ema_params if policy_state.ema_params is not None else policy_state.params
+    # Per-task critics: thread the task_index sidecar when the upstream critic
+    # observation carries one (absent => shared critics, today's path).
+    task_index = (
+        critic_observation[TASK_INDEX_NAME] if TASK_INDEX_NAME in critic_observation else None
+    )
 
     x_chain, x_next_chain, times, dt, old_lp, advantage, sampler_aux = sample_and_advantage(
         config, rng, policy_state, state_action_critic_state, value_state,
-        policy_observation, critic_prefix, ema,
+        policy_observation, critic_prefix, ema, task_index,
     )
     # Two-pass loss backward: jit-2a emits the PPO scan grads; jit-2b differentiates
     # the BC anchor and accumulates INTO those (donated) grads. grads_pg is never

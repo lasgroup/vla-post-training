@@ -164,7 +164,7 @@ def main(config: _config.OnlineTrainConfig):
             if config.free_buffer_before_eval:
                 resume_state = load_resume_state(config)
                 agent._online_data_buffer = agent._get_online_replay_buffer()
-                agent._online_data_buffer.restore_shards(resume_state.replay_shard_dir, rng_state_json=resume_state.replay_rng_state_json)
+                agent._online_data_buffer.restore_shards(resume_state.replay_shard_dir, rng_state_json=resume_state.replay_rng_state_json, max_step=resume_state.step)
 
         info = agent.update()
         infos.append(info)

@@ -55,6 +55,9 @@ def evaluate_policy(
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=info["task_description"],
+                # Slot-aligned task ids (per-task critics key on the id, not the
+                # prompt: libero_90 prompts are not unique across task ids).
+                task_id=list(current_task_ids),
             )
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
             next_obs, _, terminate, truncate, _ = env.step(env_action_chunk)
@@ -152,6 +155,9 @@ def collect_data(
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=info["task_description"],
+                # Slot-aligned task ids (per-task critics key on the id, not the
+                # prompt: libero_90 prompts are not unique across task ids).
+                task_id=list(current_task_ids),
             )
             env_action_chunk = action_chunk[0] if isinstance(action_chunk, tuple) else action_chunk
             next_obs, reward, terminate, truncate, _ = env.step(env_action_chunk)
@@ -187,10 +193,13 @@ def collect_data(
                 successes_per_task[current_task_ids[env_index]] += int(success)
                 episodes_per_task[current_task_ids[env_index]] += 1
 
+                # current_task_ids[env_index] is still the FINISHED episode's id
+                # here; the slot is reassigned below, after save_episode.
                 agent.save_episode(
                     is_success=success,
                     env_index=int(env_index),
                     task_description=info["task_description"][env_index],
+                    task_id=current_task_ids[env_index],
                 )
 
                 if repeated_task_ids:

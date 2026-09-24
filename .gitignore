@@ -26,3 +26,5 @@ docs/code/
 
 # Offline run artifacts (wandb, buffers, caches) — multi-GB, never commit
 run_store/
+temp/
+experiments/

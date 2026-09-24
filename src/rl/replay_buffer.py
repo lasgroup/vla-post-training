@@ -18,6 +18,19 @@ _LINKED_OBS_KEY = "observations"
 _LINKED_INDEX_KEYS = ("obs_index", "next_obs_index")
 
 
+def _shard_step(path: Path) -> int:
+    """Training step encoded in a `step_%08d.h5` shard filename."""
+    stem = path.stem[len("step_"):]
+    if not stem.isdigit():
+        raise ValueError(
+            f"Replay shard {path} does not encode a step as step_<digits>.h5. "
+            "The atomic writer's temp files start with '.' and never match the "
+            "shard glob, so this is a foreign file; move it out of the shard "
+            "directory."
+        )
+    return int(stem)
+
+
 class ShardedReplayBuffer:
     def __init__(
         self,
@@ -257,7 +270,14 @@ class ShardedReplayBuffer:
         shard_dir: str | Path,
         *,
         rng_state_json: str | None = None,
+        max_step: int | None = None,
     ) -> dict[str, int | str | None]:
+        """Rebuild the buffer by replaying the shards in `shard_dir`.
+
+        `max_step` drops shards written after the checkpoint being resumed:
+        save_epoch_state writes the shard BEFORE committing orbax, so a crash in
+        that window leaves a shard the restored weights never saw.
+        """
         shard_dir = Path(shard_dir)
         if not shard_dir.exists():
             raise FileNotFoundError(f"Replay shard directory does not exist: {shard_dir}")
@@ -269,6 +289,8 @@ class ShardedReplayBuffer:
         self.obs_total = 0
         self.valid_start = 0
         shard_paths = sorted(shard_dir.glob("step_*.h5"))
+        if max_step is not None:
+            shard_paths = [p for p in shard_paths if _shard_step(p) <= max_step]
 
         for shard_path in shard_paths:
             with h5py.File(shard_path, "r") as f:

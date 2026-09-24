@@ -125,7 +125,7 @@ def get_value_bounds(config) -> tuple[float, float]:
         return float(crit.value_lower_bound), float(crit.value_upper_bound)
 
     discount = float(config.rl.discount)
-    T = int(config.collect.max_episode_steps)
+    T = int(config.collect.max_episode_steps * config.collect.episode_steps_multiplier)
     if config.collect.use_time_to_success_as_reward:
         # Lower bound is the never-succeeding Bellman fixed point, reward/(1-gamma),
         # NOT the T-step truncated sum: `fix_mc_returns` overwrites every failed

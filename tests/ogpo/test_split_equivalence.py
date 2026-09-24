@@ -64,10 +64,17 @@ _ATOL = 1e-6
 # Asserted on the REFERENCE monolith's info, which is frozen — this stays 33.
 _N_INFO_KEYS = 33
 # Keys the split emits that the frozen reference monolith predates. See
-# docs/changes/2026-08-15-actor-pg-bc-grad-norms/. Diagnostics only: they are
-# reductions over gradient trees the reference also built, it just never
+# docs/changes/2026-08-15-actor-pg-bc-grad-norms/ and (for the lora/rest
+# decomposition) docs/changes/2026-08-29-backbone-lora/. Diagnostics only: they
+# are reductions over gradient trees the reference also built, it just never
 # reported them separately.
-_SPLIT_ONLY_INFO_KEYS = {"grad_norm_pg", "grad_norm_bc", "grad_cos_pg_bc"}
+_SPLIT_ONLY_INFO_KEYS = {
+    "grad_norm_pg",
+    "grad_norm_bc",
+    "grad_cos_pg_bc",
+    "grad_norm_lora",
+    "grad_norm_rest",
+}
 
 
 def _build_config():
@@ -600,18 +607,20 @@ def test_leg_d_none_branch_recompute_matches_original(fx):
 
 
 def test_g_stored_prefix_threading(fx):
-    # WP-C Phase G: the OGPO 3-tuple override threads the buffer's stored prefix as a sidecar past
+    # WP-C Phase G: the OGPO tuple override threads the buffer's stored prefix as a sidecar past
     # Observation.from_dict, and jit-1 actually consumes it (the one intended non-bit-identical
-    # change). The override never touches self, so call it unbound with a stub self.
+    # change). The override never touches self, so call it unbound with a stub self. The fourth
+    # element (per-task critics' task_index) is None here: the batch carries no such key.
     obs_dict = fx.policy_observation.to_dict()
     known_prefix = fx.prefix + 2.0
     obs_dict[PREFIX_EMBEDDING_NAME] = known_prefix
     online_batch = {"observation": obs_dict, "actions": fx.actions_demo}
-    _, _, sidecar = OGPOAgentLearner._online_batch_to_sft_batch(None, online_batch)
+    _, _, sidecar, task_index = OGPOAgentLearner._online_batch_to_sft_batch(None, online_batch)
     assert sidecar is known_prefix, "override must return the stored prefix array as the third element"
+    assert task_index is None, "no task_index in the batch => no per-task sidecar"
 
     obs_no_prefix = fx.policy_observation.to_dict()
-    _, _, absent = OGPOAgentLearner._online_batch_to_sft_batch(
+    _, _, absent, _ = OGPOAgentLearner._online_batch_to_sft_batch(
         None, {"observation": obs_no_prefix, "actions": fx.actions_demo}
     )
     assert absent is None, "override returns None when the prefix key is absent (store_prefix_rep off)"

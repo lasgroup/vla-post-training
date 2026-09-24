@@ -17,26 +17,71 @@ import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.transforms as _transforms
-from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.advantage_weighted_sft.update_actor import (
     train_step as train_actor_step,
 )
 from src.rl.advantage_weighted_sft.update_critic import (
     init_state_action_critic_train_state,
+    summarize_critic_values,
     init_state_value_train_state,
     train_q_step,
     train_value_step,
 )
 from src.rl.best_of_n.update_critic import _build_pi0_backbone_critic_defs
 from src.rl.ema_utils import compose_full_params
+from src.rl.lora_utils import zero_lora_params
 from src.rl.networks.rl_networks import ObsType
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.networks.per_task_critic import TASK_INDEX_NAME
+from src.rl.task_registry import TaskRegistry
 from src.training.config import AdvantageWeightedSFTLearnerConfig, Normalizer, NormalizerState
 
 
 class AdvantageWeightedSFTLearner(FilteredSFTLearner):
+    # Per-task critics (rl.critic.num_tasks) need every critic observation to
+    # carry `task_index`. Only OGPO threads it through its actor path; the AWR /
+    # MPO / FlowGRPO actor steps build critic observations without it
+    # (_sft_batch_to_actor_batch, flow_grpo/update_actor.py:39-42) and would
+    # fail at trace time. Subclasses that do thread it flip this to True.
+    _supports_per_task_critics: bool = False
+
     def __init__(self, config):
+        # Opt-in observability hook for best-of-N selection. When set to a list
+        # (by an analysis probe -- scripts/probe_counterfactual_rollouts.py),
+        # sample_actions appends one record per task group: the candidate chunks
+        # and their critic scores, i.e. exactly what the argmax was taken over.
+        # None in every production path, so collection is bit-identical.
+        self._bon_record: list[dict] | None = None
+        num_tasks = config.rl.critic.num_tasks
+        if num_tasks is not None:
+            if not self._supports_per_task_critics:
+                raise ValueError(
+                    f"rl.critic.num_tasks={num_tasks} is only supported by "
+                    "OGPOAgentLearner (its actor path threads task_index); "
+                    f"{type(self).__name__} does not. Set rl.critic.num_tasks=None."
+                )
+            n_train_tasks = len(set(config.collect.tasks))
+            if num_tasks != n_train_tasks:
+                raise ValueError(
+                    f"rl.critic.num_tasks={num_tasks} but collect.tasks has "
+                    f"{n_train_tasks} distinct task ids ({sorted(set(config.collect.tasks))}). "
+                    "Per-task critics need exactly one slot per train task id (a spare "
+                    "slot would let an eval-only task silently claim an untrained "
+                    f"critic); set --rl.critic.num_tasks {n_train_tasks}."
+                )
+            missing_eval = set(config.collect.eval_tasks) - set(config.collect.tasks)
+            if config.rl.n_samples > 1 and missing_eval:
+                raise ValueError(
+                    f"rl.n_samples={config.rl.n_samples} (best-of-N scoring with Q) "
+                    f"with per-task critics, but eval_tasks {sorted(missing_eval)} are "
+                    "not in collect.tasks and so have no critic. Drop held-out eval "
+                    "tasks, or set --rl.n_samples 1 to evaluate without the critic."
+                )
+            # Gates read by FilteredSFTLearner (buffer schema + episode write);
+            # must be set BEFORE super().__init__ allocates the buffer.
+            self._num_critic_tasks = int(num_tasks)
+            self._task_registry = TaskRegistry(int(num_tasks))
 
         model = config.model.create(jax.random.key(config.seed))
         fake_obs = config.model.fake_obs(batch_size=1)
@@ -48,6 +93,8 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             "state": fake_obs.state,
             PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
         }
+        if num_tasks is not None:
+            dummy_obs[TASK_INDEX_NAME] = jnp.zeros((1,), dtype=jnp.int32)
         dummy_act = config.model.fake_act(batch_size=1)
         if config.rl.critic.use_bronet:
             from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
@@ -198,18 +245,47 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
     def _rl_checkpoint_path(self, step: int) -> epath.Path:
         return self._rl_checkpoint_dir() / str(int(step))
 
+    def _task_registry_path(self, step: int) -> epath.Path:
+        # Sidecar NEXT TO the orbax step dir, not inside it: StandardCheckpointer
+        # owns that directory's contents. A dict[str, int] is not an array leaf,
+        # so it cannot ride in _rl_checkpoint_state().
+        return self._rl_checkpoint_dir() / f"task_registry_{int(step)}.json"
+
     def _restore_rl_checkpoint(self, *, step: int) -> None:
         path = self._rl_checkpoint_path(step)
         restored = self._rl_state_checkpointer.restore(path, self._rl_checkpoint_state())
         self._state_action_critic_state = restored["state_action_critic_state"]
         self._value_state = restored["value_state"]
         self._normalizer_state = restored["normalizer_state"]
+        if self._task_registry is not None:
+            # The buffer shards carry slot ints; this is the only record of
+            # which task owns which slot. Missing => raise (new-run only, D8).
+            self._task_registry = TaskRegistry.from_json(
+                self._task_registry_path(step), self._num_critic_tasks
+            )
+
+    def _resume_required_paths(self, step: int) -> list[epath.Path]:
+        # save_checkpoint writes these BEFORE the orbax commit, so a step with an
+        # orbax checkpoint but no rl_state is a crash artifact, not a resumable
+        # step: resuming it would train a policy against freshly initialized
+        # critics. Mirrored in best_of_n_learner.py, which deliberately does NOT
+        # require rl_state (it warns and starts critics fresh -- OQ-6).
+        paths = [self._rl_checkpoint_path(step)]
+        if self._task_registry is not None:
+            paths.append(self._task_registry_path(step))
+        return paths
 
     def save_checkpoint(self, step: int | None = None):
-        super().save_checkpoint(step=step)
+        # rl_state FIRST: openpi pins max_to_keep=1, so super().save_checkpoint()
+        # deletes the previous step the moment it commits. Writing the critics
+        # before that means a crash between the two leaves the previous step
+        # complete instead of leaving the newest step critic-less.
         path = self._rl_checkpoint_path(step)
         self._rl_checkpoint_dir().mkdir(parents=True, exist_ok=True)
         self._rl_state_checkpointer.save(path, self._rl_checkpoint_state())
+        if self._task_registry is not None:
+            self._task_registry.to_json(self._task_registry_path(step))
+        super().save_checkpoint(step=step)
 
     def _recompute_prefix_embedding(
         self,
@@ -220,7 +296,9 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # ema_replicated = jax.device_put(self._ema, self._replicated_sharding)
         # model = nnx.merge(policy_state.model_def, ema_replicated)
         # model.eval()
-        model = self._get_policy_model(policy_state)
+        # R1 (docs/changes/2026-08-29-backbone-lora/): critic-prefix producer —
+        # the prefix must come from the UNADAPTED backbone (zero_lora=True).
+        model = self._get_policy_model(policy_state, zero_lora=True)
         # Both SFT-loader Observations and online-buffer dicts are already
         # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
         # by the data pipeline / _preprocess_insert
@@ -231,10 +309,24 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         return prefix
 
     @staticmethod
-    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        """Merge policy params into a model. Call once per update() to avoid duplicates."""
-        # TODO: this should be EMA
-        model = nnx.merge(policy_state.model_def, policy_state.params)
+    def _get_policy_model(
+        policy_state: training_utils.TrainState, *, zero_lora: bool = False
+    ) -> _model.BaseModel:
+        """Merge policy params into a model. Call once per update() to avoid duplicates.
+
+        ``zero_lora=True`` is for CRITIC-PREFIX producers only (R1,
+        docs/changes/2026-08-29-backbone-lora/): the adapters are zeroed so the
+        prefix comes from the unadapted backbone. Never set it on an
+        action-sampling path. With the adapters zeroed the prefix reads only
+        frozen leaves, so the params-vs-EMA question below is moot for that
+        path (exact identity on a lora-less tree either way).
+        """
+        # TODO: this should be EMA (actor path only; irrelevant for the
+        # zero_lora prefix path — see docstring)
+        params = policy_state.params
+        if zero_lora:
+            params = zero_lora_params(params)
+        model = nnx.merge(policy_state.model_def, params)
         model.eval()
         return model
 
@@ -258,6 +350,13 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         next_observation = online_batch["next_observation"]
         next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
+
+        if self._task_registry is not None:
+            # Per-task critics: obs and next_obs belong to the same episode,
+            # hence the same task, so one index serves both (Q's TD target
+            # bootstraps V(next_obs) under the same task's critic).
+            observation_dict[TASK_INDEX_NAME] = online_batch[TASK_INDEX_NAME]
+            next_observation_dict[TASK_INDEX_NAME] = online_batch[TASK_INDEX_NAME]
 
         if PREFIX_EMBEDDING_NAME in online_observation and PREFIX_EMBEDDING_NAME in next_observation:
             observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[PREFIX_EMBEDDING_NAME]
@@ -328,6 +427,23 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             task_description = [task_description] * next(
                 np.asarray(v).shape[0] for v in observations.values()
             )
+        # Per-task critics: slot-aligned task IDs from collect.py. Read only when
+        # the registry is on, and then required -- a description group below may
+        # span two ids (libero_90_79 / 82 share a prompt), so the slot is per env.
+        task_ids = None
+        if self._task_registry is not None:
+            if "task_id" not in kwargs or kwargs["task_id"] is None:
+                raise ValueError(
+                    "Per-task critics: best-of-N scoring needs task_id (slot-aligned "
+                    "list) in sample_actions kwargs; collect.py / evaluate_policy must "
+                    "pass task_id=current_task_ids."
+                )
+            task_ids = list(kwargs["task_id"])
+            if len(task_ids) != len(task_description):
+                raise ValueError(
+                    f"task_id has {len(task_ids)} entries but task_description has "
+                    f"{len(task_description)}; both must be slot-aligned per env."
+                )
         # Group envs by task so the prompt embedding is computed once per unique
         # task rather than once per env, which matters when many envs share a task.
         task_to_indices: dict[str, list[int]] = {}
@@ -350,15 +466,22 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
         # G4: compose the full policy model (frozen leaves from live params) — best-of-N collection
         # needs a full model even after the EMA is sliced trainable-only (Phase E). Collection-only, so
         # ema_params is always attached here (no None fallback today).
-        policy_model = nnx.merge(
+        # R1 (docs/changes/2026-08-29-backbone-lora/): this model exists ONLY
+        # for the critic-prefix forward below (the candidate actions come from
+        # _sample_action, which composes its own model), so the adapters are
+        # zeroed — the critic scores candidates on unadapted-backbone features.
+        # Exact identity on a lora-less tree.
+        prefix_model = nnx.merge(
             self._train_state.model_def,
-            compose_full_params(
-                self._train_state.params,
-                self._train_state.ema_params,
-                self._config.trainable_filter,
+            zero_lora_params(
+                compose_full_params(
+                    self._train_state.params,
+                    self._train_state.ema_params,
+                    self._config.trainable_filter,
+                )
             ),
         )
-        policy_model.eval()
+        prefix_model.eval()
 
         for task, indices in task_to_indices.items():
             group_obs = jax.tree.map(lambda x: np.asarray(x)[indices], observations)
@@ -393,6 +516,16 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 state = self._pad_last_dim(state, self._transition_state_dim)
             state = jnp.repeat(jnp.asarray(state, dtype=jnp.float32), n_samples, axis=0)
             critic_obs: dict = {"state": state}
+            if self._task_registry is not None:
+                # Per-task critics: per-env slot by task ID (a prompt group can
+                # hold two ids). First-seen assignment is safe here -- step-0
+                # collection registers every train task before any eval -- and a
+                # held-out task overflows => raise. Tiled n_samples per env to
+                # match the state/prefix tiling above.
+                slots = np.asarray(
+                    [self._task_slot(task_ids[i]) for i in indices], dtype=np.int32
+                )
+                critic_obs[TASK_INDEX_NAME] = jnp.repeat(jnp.asarray(slots), n_samples, axis=0)
 
             per_env_inputs = [
                 self._policy._input_transform(
@@ -430,7 +563,7 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 for k, v in inputs.items()
             }
             obs_for_prefix = _model.Observation.from_dict(inputs)
-            prefix = self._get_prefix_rep_with_model(m=policy_model, observation=obs_for_prefix)
+            prefix = self._get_prefix_rep_with_model(m=prefix_model, observation=obs_for_prefix)
             prefix = np.asarray(prefix)
             if prefix.ndim == 3:
                 prefix = prefix.reshape(prefix.shape[0], -1, prefix.shape[-1]).mean(axis=1)
@@ -465,14 +598,18 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
             flat_actions = jnp.asarray(actions_norm.reshape(group_env_num * n_samples, -1))
             q_logits = q_model(critic_obs, flat_actions)
 
-            rl_config = self._config.rl
-            _lower, _upper = get_value_bounds(self._config)
-            q_dist = make_value_distribution(
-                q_logits, rl_config.critic.num_value_bins, _lower, _upper
+            # Honour critic.reduction instead of hardcoding min. With num_qs=10
+            # and reduction="mean" (the reference stack) min-over-heads ranks each
+            # candidate by whichever head happens to dislike it most -- head-
+            # selection noise where the mean would average it down. Configs that
+            # leave reduction at its "min" default are unchanged.
+            scores = np.asarray(
+                summarize_critic_values(
+                    q_logits,
+                    self._config,
+                    critic_reduction=self._config.rl.critic.reduction,
+                )
             )
-            scores = np.asarray(q_dist.mean())
-            if scores.ndim > 1:
-                scores = scores.min(axis=0)
             scores = scores.reshape(group_env_num, n_samples)
             best_idx = scores.argmax(axis=1)
 
@@ -480,6 +617,33 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
                 group_env_num, n_samples, *np.asarray(group_actions).shape[1:]
             )
             best = group_actions[np.arange(group_env_num), best_idx]
+
+            if self._bon_record is not None:
+                self._bon_record.append(
+                    {
+                        "indices": [int(i) for i in indices],
+                        "candidates": np.asarray(group_actions, dtype=np.float32),
+                        "scores": np.asarray(scores, dtype=np.float32),
+                        "best_idx": np.asarray(best_idx, dtype=np.int32),
+                        # Per-env (untiled) critic inputs, so a probe can score
+                        # other actions -- or the V head -- at these same states
+                        # without rebuilding the transform pipeline here.
+                        "state": np.asarray(
+                            critic_obs["state"][::n_samples], dtype=np.float32
+                        ),
+                        "prefix": np.asarray(prefix, dtype=np.float32),
+                        **(
+                            {
+                                "task_index": np.asarray(
+                                    critic_obs[TASK_INDEX_NAME][::n_samples],
+                                    dtype=np.int32,
+                                )
+                            }
+                            if self._task_registry is not None
+                            else {}
+                        ),
+                    }
+                )
 
             if all_best_actions is None:
                 all_best_actions = np.zeros((env_num, *best.shape[1:]), dtype=np.float32)
@@ -492,16 +656,26 @@ class AdvantageWeightedSFTLearner(FilteredSFTLearner):
 
         return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
 
-    def save_episode(self, is_success: bool, env_index: int, task_description: str):
+    def save_episode(
+        self, is_success: bool, env_index: int, task_description: str, task_id: str | None = None
+    ):
         assert env_index in range(
             len(self._episode_storage)
         ), f"env_index must be between 0 and {len(self._episode_storage) - 1}, but got {env_index}."
         # extract episode data from storage and empty it
         episode_data = self._episode_storage[env_index]
         self._episode_storage[env_index] = []
+        if self._task_registry is not None:
+            # Per-task critics: register the task even when the episode is not
+            # stored (store_success_episodes_only drops failures), so a task with
+            # no success in the first round still owns its slot and the
+            # end_data_collection guard does not misreport a plumbing error.
+            self._task_slot(task_id)
         if self._config.rl.store_success_episodes_only and not is_success:
             return
-        self._save_episode_in_buffer(episode_data, task_description, is_success=is_success)
+        self._save_episode_in_buffer(
+            episode_data, task_description, is_success=is_success, task_id=task_id
+        )
 
     def _update_normalizer(self, normalizer_state, bias, scale) -> tuple[NormalizerState, dict[str, at.Array]]:
         normalizer_state = self._normalizer.update(

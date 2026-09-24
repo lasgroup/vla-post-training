@@ -29,9 +29,12 @@ backbones with one implementation and requires **zero edits** to
 `bronet_critic.py`, `rl_networks.py`, or `networks/decoders/`.
 
 This matters more than it looks: the mt4 recipe's default config
-`pi05_libero_online_ogpo_sft` (`config.py:642`) does **not** set `use_bronet`, so it
-runs the MLP path — only `pi05_libero_online_ogpo_ref` (`config.py:657`, `:676`)
-uses BroNet. A BroNet-only implementation would have missed the arm being targeted.
+`pi05_libero_online_ogpo_sft` (`config.py:642`) does **not** set `use_bronet`, so the
+config alone runs the MLP path; `pi05_libero_online_ogpo_ref` (`config.py:657`, `:676`)
+uses BroNet. **Correction (verifier F6):** the mt4 *recipe* overrides the config to
+BroNet-1024 (`scripts/ogpo_multitask_4task.sh:247-248`), so the target arm actually runs
+BroNet — both backbones are live, and the backbone-agnostic wrapper is still the right
+shape, but the memory figure below was computed for the wrong path.
 
 ### Wrapper contract
 
@@ -288,9 +291,11 @@ Analytic estimates — **not measured**, no GPU run was made.
 
 - **Params.** T× the critic parameter count, plus T× Adam `m`/`v` and T× the critic
   EMA (`use_ema=True`, `update_critic.py:203-214`) ⇒ ~4× the param bytes per task.
-  - mt4 default (`pi05_libero_online_ogpo_sft`, MLP path, `NUM_QS=2`, encoder
-    `(512,512)`, decoder `(256,256)`): order 4M params total today ⇒ ~64 MB with
-    optimizer+EMA; **T=4 ⇒ ~0.26 GB. Negligible.**
+  - ~~mt4 default (MLP path): T=4 ⇒ ~0.26 GB~~ **Corrected (verifier F6):** the mt4
+    recipe forces `--rl.critic.use_bronet --rl.critic.bronet_hidden_dim 1024` (depth 2,
+    `NUM_QS=2`, input ≈ 2.4k): ~26M critic params ⇒ ~0.42 GB with optimizer+EMA today;
+    **T=4 ⇒ ~1.7 GB (+~1.25 GB)**. Still well inside the documented floor, but not
+    "negligible", and the burst's 1000 critic steps per round also go 4×.
   - `pi05_libero_online_ogpo_ref` (BroNet, hidden 1024, depth 2, `num_qs=num_vs=10`):
     order 140M params ⇒ ~2.3 GB today; **T=4 ⇒ ~9 GB.** Against a ~34.7–46 GiB
     documented floor (`rl-ogpo.md`, `ogpo_learner.py:61-71`) this is **not**
@@ -348,3 +353,62 @@ Pure-math / pure-plumbing, so **pytest-native tests are required**, not a fallba
    collection, the burst, per-task memory, and anything needing real π0.5 weights or
    a simulator. Honest fallback: a CPU smoke on dummy variants plus
    `DRY=1 bash scripts/ogpo_multitask_4task.sh` to inspect the emitted command line.
+
+---
+
+## Addendum (2026-08-21, post-verification) — F1: key critic slots on the task *id*
+
+**Why.** Verifier finding F1 (`VERIFICATION.md` §1): the registry keys on
+`str(task_description)`, the LIBERO language string, and `libero_90_79` / `libero_90_82`
+in the mt4 set share that string (12 libero_90 prompts collide overall). `PER_TASK_CRITIC=1`
+therefore silently trained 3 critics for 4 tasks. Maintainer decision: **key on the LIBERO
+task id** (`libero_90_79`) — the same identity `collect.tasks`, the R3 count, and the
+per-task eval metrics already use.
+
+**Where the id lives.** `collect.py` assigns tasks round-robin into `current_task_ids`
+(`:140-149` collect, `:43-52` eval) and resets a finished slot *after* `save_episode`
+(`:190-201`), so at the `save_episode` call `current_task_ids[env_index]` is the finished
+episode's id, and at every `sample_actions` call the list is slot-aligned with `info`.
+The learner never receives it today.
+
+**Tier-2 trigger.** `Agent.save_episode` / `sample_actions` are `**kwargs`-typed on the
+ABC (`agent.py:33`, `:48`), so the ABC text does not change — but the four concrete
+`save_episode(is_success, env_index, task_description)` overrides (`filtered_sft:711`,
+`awr:565`, `ogpo:116`, `best_of_n:308`) and the base `sample_actions → _generate_actions`
+(`filtered_sft:579-606`, which takes `task_description` positionally and would `TypeError`
+on an unknown kwarg) all sit on the ABC's call contract. That is the "Agent ABC or its call
+sites" trigger.
+
+**Files.**
+- `src/training/collect.py`: pass `task_id=current_task_ids` (list, slot-aligned) to both
+  `sample_actions` calls and `task_id=current_task_ids[env_index]` to `save_episode`.
+- `src/rl/filtered_sft_agent/filtered_sft_learner.py`: `save_episode(..., task_id=None)`,
+  `_save_episode_in_buffer(..., task_id=None)` — registry keys on `task_id`; when the
+  registry is on and `task_id is None` ⇒ raise (no silent fallback to the description).
+  `_generate_actions(..., task_id=None)` accepts and ignores it (consumed only by the
+  best-of-N scoring path). `end_data_collection(step)`: when the registry is on and
+  `step is not None` (collection, not eval), assert `len(registry) == num_tasks` naming
+  the missing ids — the "registry must fill after the first collection" guard.
+- `src/rl/advantage_weighted_sft/advantage_weighted_sft_learner.py`: `save_episode` passes
+  `task_id` through; best-of-N `sample_actions` reads `kwargs["task_id"]` and builds a
+  **per-env** `task_index` (envs grouped by description may span two ids).
+- `src/rl/ogpo/ogpo_learner.py`, `src/rl/best_of_n/best_of_n_learner.py`: `save_episode`
+  signatures pass `task_id` through. (BofN: pass-through only; per-task critics are
+  blocked there by config.)
+- `src/rl/dsrl/`: quarantined, `**kwargs` already — untouched.
+- `src/rl/task_registry.py`: docstring only (key semantics).
+- Tests: registry-keyed-on-id through `_save_episode_in_buffer` is learner-bound; add a
+  stub-agent `collect_data` test that `save_episode` receives the slot's id and
+  `sample_actions` receives the aligned list; invert the verifier's two `KNOWN_GAP`
+  collision pins.
+
+**Inheritance sweep.** `save_episode` is overridden in AWR, OGPO, BofN (all updated) and
+inherited by MPO/FlowGRPO from AWR. `sample_actions` is overridden in AWR and BofN; both
+forward `**kwargs` to the base, so the base must accept `task_id`.
+
+**Duplication sweep.** The AWR and BofN `save_episode` bodies are near-identical clones;
+both get the same one-line pass-through. `_get_on_policy_action` (BofN ↔ MPO) is untouched.
+
+**Out of scope, recorded.** `_success_task_ranges` (`balance_success_buffer_tasks`) and
+the `normalize_advantage_per_task` prompt hash have the same description collision. Not
+changed here — both existing multitask arms' semantics would shift.

@@ -8,6 +8,18 @@ round every 10k steps. Branch: `shashwat/cons-adv-success-bc` (on top of
 
 ## Run ledger
 
+Since 2026-08-29 the Backbone column has a third value, **LoRA** (`LORA=1` in
+the recipes, `docs/changes/2026-08-29-backbone-lora/`): rank-16 adapters on
+the 2B LLM stack 0, SigLIP + base frozen, critic prefix embeddings pinned to
+the unadapted backbone. Two readings to get right on a LoRA arm: (1)
+`actor/param_norm` and every `actor/grad_norm*` series include the adapters
+and the shared global clip — NOT comparable to frozen/unfrozen arms
+(`grad_norm_lora`/`grad_norm_rest` decompose it); (2) at step 0, `lora_a`
+receives exactly zero gradient by construction (`lora_b` starts at zero and
+each factor's grad is proportional to the other) — `lora_b` moves first and
+`lora_a` comes alive from step 1; this is standard LoRA init, not a plumbing
+bug.
+
 | Run | Backbone | Advantage | ε | succBC | Result / status |
 |---|---|---|---|---|---|
 | control | unfrozen | reduced 2Q/2V | 0.01 | — | DONE: peak 85%@50k, plateau 70–85%, final ~55–80%. PPO term 100% clipped all run (dead) — learning was BC-driven. |

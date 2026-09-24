@@ -16,6 +16,17 @@
 #
 # Env vars: ARM (suffix), GPU, SEED (default 0),
 #           CANC=1 to add normalizer+clip in stage B (arm iv).
+#
+# LoRA traps (docs/changes/2026-08-29-backbone-lora/):
+# 1. Do NOT run stage A with LORA=1 while stage B stays non-LoRA -- the
+#    stage-B weight loader (_merge_params) keeps only checkpoint keys present
+#    in its own tree, so the stage-A adapters are SILENTLY DROPPED, no error.
+# 2. Do NOT export LORA=1 into this pipeline at all: stability_study.sh emits
+#    the flag unconditionally and `env` (below) inherits the caller's exports,
+#    so LORA=1 would reach stage A -- where --backbone_lora OVERWRITES the
+#    unfrozen-backbone config's freeze filter and silently re-freezes the 2B
+#    base (frozen+LoRA instead of the unfrozen BC warmstart this stage is;
+#    verifier finding F1 in the change record's VERIFICATION.md).
 # ---------------------------------------------------------------------------
 set -euo pipefail
 : "${ARM:?set ARM}"; : "${GPU:?set GPU}"
