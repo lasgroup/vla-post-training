@@ -19,38 +19,6 @@ import openpi.policies.droid_policy as _droid_policy
 import openpi.transforms as _openpi_transforms
 import optax
 import openpi.training.weight_loaders as weight_loaders
-import jax
-import jax.numpy as jnp
-from flax import struct
-
-
-@struct.dataclass
-class NormalizerState:
-    bias: jax.Array
-    scale: jax.Array
-    ema_weight: float
-
-
-class Normalizer:
-    def __init__(self, ema_weight: float = 0.99):
-        self._ema_weight = ema_weight
-
-    def init(self) -> NormalizerState:
-        return NormalizerState(
-            bias=jnp.array(0.0),
-            scale=jnp.array(1.0),
-            ema_weight=self._ema_weight,
-        )
-
-    @staticmethod
-    @jax.jit
-    def update(normalizer_state: NormalizerState, bias: jax.Array, scale: jax.Array) -> NormalizerState:
-        prev_bias = normalizer_state.bias
-        prev_scale = normalizer_state.scale
-        ema_weight = normalizer_state.ema_weight
-        new_bias = (1.0 - ema_weight) * bias + ema_weight * prev_bias
-        new_scale = (1.0 - ema_weight) * scale + ema_weight * prev_scale
-        return normalizer_state.replace(bias=new_bias, scale=new_scale)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,15 +61,6 @@ class StepSchedule(_optimizer.LRScheduleConfig):
             ],
             boundaries=[self.switch_step],
         )
-
-
-@dataclasses.dataclass(frozen=True)
-class NormalizerConfig:
-    q_up: float = 0.95
-    q_low: float = 0.05
-    method: str = 'quantile'
-    min_scale: float = 1.0
-    ema_weight: float = 0.99
 
 
 @dataclasses.dataclass(frozen=True)
@@ -159,22 +118,10 @@ class FilteredSFTLearnerConfig(RLAlgorithmConfig):
 
 
 @dataclasses.dataclass(frozen=True)
-class AdvantageWeightedSFTLearnerConfig(FilteredSFTLearnerConfig):
+class BestofNFilteredSFTLearnerConfig(FilteredSFTLearnerConfig):
     critic: CriticTrainingConfig = CriticTrainingConfig()
-    beta: float = 0.05
-    weight_clip: float = 20.0
-    advantage_scale: float = 10.0
-    normalizer_config: NormalizerConfig = NormalizerConfig()
-    use_mc_returns: bool = False
+    n_samples: int = 32
     store_success_episodes_only: bool = False
-    normalize_advantages: bool = False
-    # n_samples > 1 enables best-of-N collection: the agent samples N candidate
-    # action sequences and selects the one with the highest Q-value.
-    n_samples: int = 1
-    # Weight for an auxiliary BC loss on successful transitions only.
-    # Combined loss = AWR loss + filtered_sft_weight * mean(is_success * BC loss).
-    filtered_sft_weight: float = 0.0
-    awr_loss_weight: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -184,80 +131,6 @@ class BestofNLearnerConfig(FilteredSFTLearnerConfig):
     n_samples: int = 32
     discount: float = 0.995
     train_on_policy_value_function: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class MPOWeightedSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
-    store_buffer_actions_in_batch: bool = False
-
-
-@dataclasses.dataclass(frozen=True)
-class FlowGRPOSFTLearnerConfig(MPOWeightedSFTLearnerConfig):
-    group_size: int = 8
-    num_steps: int = 10
-    noise_level: float = 0.3
-    normalize_adv: bool = True
-    use_mpo_advantage_weight: bool = True
-
-
-@dataclasses.dataclass(frozen=True)
-class OGPOSFTLearnerConfig(AdvantageWeightedSFTLearnerConfig):
-    # v1 is on-policy only — no LeRobot offline data, no success buffer.
-    online_ratio: float = 1.0
-    # PPO / IS-ratio
-    group_num_samples: int = 8
-    clip_epsilon: float = 0.01
-    entropy_coeff: float = 0.0
-    # Stochastic flow sampling
-    num_sde_steps: int = 10
-    noise_level: float = 0.3
-    # Advantage shaping ('vanilla' = group-mean baseline, 'max' = group-max
-    # baseline, 'subtract_v' = q - v with no group baseline).
-    adv_strategy: str = "vanilla"
-    adv_clip_min: float | None = None
-    # BC regularization on the on-policy actions in the same batch.
-    bc_coeff: float = 1.0
-    use_bc_regularization: bool = True
-    # Treat the EMA train state as the "old" policy (PPO denominator).
-    # When False, the current params are used (stop-gradient'd).
-    use_ema_as_old_policy: bool = True
-    # Log-prob normalization for the PPO ratio. Mirrors the official OGPO
-    # ``normalize_denoising_horizon`` / ``normalize_act_space_dimension``
-    # knobs (see ``ogpo/configs/algos/ogpo.yaml``). With both on, the
-    # log-ratio is per-(sde_step, horizon_pos, action_dim) — making
-    # ``clip_epsilon`` a meaningful per-dim bound.
-    normalize_denoising_horizon: bool = True
-    normalize_act_space_dimension: bool = True
-
-
-@dataclasses.dataclass(frozen=True)
-class DSRLLearnerConfig(RLAlgorithmConfig):
-    actor_lr: float = 1e-4
-    critic_lr: float = 3e-4
-    alpha_lr: float = 3e-4
-    # Network architecture (kept explicit for parity across scripts/experiments).
-    critic_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
-    policy_decoder_hidden_dims: tuple[int, ...] = (128, 128, 128)
-    critic_num_qs: int = 10
-    critic_reduction: str = "mean"
-    backup_entropy: bool = False
-    critic_update_frequency: int = 1
-    actor_update_frequency: int = 1
-    critic_ema_decay: float | None = 0.995
-    encoder_type: str = "small"
-    encoder_norm: str = "group"
-    use_spatial_softmax: bool = True
-    softmax_temperature: float = 1.0
-    image_latent_dim: int = 50
-    use_image_bottleneck: bool = True
-    use_state_branch: bool = True
-    autotune_alpha: bool = True
-    init_alpha: float = 1.0
-    target_entropy: str | float = "auto"
-    policy_distribution: str = "tanh_normal"
-    sac_image_size: int = 64
-    random_crop_padding: int = 4
-    warmup_gaussian_noise: bool = True
 
 
 @dataclasses.dataclass(frozen=True)
@@ -359,12 +232,11 @@ class OnlineTrainConfig(TrainConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if isinstance(self.rl, (BestofNLearnerConfig, AdvantageWeightedSFTLearnerConfig)):
+        if isinstance(self.rl, (BestofNLearnerConfig, BestofNFilteredSFTLearnerConfig)):
             if self.rl.critic.use_distributional_critic:
                 # The C51 distributional backup is only implemented for best-of-N.
-                # Other critic-based algos (AWR and its subclasses MPO/FlowGRPO/OGPO)
-                # share CriticTrainingConfig, so the flag is settable there but would
-                # be silently ignored — reject it explicitly to avoid that footgun.
+                # The combined filtered-SFT learner shares CriticTrainingConfig,
+                # but does not implement C51; reject that combination explicitly.
                 assert isinstance(self.rl, BestofNLearnerConfig), (
                     "use_distributional_critic=True is only supported for "
                     "BestofNLearnerConfig; it is not implemented for "
@@ -470,7 +342,7 @@ def make_base_molmo_config(
     return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
-def _make_ogpo_freeze_filter():
+def _make_action_expert_freeze_filter():
     """Freeze PaliGemma LLM (except the action expert) and the SigLIP vision
     tower. The action expert lives at LLM stack index 1 — matched by the
     ``.*llm.*_1.*`` path regex, mirroring ``Pi0Config.get_freeze_filter``.
@@ -510,16 +382,16 @@ _CONFIGS.extend(
             name="pi05_molmo_online_filtered_sft",
             rl_config=FilteredSFTLearnerConfig(online_ratio=1.0),
         ),
-        # 2. Advantage Weighted SFT (AWSFT)
+        # 2. Best-of-N collection with filtered SFT
         make_base_libero_config(
-            name="pi05_libero_online_aw_sft",
-            rl_config=AdvantageWeightedSFTLearnerConfig(
+            name="pi05_libero_online_best_of_n_filtered_sft",
+            rl_config=BestofNFilteredSFTLearnerConfig(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
         make_base_molmo_config(
-            name="pi05_molmo_online_aw_sft",
-            rl_config=AdvantageWeightedSFTLearnerConfig(
+            name="pi05_molmo_online_best_of_n_filtered_sft",
+            rl_config=BestofNFilteredSFTLearnerConfig(
                 online_ratio=1.0,
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
@@ -530,41 +402,22 @@ _CONFIGS.extend(
         # bfloat16 by init_train_state. These need their own config names because
         # freeze_filter is a pytree path filter, not a CLI-overridable scalar.
         make_base_molmo_config(
-            name="pi05_molmo_online_aw_sft_expert_only",
-            rl_config=AdvantageWeightedSFTLearnerConfig(
+            name="pi05_molmo_online_best_of_n_filtered_sft_expert_only",
+            rl_config=BestofNFilteredSFTLearnerConfig(
                 online_ratio=1.0,
-                awr_loss_weight=0.0,
-                filtered_sft_weight=1.0,
                 n_samples=32,
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
-            freeze_filter=_make_ogpo_freeze_filter(),
+            freeze_filter=_make_action_expert_freeze_filter(),
         ),
         make_base_libero_config(
-            name="pi05_libero_online_aw_sft_expert_only",
-            rl_config=AdvantageWeightedSFTLearnerConfig(
+            name="pi05_libero_online_best_of_n_filtered_sft_expert_only",
+            rl_config=BestofNFilteredSFTLearnerConfig(
                 online_ratio=1.0,
-                awr_loss_weight=0.0,
-                filtered_sft_weight=1.0,
                 n_samples=32,
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
-            freeze_filter=_make_ogpo_freeze_filter(),
-        ),
-        # 3. MPO Weighted SFT
-        make_base_libero_config(
-            name="pi05_libero_online_mpo_sft",
-            rl_config=MPOWeightedSFTLearnerConfig(
-                store_buffer_actions_in_batch=False,
-                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
-            ),
-        ),
-        make_base_libero_config(
-            name="pi05_libero_online_flow_grpo_sft",
-            rl_config=FlowGRPOSFTLearnerConfig(
-                store_buffer_actions_in_batch=True,
-                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
-            ),
+            freeze_filter=_make_action_expert_freeze_filter(),
         ),
         # 4. Best of N
         make_base_libero_config(
@@ -574,22 +427,6 @@ _CONFIGS.extend(
         make_base_molmo_config(
             name="pi05_molmo_online_best_of_n",
             rl_config=BestofNLearnerConfig(online_ratio=1.0),
-        ),
-        make_base_libero_config(
-            name="pi05_libero_online_dsrl",
-            rl_config=DSRLLearnerConfig(),
-        ),
-        # OGPO: PPO on flow policies with on-policy SDE log-probs and a BC
-        # anchor on the same on-policy batch. v1 freezes the PaliGemma
-        # backbone + SigLIP tower; only the action expert and the small
-        # action heads are trainable. See docs/ogpo_agent_plan.md.
-        make_base_libero_config(
-            name="pi05_libero_online_ogpo_sft",
-            rl_config=OGPOSFTLearnerConfig(
-                policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
-                group_num_samples=8,
-            ),
-            freeze_filter=_make_ogpo_freeze_filter(),
         ),
     ]
 )
