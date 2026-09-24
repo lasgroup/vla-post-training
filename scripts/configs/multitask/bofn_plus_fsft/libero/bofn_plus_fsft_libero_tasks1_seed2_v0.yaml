@@ -1,5 +1,5 @@
 script: scripts/exp.py
-config_name: pi05_libero_online_aw_sft
+config_name: pi05_libero_online_best_of_n_filtered_sft
 project_name: vla-post-training
 group_name: multitask_tasks1_bofn_plus_fsft_libero_v0_seed2
 params:
@@ -50,8 +50,6 @@ params:
   collect.store_prefix_rep: [True]
 
   rl.n_samples: [32]
-  rl.awr_loss_weight: [0.0]
-  rl.filtered_sft_weight: [1.0]
   # 10 collections x (10000/100) = 100 policy updates each = 1000 total, matching fsft_libero_tasks1.
   rl.policy.update_interval: [100]
 

@@ -2,7 +2,7 @@
 """Launcher for experiments.
 
 Usage:
-    ./scripts/launcher.py --config scripts/configs/filtered_sft.yaml
+    ./scripts/launcher.py --config scripts/configs/multitask/fsft/libero/fsft_libero_tasks1_seed0_v0.yaml
 """
 
 import argparse
@@ -39,7 +39,7 @@ def generate_srun_command(
 
     Args:
         script: Path to the Python training script (relative to project root).
-        config_name: Positional config name (e.g. "pi05_libero_online_flow_grpo_sft").
+        config_name: Positional config name (e.g. "pi05_libero_online_filtered_sft").
         flags: Dictionary of CLI flags and their values.
         account: SLURM account.
         environment: SLURM environment name.
@@ -111,8 +111,8 @@ def _bool_flag_name(flag: str, value: bool) -> str:
     """Build tyro-compatible bool flag names for flat and nested fields.
 
     Examples:
-        rl.normalize_adv=True  -> --rl.normalize_adv
-        rl.normalize_adv=False -> --rl.no-normalize_adv
+        collect.store_prefix_rep=True  -> --collect.store_prefix_rep
+        collect.store_prefix_rep=False -> --collect.no-store_prefix_rep
         overwrite=False        -> --no-overwrite
     """
     if value:
@@ -294,7 +294,7 @@ def apply_requeue_flags(flags: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/filtered_sft.yaml")
+    parser.add_argument("--config", type=str, required=True, help="Path to an experiment grid YAML")
     parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
     parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local"], help="Execution mode")
     parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")

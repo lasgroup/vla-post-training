@@ -56,11 +56,10 @@ import tqdm_loggable.auto as tqdm
 
 
 from src.envs import make_env
-from src.rl.advantage_weighted_sft.advantage_weighted_sft_learner import AdvantageWeightedSFTLearner
+from src.rl.best_of_n_filtered_sft.best_of_n_filtered_sft_learner import BestofNFilteredSFTLearner
 from src.rl.best_of_n.best_of_n_learner import BestofNLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
-from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.runtime_state import save_epoch_state, load_resume_state
@@ -71,12 +70,8 @@ def main(config: _config.OnlineTrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
 
-    # OGPOSFTLearnerConfig subclasses AdvantageWeightedSFTLearnerConfig, so it
-    # must be checked first.
-    if isinstance(config.rl, _config.OGPOSFTLearnerConfig):
-        algo_class = OGPOAgentLearner
-    elif isinstance(config.rl, _config.AdvantageWeightedSFTLearnerConfig):
-        algo_class = AdvantageWeightedSFTLearner
+    if isinstance(config.rl, _config.BestofNFilteredSFTLearnerConfig):
+        algo_class = BestofNFilteredSFTLearner
     elif isinstance(config.rl, _config.BestofNLearnerConfig):
         algo_class = BestofNLearner
     elif isinstance(config.rl, _config.FilteredSFTLearnerConfig):
