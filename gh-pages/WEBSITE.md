@@ -22,7 +22,7 @@ See GitHub's [custom Pages workflow documentation](https://docs.github.com/en/pa
 
 ## Content and provenance
 
-- Template: `/Users/yardas/vla-post-training-website/`, preserving its title/authors/resource links, teaser, abstract, motivation, method, evaluation, highlights, citation, and attribution structure. Bulma is copied from the supplied template; page styling and JavaScript are adapted for this paper.
+- Template: `/Users/yardas/vla-post-training-website/`, preserving its title/authors/resource links, teaser, abstract, motivation, evaluation, highlights, citation, and attribution structure. Bulma is copied from the supplied template; page styling and JavaScript are adapted for this paper.
 - Source: `_ICLR__27__Multi_task_policy_learning_SwissAI (1).zip`, supplied from Downloads. Figure variants are the ones referenced by the active paper source, not older alternatives.
 - `static/paper/generalist-policy-improvement.pdf` is compiled from that ZIP with `latexmk -pdf main_ICLR.tex`; it retains the source manuscript's anonymous submission formatting. The website author list and affiliation numbering were supplied separately by the user. No affiliations were inferred for authors without a number.
 - All numerical statements describe the manuscript's simulation experiments. The page labels the manuscript as a submission, not an accepted publication.

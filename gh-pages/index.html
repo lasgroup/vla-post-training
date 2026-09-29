@@ -55,7 +55,7 @@
       <div class="container is-max-desktop has-text-centered">
         <p class="eyebrow">Generalist robot learning</p>
         <h1 class="title is-1 publication-title" id="paper-title">Reinforcement Learning Enables Scaling <span>Generalist Robot Policy Improvement</span></h1>
-        <p class="publication-venue">ICLR 2027 <span>· Submission</span></p>
+        <!-- <p class="publication-venue">ICLR 2027 <span>· Submission</span></p> -->
         <div class="publication-authors"><span class="author"><a href="https://openreview.net/profile?id=~Micha%C5%82_Korniak1">Michal Korniak</a><sup>1</sup></span>
 <span class="author"><a href="https://openreview.net/profile?id=~Marco_Bagatella1">Marco Bagatella</a><sup>2</sup></span>
 <span class="author"><a href="https://openreview.net/profile?id=~Ralf_R%C3%B6mer1">Ralf Römer</a><sup>3</sup></span>
@@ -119,7 +119,7 @@
   </section>
 
   <nav class="section-nav" aria-label="Page sections"><div>
-    <a href="#abstract">Abstract</a><a href="#motivation">Motivation</a><a href="#method">Method</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
+    <a href="#abstract">Abstract</a><a href="#motivation">Motivation</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
   </div></nav>
 
   <section class="section band" id="abstract" aria-labelledby="abstract-title">
@@ -138,30 +138,12 @@
       <h2 class="section-title" id="motivation-title">Motivation</h2>
       <p class="section-lead">Can a generalist robot become a better generalist?</p>
       <div class="content"><p>Online post-training often improves a robot on one deployment task while degrading its performance elsewhere. We ask whether experience across many tasks can improve the whole policy: both on the tasks it practices and on related tasks it has never encountered during post-training.</p></div>
-      <div class="research-questions">
-        <div><span>01</span><p>Can one policy improve across many training tasks at once?</p></div>
-        <div><span>02</span><p>When does that improvement transfer to unseen tasks?</p></div>
-        <div><span>03</span><p>Which learning mechanisms make that transfer possible?</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section band" id="method" aria-labelledby="method-title">
-    <div class="container is-max-desktop">
-      <h2 class="section-title" id="method-title">Method</h2>
-      <p class="section-lead">Two ways to learn from a robot’s own experience</p>
-      <p class="intro-copy">Starting from π<sub>0.5</sub>, we isolate policy adaptation from critic-guided action selection. Both operate in an iterative loop of online data collection and learning.</p>
-      <div class="method-grid">
-        <article class="method-card fsft"><p class="method-tag">Direct policy adaptation</p><h3>Filtered supervised fine-tuning</h3><p class="abbreviation">FSFT</p><div class="method-flow"><span>Collect rollouts</span><b aria-hidden="true">↓</b><span>Keep successful trajectories</span><b aria-hidden="true">↓</b><span>Update the full VLA</span></div><p>Fine-tune the policy on its successful experience using a supervised flow-matching objective.</p><p class="method-note">Learns by updating the policy parameters.</p></article>
-        <article class="method-card bon"><p class="method-tag">Critic-guided refinement</p><h3>Best-of-N action selection</h3><p class="abbreviation">BoN</p><div class="method-flow"><span>Sample 32 action chunks</span><b aria-hidden="true">↓</b><span>Score candidates with a learned critic</span><b aria-hidden="true">↓</b><span>Execute the highest-value candidate</span></div><p>Train a value function with temporal-difference learning and use it to rank actions from the frozen base policy.</p><p class="method-note">Learns a critic; keeps the policy parameters fixed.</p></article>
-      </div>
-      <p class="section-note">Shared protocol: 10 improvement iterations · 20 episodes per task per iteration · 1–64 training tasks</p>
     </div>
   </section>
 
   <section class="section" id="evaluation" aria-labelledby="evaluation-title">
     <div class="container is-max-desktop">
-      <h2 class="section-title" id="evaluation-title">Evaluation</h2>
+      <h2 class="section-title" id="evaluation-title">Setup</h2>
       <p class="section-lead">Separate task improvement from generalization</p>
       <p class="intro-copy">MolmoSpaces lets us vary two axes of task diversity: <strong>the object to manipulate</strong> and <strong>the scene it appears in</strong>. We scale from 1 to 64 training tasks and evaluate transfer to unseen scenes and unseen objects.</p>
       <div class="task-gallery">
@@ -178,32 +160,9 @@
       <h2 class="section-title" id="results-title">Results</h2>
       <p class="section-lead">Generalist improvement scales with task diversity</p>
       <figure class="paper-figure"><a class="figure-link" href="static/figures/scaling.svg" data-zoom aria-label="Enlarge: MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, and 64 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects."><img width="1666" height="589" src="static/figures/scaling.svg" alt="MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, and 64 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>BoN generalizes beyond the training tasks.</strong> Final success rates as the training set grows. Orange: BoN; blue: FSFT; dashed: base policy. Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/scaling.svg">SVG ↗</a></figcaption></figure>
-      <div class="result-stats">
-        <div><strong>+14–21<span> pp</span></strong><p>BoN over FSFT on multi-task <br>MolmoSpaces training sets</p></div>
-        <div><strong>Up to +30<span> pp</span></strong><p>Over the base policy <br>on unseen scenes</p></div>
-        <div><strong>Up to +10<span> pp</span></strong><p>Over the base policy <br>on unseen objects</p></div>
-      </div>
-      <p class="section-note">Success-rate gains reported in the paper; pp = percentage points.</p>
       <div class="result-detail">
         <div><p class="eyebrow">What kind of diversity matters?</p><h3>Transfer follows the training distribution</h3><p>Diversifying scenes helps transfer to new scenes; diversifying objects helps transfer to new objects. Only scaling object diversity surpasses the base policy on both axes in this comparison.</p><p>Generalization depends on the kinds of behaviors a robot practices, as well as how many tasks it sees.</p></div>
         <figure class="paper-figure"><a class="figure-link" href="static/figures/generalization.svg" data-zoom aria-label="Enlarge: Generalization when scaling scene diversity versus object diversity."><img width="1073" height="581" src="static/figures/generalization.svg" alt="Generalization when scaling scene diversity versus object diversity." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Diversification transfers best along its own axis.</strong> Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/generalization.svg">SVG ↗</a></figcaption></figure>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="recipe" aria-labelledby="recipe-title">
-    <div class="container is-max-desktop">
-      <h2 class="section-title" id="recipe-title">What makes the recipe work?</h2>
-      <p class="section-lead">Simple choices have a large effect</p>
-      <figure class="paper-figure"><a class="figure-link" href="static/figures/recipe-ablations.svg" data-zoom aria-label="Enlarge: Ablations of full VLA versus expert-only tuning, critic architecture, and value learning objective."><img width="1632" height="534" src="static/figures/recipe-ablations.svg" alt="Ablations of full VLA versus expert-only tuning, critic architecture, and value learning objective." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Recipe ablations.</strong> Left: full VLA vs. action-expert-only FSFT. Center: critic architecture. Right: TD vs. Monte Carlo targets and classification vs. regression. <a href="static/figures/recipe-ablations.svg">SVG ↗</a></figcaption></figure>
-      <div class="recipe-notes">
-        <div><h3>Adapt the full policy</h3><p>Full VLA tuning improves FSFT on training tasks and unseen scenes, but increases the risk of forgetting on unseen objects.</p></div>
-        <div><h3>Use a residual critic</h3><p>BroNet residual connections improve performance by more than 10 percentage points over a standard MLP critic.</p></div>
-        <div><h3>Learn with TD regression</h3><p>Temporal-difference targets with a regression loss give the largest and most consistent gains in the critic ablations.</p></div>
-      </div>
-      <div class="result-detail extraction">
-        <div><p class="eyebrow">Combining policy and value learning</p><h3>Filtering is a key ingredient</h3><p>FSFT+BoN can bring modest gains on training tasks, but does not improve generalization beyond the standalone methods. In the LIBERO comparisons, filtering successful trajectories is crucial for stable policy updates.</p><p>Adding FSFT-style filtering to PARL closes much of the gap to FSFT+BoN.</p></div>
-        <figure class="paper-figure"><a class="figure-link" href="static/figures/policy-extraction.svg" data-zoom aria-label="Enlarge: Policy extraction comparison on LIBERO with one and four training tasks, including FSFT plus BoN, AWR, PARL, and filtered PARL."><img width="1073" height="583" src="static/figures/policy-extraction.svg" alt="Policy extraction comparison on LIBERO with one and four training tasks, including FSFT plus BoN, AWR, PARL, and filtered PARL." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Filtering matters more than the extraction objective.</strong> LIBERO with 1 and 4 tasks; mean training-task success over three seeds, with 95% stratified bootstrap confidence intervals. <a href="static/figures/policy-extraction.svg">SVG ↗</a></figcaption></figure>
       </div>
     </div>
   </section>
@@ -212,7 +171,6 @@
     <div class="container reading-width">
       <h2 class="section-title" id="highlights-title">Highlights</h2>
       <div class="takeaways"><p><span>01</span><strong>Multi-task improvement is possible.</strong> A single generalist policy can improve across a diverse collection of training tasks.</p><p><span>02</span><strong>Value learning enables transfer.</strong> With sufficient task diversity, critic-guided refinement transitions from forgetting to generalization.</p><p><span>03</span><strong>The task distribution matters.</strong> Diverse manipulation behaviors are essential for transferring to new objects.</p></div>
-      <aside class="limitations"><h3>Scope and limitations</h3><p>These are empirical findings in simulated manipulation environments. Tasks were selected so the base policy could make non-trivial progress. Generalization is strongest in the structured MolmoSpaces setting; LIBERO remains harder. Transfer to real hardware and whole-body control is an open direction.</p></aside>
     </div>
   </section>
 
