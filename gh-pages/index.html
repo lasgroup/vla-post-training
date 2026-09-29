@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reinforcement Learning Enables Scaling Generalist Robot Policy Improvement</title>
+  <meta name="description" content="A study of multi-task VLA post-training: how critic-guided reinforcement learning scales robot policy improvement to unseen scenes and objects.">
+  <meta name="theme-color" content="#3070b3">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Reinforcement Learning Enables Scaling Generalist Robot Policy Improvement">
+  <meta property="og:description" content="From task-specific adaptation to generalist improvement: scaling robot reinforcement learning with task diversity.">
+  <meta property="og:url" content="https://lasgroup.github.io/vla-post-training/">
+  <meta property="og:image" content="https://lasgroup.github.io/vla-post-training/static/images/social-preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Generalist robot policy improvement: results on training tasks, unseen scenes, and unseen objects.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="citation_title" content="Reinforcement Learning Enables Scaling Generalist Robot Policy Improvement">
+  <meta name="citation_author" content="Michal Korniak">
+  <meta name="citation_author" content="Marco Bagatella">
+  <meta name="citation_author" content="Ralf Römer">
+  <meta name="citation_author" content="Michal Nauman">
+  <meta name="citation_author" content="Yarden As">
+  <meta name="citation_author" content="Pranav Vignesh">
+  <meta name="citation_author" content="Manan Agarwal">
+  <meta name="citation_author" content="Leander Diaz-Bone">
+  <meta name="citation_author" content="Piotr Zalewski">
+  <meta name="citation_author" content="Mikołaj Czarnecki">
+  <meta name="citation_author" content="Lenart Treven">
+  <meta name="citation_author" content="Shashwat Saxena">
+  <meta name="citation_author" content="Sreyas Venkataraman">
+  <meta name="citation_author" content="Sarvesh Patil">
+  <meta name="citation_author" content="Zhiyuan Zhou">
+  <meta name="citation_author" content="Daniel Marta">
+  <meta name="citation_author" content="Oier Mees">
+  <meta name="citation_author" content="Nur Muhammad Mahi Shafiullah">
+  <meta name="citation_author" content="Carmelo Sferrazza">
+  <meta name="citation_author" content="Bhavya Sukhija">
+  <meta name="citation_author" content="Angela P. Schoellig">
+  <meta name="citation_author" content="Andreas Krause">
+  <meta name="citation_author" content="Max Simchowitz">
+  <meta name="citation_author" content="Andrew Wagenmaker">
+  <meta name="citation_pdf_url" content="https://lasgroup.github.io/vla-post-training/static/paper/generalist-policy-improvement.pdf">
+  <link rel="canonical" href="https://lasgroup.github.io/vla-post-training/">
+  <link rel="icon" type="image/svg+xml" href="static/images/favicon.svg">
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+  <script defer src="static/js/index.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<main id="main-content">
+  <section class="hero" id="top" aria-labelledby="paper-title">
+    <div class="hero-body">
+      <div class="container is-max-desktop has-text-centered">
+        <p class="eyebrow">Generalist robot learning</p>
+        <h1 class="title is-1 publication-title" id="paper-title">Reinforcement Learning Enables Scaling <span>Generalist Robot Policy Improvement</span></h1>
+        <p class="publication-venue">ICLR 2027 <span>· Submission</span></p>
+        <div class="publication-authors"><span class="author"><a href="https://openreview.net/profile?id=~Micha%C5%82_Korniak1">Michal Korniak</a><sup>1</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Marco_Bagatella1">Marco Bagatella</a><sup>2</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Ralf_R%C3%B6mer1">Ralf Römer</a><sup>3</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Michal_Nauman1">Michal Nauman</a></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Yarden_As1">Yarden As</a><sup>4</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Pranav_Vignesh1">Pranav Vignesh</a><sup>5</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Manan_Agarwal1">Manan Agarwal</a><sup>6</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Leander_Diaz-Bone1">Leander Diaz-Bone</a><sup>7</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Piotr_Zalewski1">Piotr Zalewski</a></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Miko%C5%82aj_Czarnecki1">Mikołaj Czarnecki</a><sup>8</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Lenart_Treven1">Lenart Treven</a></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Shashwat_Saxena1">Shashwat Saxena</a><sup>6</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Sreyas_Venkataraman1">Sreyas Venkataraman</a><sup>5</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Sarvesh_Patil1">Sarvesh Patil</a><sup>9</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Zhiyuan_Zhou2">Zhiyuan Zhou</a><sup>10</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Daniel_Marta1">Daniel Marta</a><sup>1</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Oier_Mees1">Oier Mees</a><sup>11</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Nur_Muhammad_Mahi_Shafiullah1">Nur Muhammad Mahi Shafiullah</a><sup>12</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Carmelo_Sferrazza1">Carmelo Sferrazza</a><sup>13</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Bhavya_Sukhija1">Bhavya Sukhija</a><sup>1</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Angela_P._Schoellig1">Angela P. Schoellig</a><sup>3</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Andreas_Krause1">Andreas Krause</a><sup>1</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Max_Simchowitz1">Max Simchowitz</a><sup>6</sup></span>
+<span class="author"><a href="https://openreview.net/profile?id=~Andrew_Wagenmaker1">Andrew Wagenmaker</a><sup>10</sup></span></div>
+        <details class="affiliations"><summary>Author affiliations</summary><ol><li><sup>1</sup> ETH Zurich</li>
+<li><sup>2</sup> Max Planck Institute for Intelligent Systems</li>
+<li><sup>3</sup> Technical University of Munich</li>
+<li><sup>4</sup> Department of Computer Science, ETH Zurich</li>
+<li><sup>5</sup> CMU (andrew.cmu.edu)</li>
+<li><sup>6</sup> Carnegie Mellon University</li>
+<li><sup>7</sup> Max-Planck Institute</li>
+<li><sup>8</sup> University of Warsaw</li>
+<li><sup>9</sup> School of Computer Science, CMU</li>
+<li><sup>10</sup> University of California, Berkeley</li>
+<li><sup>11</sup> Microsoft</li>
+<li><sup>12</sup> Electrical Engineering &amp; Computer Science, UC Berkeley</li>
+<li><sup>13</sup> University of Texas at Austin</li></ol></details>
+        <div class="publication-links">
+          <a class="button is-dark" href="static/paper/generalist-policy-improvement.pdf"><span aria-hidden="true">↗</span> Paper</a>
+          <a class="button is-dark" href="https://github.com/lasgroup/vla-post-training"><span aria-hidden="true">&lt;/&gt;</span> Code</a>
+          <a class="button is-dark" href="#results"><span aria-hidden="true">↗</span> Results</a>
+          <a class="button is-dark" href="#BibTeX"><span aria-hidden="true">{ }</span> BibTeX</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="teaser section" aria-labelledby="teaser-title">
+    <div class="container is-max-desktop">
+      <div class="teaser-layout">
+        <div class="teaser-story">
+          <p class="eyebrow">The central finding</p>
+          <h2 id="teaser-title">More diverse experience.<br><span>More general improvement.</span></h2>
+          <p>With enough task diversity, critic-guided reinforcement learning moves beyond specialization—and improves a robot’s performance on tasks it has never trained on.</p>
+          <div class="teaser-scenes"><figure class="scene"><img src="static/images/molmo-70.jpg" alt="MolmoSpaces robot manipulation scene: Training: box" loading="lazy" width="624" height="352"><figcaption>Training: box</figcaption></figure><figure class="scene"><img src="static/images/molmo-273.jpg" alt="MolmoSpaces robot manipulation scene: New scene: box" loading="lazy" width="624" height="352"><figcaption>New scene: box</figcaption></figure><figure class="scene"><img src="static/images/molmo-357.jpg" alt="MolmoSpaces robot manipulation scene: New object: remote control" loading="lazy" width="624" height="352"><figcaption>New object: remote control</figcaption></figure></div>
+          <p class="micro-caption">Evaluated in simulated manipulation environments.</p>
+        </div>
+        <div class="teaser-chart"><figure class="paper-figure"><a class="figure-link" href="static/figures/unseen-objects.png" data-zoom aria-label="Enlarge: Success on unseen objects rises with task diversity for BoN, while FSFT remains below the base policy."><img width="621" height="642" src="static/figures/unseen-objects.png" alt="Success on unseen objects rises with task diversity for BoN, while FSFT remains below the base policy." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>From forgetting to generalization.</strong> MolmoSpaces, unseen objects. <a href="static/figures/unseen-objects.pdf">Vector PDF ↗</a></figcaption></figure></div>
+      </div>
+    </div>
+  </section>
+
+  <nav class="section-nav" aria-label="Page sections"><div>
+    <a href="#abstract">Abstract</a><a href="#motivation">Motivation</a><a href="#method">Method</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
+  </div></nav>
+
+  <section class="section band" id="abstract" aria-labelledby="abstract-title">
+    <div class="container reading-width">
+      <h2 class="section-title" id="abstract-title">Abstract</h2>
+      <div class="content abstract-copy">
+        <p>The introduction of generalist robot policies has enabled a single, large model to learn a variety of tasks from a vast pre-training corpus. While these models often display powerful zero-shot generalization capabilities, they nonetheless typically require an adaptation phase to reach sufficient performance in deployment. Iterated self-improvement via reinforcement learning (RL) has demonstrated promise in enabling this adaptation, yet such approaches have been largely explored in <em>single-task</em> settings—where the goal is to simply improve on a narrow deployment task—which lies in stark contrast to the <em>multi-task</em> capabilities of the base policy.</p>
+        <p>In this work we ask whether generalist robot policies are capable of multi-task, <strong>generalist improvement in deployment</strong>—targeting many diverse tasks simultaneously—and what algorithmic recipe enables this. To answer this question, we first develop a set of structured evaluations to test generalist improvement capabilities, and systematically evaluate algorithmic and practical design choices regarding value estimation, policy extraction and resource allocation.</p>
+        <p>We show that not only generalist policies can be improved online across diverse tasks, but that the right recipe can enable <strong>generalization</strong> and increase performance on tasks not considered during online training. We characterize when this generalization occurs, and show that the training task distribution as well as the use of value-based RL are both critical. To the best of our knowledge, this is the first evidence for online generalist improvement for robot foundation models.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="motivation" aria-labelledby="motivation-title">
+    <div class="container reading-width">
+      <h2 class="section-title" id="motivation-title">Motivation</h2>
+      <p class="section-lead">Can a generalist robot become a better generalist?</p>
+      <div class="content"><p>Online post-training often improves a robot on one deployment task while degrading its performance elsewhere. We ask whether experience across many tasks can improve the whole policy: both on the tasks it practices and on related tasks it has never encountered during post-training.</p></div>
+      <div class="research-questions">
+        <div><span>01</span><p>Can one policy improve across many training tasks at once?</p></div>
+        <div><span>02</span><p>When does that improvement transfer to unseen tasks?</p></div>
+        <div><span>03</span><p>Which learning mechanisms make that transfer possible?</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section band" id="method" aria-labelledby="method-title">
+    <div class="container is-max-desktop">
+      <h2 class="section-title" id="method-title">Method</h2>
+      <p class="section-lead">Two ways to learn from a robot’s own experience</p>
+      <p class="intro-copy">Starting from π<sub>0.5</sub>, we isolate policy adaptation from critic-guided action selection. Both operate in an iterative loop of online data collection and learning.</p>
+      <div class="method-grid">
+        <article class="method-card fsft"><p class="method-tag">Direct policy adaptation</p><h3>Filtered supervised fine-tuning</h3><p class="abbreviation">FSFT</p><div class="method-flow"><span>Collect rollouts</span><b aria-hidden="true">↓</b><span>Keep successful trajectories</span><b aria-hidden="true">↓</b><span>Update the full VLA</span></div><p>Fine-tune the policy on its successful experience using a supervised flow-matching objective.</p><p class="method-note">Learns by updating the policy parameters.</p></article>
+        <article class="method-card bon"><p class="method-tag">Critic-guided refinement</p><h3>Best-of-N action selection</h3><p class="abbreviation">BoN</p><div class="method-flow"><span>Sample 32 action chunks</span><b aria-hidden="true">↓</b><span>Score candidates with a learned critic</span><b aria-hidden="true">↓</b><span>Execute the highest-value candidate</span></div><p>Train a value function with temporal-difference learning and use it to rank actions from the frozen base policy.</p><p class="method-note">Learns a critic; keeps the policy parameters fixed.</p></article>
+      </div>
+      <p class="section-note">Shared protocol: 10 improvement iterations · 20 episodes per task per iteration · 1–64 training tasks</p>
+    </div>
+  </section>
+
+  <section class="section" id="evaluation" aria-labelledby="evaluation-title">
+    <div class="container is-max-desktop">
+      <h2 class="section-title" id="evaluation-title">Evaluation</h2>
+      <p class="section-lead">Separate task improvement from generalization</p>
+      <p class="intro-copy">MolmoSpaces lets us vary two axes of task diversity: <strong>the object to manipulate</strong> and <strong>the scene it appears in</strong>. We scale from 1 to 64 training tasks and evaluate transfer to unseen scenes and unseen objects.</p>
+      <div class="task-gallery">
+        <div class="task-group training"><h3>Training tasks</h3><p>Two objects, two scenes each</p><div class="scene-grid"><figure class="scene"><img src="static/images/molmo-70.jpg" alt="MolmoSpaces robot manipulation scene: Box · scene 1" loading="lazy" width="624" height="352"><figcaption>Box · scene 1</figcaption></figure><figure class="scene"><img src="static/images/molmo-267.jpg" alt="MolmoSpaces robot manipulation scene: Box · scene 2" loading="lazy" width="624" height="352"><figcaption>Box · scene 2</figcaption></figure><figure class="scene"><img src="static/images/molmo-311.jpg" alt="MolmoSpaces robot manipulation scene: Ladle · scene 1" loading="lazy" width="624" height="352"><figcaption>Ladle · scene 1</figcaption></figure><figure class="scene"><img src="static/images/molmo-121.jpg" alt="MolmoSpaces robot manipulation scene: Ladle · scene 2" loading="lazy" width="624" height="352"><figcaption>Ladle · scene 2</figcaption></figure></div></div>
+        <div class="task-group"><h3>Unseen scenes</h3><p>Familiar objects, new settings</p><div class="scene-grid single"><figure class="scene"><img src="static/images/molmo-273.jpg" alt="MolmoSpaces robot manipulation scene: Box · new scene" loading="lazy" width="624" height="352"><figcaption>Box · new scene</figcaption></figure><figure class="scene"><img src="static/images/molmo-73.jpg" alt="MolmoSpaces robot manipulation scene: Ladle · new scene" loading="lazy" width="624" height="352"><figcaption>Ladle · new scene</figcaption></figure></div></div>
+        <div class="task-group"><h3>Unseen objects</h3><p>New manipulation behaviors</p><div class="scene-grid single"><figure class="scene"><img src="static/images/molmo-357.jpg" alt="MolmoSpaces robot manipulation scene: Remote control" loading="lazy" width="624" height="352"><figcaption>Remote control</figcaption></figure><figure class="scene"><img src="static/images/molmo-226.jpg" alt="MolmoSpaces robot manipulation scene: Wine bottle" loading="lazy" width="624" height="352"><figcaption>Wine bottle</figcaption></figure></div></div>
+      </div>
+      <p class="section-note">Example split from the paper. Additional experiments use LIBERO-90, where cross-task generalization remains more challenging.</p>
+    </div>
+  </section>
+
+  <section class="section band" id="results" aria-labelledby="results-title">
+    <div class="container is-max-desktop">
+      <h2 class="section-title" id="results-title">Results</h2>
+      <p class="section-lead">Generalist improvement scales with task diversity</p>
+      <figure class="paper-figure"><a class="figure-link" href="static/figures/scaling.png" data-zoom aria-label="Enlarge: MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, and 64 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects."><img width="1666" height="589" src="static/figures/scaling.png" alt="MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, and 64 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>BoN generalizes beyond the training tasks.</strong> Final success rates as the training set grows. Orange: BoN; blue: FSFT; dashed: base policy. Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/scaling.pdf">Vector PDF ↗</a></figcaption></figure>
+      <div class="result-stats">
+        <div><strong>+14–21<span> pp</span></strong><p>BoN over FSFT on multi-task <br>MolmoSpaces training sets</p></div>
+        <div><strong>Up to +30<span> pp</span></strong><p>Over the base policy <br>on unseen scenes</p></div>
+        <div><strong>Up to +10<span> pp</span></strong><p>Over the base policy <br>on unseen objects</p></div>
+      </div>
+      <p class="section-note">Success-rate gains reported in the paper; pp = percentage points.</p>
+      <div class="result-detail">
+        <div><p class="eyebrow">What kind of diversity matters?</p><h3>Transfer follows the training distribution</h3><p>Diversifying scenes helps transfer to new scenes; diversifying objects helps transfer to new objects. Only scaling object diversity surpasses the base policy on both axes in this comparison.</p><p>Generalization depends on the kinds of behaviors a robot practices, as well as how many tasks it sees.</p></div>
+        <figure class="paper-figure"><a class="figure-link" href="static/figures/generalization.png" data-zoom aria-label="Enlarge: Generalization when scaling scene diversity versus object diversity."><img width="1073" height="581" src="static/figures/generalization.png" alt="Generalization when scaling scene diversity versus object diversity." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Diversification transfers best along its own axis.</strong> Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/generalization.pdf">Vector PDF ↗</a></figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="recipe" aria-labelledby="recipe-title">
+    <div class="container is-max-desktop">
+      <h2 class="section-title" id="recipe-title">What makes the recipe work?</h2>
+      <p class="section-lead">Simple choices have a large effect</p>
+      <figure class="paper-figure"><a class="figure-link" href="static/figures/recipe-ablations.png" data-zoom aria-label="Enlarge: Ablations of full VLA versus expert-only tuning, critic architecture, and value learning objective."><img width="1632" height="534" src="static/figures/recipe-ablations.png" alt="Ablations of full VLA versus expert-only tuning, critic architecture, and value learning objective." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Recipe ablations.</strong> Left: full VLA vs. action-expert-only FSFT. Center: critic architecture. Right: TD vs. Monte Carlo targets and classification vs. regression. <a href="static/figures/recipe-ablations.pdf">Vector PDF ↗</a></figcaption></figure>
+      <div class="recipe-notes">
+        <div><h3>Adapt the full policy</h3><p>Full VLA tuning improves FSFT on training tasks and unseen scenes, but increases the risk of forgetting on unseen objects.</p></div>
+        <div><h3>Use a residual critic</h3><p>BroNet residual connections improve performance by more than 10 percentage points over a standard MLP critic.</p></div>
+        <div><h3>Learn with TD regression</h3><p>Temporal-difference targets with a regression loss give the largest and most consistent gains in the critic ablations.</p></div>
+      </div>
+      <div class="result-detail extraction">
+        <div><p class="eyebrow">Combining policy and value learning</p><h3>Filtering is a key ingredient</h3><p>FSFT+BoN can bring modest gains on training tasks, but does not improve generalization beyond the standalone methods. In the LIBERO comparisons, filtering successful trajectories is crucial for stable policy updates.</p><p>Adding FSFT-style filtering to PARL closes much of the gap to FSFT+BoN.</p></div>
+        <figure class="paper-figure"><a class="figure-link" href="static/figures/policy-extraction.png" data-zoom aria-label="Enlarge: Policy extraction comparison on LIBERO with one and four training tasks, including FSFT plus BoN, AWR, PARL, and filtered PARL."><img width="1073" height="583" src="static/figures/policy-extraction.png" alt="Policy extraction comparison on LIBERO with one and four training tasks, including FSFT plus BoN, AWR, PARL, and filtered PARL." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Filtering matters more than the extraction objective.</strong> LIBERO with 1 and 4 tasks; mean training-task success over three seeds, with 95% stratified bootstrap confidence intervals. <a href="static/figures/policy-extraction.pdf">Vector PDF ↗</a></figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="section band" id="highlights" aria-labelledby="highlights-title">
+    <div class="container reading-width">
+      <h2 class="section-title" id="highlights-title">Highlights</h2>
+      <div class="takeaways"><p><span>01</span><strong>Multi-task improvement is possible.</strong> A single generalist policy can improve across a diverse collection of training tasks.</p><p><span>02</span><strong>Value learning enables transfer.</strong> With sufficient task diversity, critic-guided refinement transitions from forgetting to generalization.</p><p><span>03</span><strong>The task distribution matters.</strong> Diverse manipulation behaviors are essential for transferring to new objects.</p></div>
+      <aside class="limitations"><h3>Scope and limitations</h3><p>These are empirical findings in simulated manipulation environments. Tasks were selected so the base policy could make non-trivial progress. Generalization is strongest in the structured MolmoSpaces setting; LIBERO remains harder. Transfer to real hardware and whole-body control is an open direction.</p></aside>
+    </div>
+  </section>
+
+  <section class="section" id="BibTeX" aria-labelledby="citation-title">
+    <div class="container reading-width">
+      <div class="bibtex-header"><h2 id="citation-title">BibTeX</h2><button class="copy-bibtex-btn" type="button">Copy citation</button></div>
+      <p class="citation-note">Submission manuscript · <a href="static/paper/citation.bib" download>Download .bib</a></p>
+      <pre id="bibtex-code"><code>@misc{korniak2026generalist,
+  title = {Reinforcement Learning Enables Scaling Generalist Robot Policy Improvement},
+  author = {Michal Korniak and
+            Marco Bagatella and
+            Ralf Römer and
+            Michal Nauman and
+            Yarden As and
+            Pranav Vignesh and
+            Manan Agarwal and
+            Leander Diaz-Bone and
+            Piotr Zalewski and
+            Mikołaj Czarnecki and
+            Lenart Treven and
+            Shashwat Saxena and
+            Sreyas Venkataraman and
+            Sarvesh Patil and
+            Zhiyuan Zhou and
+            Daniel Marta and
+            Oier Mees and
+            Nur Muhammad Mahi Shafiullah and
+            Carmelo Sferrazza and
+            Bhavya Sukhija and
+            Angela P. Schoellig and
+            Andreas Krause and
+            Max Simchowitz and
+            Andrew Wagenmaker},
+  year = {2026},
+  note = {Manuscript submitted to ICLR 2027},
+  url = {https://lasgroup.github.io/vla-post-training/}
+}</code></pre>
+      <p class="copy-status" role="status" aria-live="polite"></p>
+    </div>
+  </section>
+</main>
+<footer class="footer"><div class="container reading-width"><p>Adapted from the supplied FIPER project page and the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template">Academic Project Page Template</a>, originally based on <a href="https://nerfies.github.io/">Nerfies</a>.</p><p>Website template: <a rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>. Research figures and manuscript are from the authors’ paper.</p></div></footer>
+<a class="scroll-to-top" href="#top" aria-label="Back to top">↑</a>
+<dialog id="figure-dialog" aria-labelledby="figure-dialog-title"><div class="dialog-toolbar"><h2 id="figure-dialog-title">Figure</h2><button type="button" class="close-dialog" aria-label="Close enlarged figure">Close ×</button></div><div class="zoom-scroll"><img alt="" id="enlarged-figure"></div><p>Scroll to explore the figure. Press Escape or Close to return.</p></dialog>
+</body>
+</html>
