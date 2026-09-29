@@ -8,14 +8,30 @@ import os
 from pathlib import Path
 import tempfile
 
-from src.rl.dataset import read_nested, write_nested
-from flax.core import frozen_dict
-
 
 # Keys that, when present in `dummy_data`, switch the buffer into
-# "linked observation" mode (see ShardedReplayBuffer docstring).
+# "linked observation" mode: observations are stored once per episode step and
+# transitions reference them through `obs_index` / `next_obs_index`.
 _LINKED_OBS_KEY = "observations"
 _LINKED_INDEX_KEYS = ("obs_index", "next_obs_index")
+
+
+def write_nested(group: h5py.Group, data: dict):
+    """Recursively write nested dicts/arrays into HDF5 groups/datasets."""
+    for k, v in data.items():
+        if isinstance(v, dict):
+            write_nested(group.create_group(k), v)
+        else:
+            group.create_dataset(k, data=np.asarray(v), compression="gzip", chunks=True)
+
+
+def read_nested(group: h5py.Group) -> dict:
+    """Recursively read HDF5 groups/datasets into nested dicts/arrays."""
+    result = {}
+    for k in group.keys():
+        item = group[k]
+        result[k] = read_nested(item) if isinstance(item, h5py.Group) else item[()]
+    return result
 
 
 class ShardedReplayBuffer:
@@ -23,24 +39,18 @@ class ShardedReplayBuffer:
         self,
         dummy_data: Any,
         max_capacity: int,
-        batch_size: int | None = None,
         data_sharding: jax.sharding.NamedSharding | None = None,
         seed: Optional[int] = None,
-        freeze_dict: bool = True,
     ):
         """
         Args:
             dummy_data: A sample dictionary to define shapes/dtypes.
             max_capacity: Total number of transitions to store in RAM.
-            batch_size: The global batch size for sampling.
             data_sharding: JAX sharding spec for the output batches.
             seed: Random seed for sampling.
-            freeze_dict: Whether to freeze the output dicts
         """
         self.max_capacity = max_capacity
-        self.batch_size = batch_size
         self.data_sharding = data_sharding
-        self.freeze_dict = freeze_dict
         self.ptr = 0
         self.size = 0
         self.total_inserted = 0
@@ -66,7 +76,6 @@ class ShardedReplayBuffer:
 
         self.obs_storage = self._zeros_like_tree(observations, self.max_capacity)
         self._obs_leaves, self._obs_treedef = jax.tree_util.tree_flatten(self.obs_storage)
-        self.obs_ptr = 0
         self.obs_total = 0
 
         self.storage = self._zeros_like_tree(transition_dummy, self.max_capacity)
@@ -113,7 +122,6 @@ class ShardedReplayBuffer:
         for storage_leaf, new_leaf in zip(self._obs_leaves, obs_leaves):
             storage_leaf[obs_ring_idx] = new_leaf
         self.obs_total += num_obs
-        self.obs_ptr = int((self.obs_ptr + num_obs) % self.max_capacity)
 
         # Write the transitions + absolute observation pointers.
         txn_idx = (np.arange(self.ptr, self.ptr + num_new) % self.max_capacity).astype(np.int64)
@@ -136,12 +144,9 @@ class ShardedReplayBuffer:
             self.valid_start += 1
         self.size = int(self.total_inserted - self.valid_start)
 
-    def sample(self, batch_size=None) -> Any:
+    def sample(self, batch_size: int) -> dict:
         if self.size == 0:
             raise ValueError("Cannot sample from an empty buffer")
-        if batch_size is None:
-            assert self.batch_size is not None, "Batch size must be specified for sampling"
-            batch_size = self.batch_size
 
         ordinals = self._rng.integers(self.valid_start, self.total_inserted, size=batch_size)
         ring = (ordinals % self.max_capacity).astype(np.int64)
@@ -158,12 +163,7 @@ class ShardedReplayBuffer:
         # shard the assembled batch in one call rather than leaf by leaf.
         if self.data_sharding is not None:
             batch = jax.device_put(batch, self.data_sharding)
-        if self.freeze_dict:
-            return frozen_dict.freeze(batch)
         return batch
-
-    def __len__(self):
-        return self.size
 
     def rng_state_json(self) -> str:
         return json.dumps(self._rng.bit_generator.state)
@@ -174,7 +174,7 @@ class ShardedReplayBuffer:
         self._rng = np.random.default_rng()
         self._rng.bit_generator.state = json.loads(rng_state_json)
 
-    def save_shard(self, path: str | Path) -> dict[str, int | str | None]:
+    def save_shard(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         delta_count = self.total_inserted - self.persisted_total_inserted
@@ -238,7 +238,7 @@ class ShardedReplayBuffer:
         shard_dir: str | Path,
         *,
         rng_state_json: str | None = None,
-    ) -> dict[str, int | str | None]:
+    ) -> None:
         shard_dir = Path(shard_dir)
         if not shard_dir.exists():
             raise FileNotFoundError(f"Replay shard directory does not exist: {shard_dir}")
@@ -246,7 +246,6 @@ class ShardedReplayBuffer:
         self.ptr = 0
         self.size = 0
         self.total_inserted = 0
-        self.obs_ptr = 0
         self.obs_total = 0
         self.valid_start = 0
         shard_paths = sorted(shard_dir.glob("step_*.h5"))

@@ -1,27 +1,10 @@
-"""Gymnasium adapter for MolmoSpaces JSON benchmarks.
-
-This module exposes a single-environment gym-like interface over MolmoSpaces
-benchmark episodes.
-
-Example:
-    from src.molmo.molmospaces_gym_env import MolmoSpacesBenchmarkGymEnv
-    import numpy as np
-
-    env = MolmoSpacesBenchmarkGymEnv()
-    obs, info = env.reset()
-    action = {"arm": np.zeros(7), "gripper": np.zeros(1)}
-    obs, reward, terminated, truncated, info = env.step(action)
-    env.close()
-"""
-
 import dataclasses
-import importlib
 import logging
 import os
 import warnings
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import gymnasium as gym
 from gymnasium.wrappers import TimeLimit
@@ -33,13 +16,9 @@ from src.envs.wrappers import ensure_gymnasium_env
 logger = logging.getLogger(__name__)
 
 
-def _silence_molmo_spaces_logs() -> None:
-    # Keep errors visible, but suppress the INFO-level noise emitted by MolmoSpaces.
-    logging.getLogger("molmo_spaces").setLevel(logging.ERROR)
-
-
 @contextmanager
 def _suppress_molmo_spaces_output():
+    # Keep errors visible, but suppress the INFO-level noise emitted by MolmoSpaces.
     logging.getLogger("molmo_spaces").setLevel(logging.ERROR)
     with open(os.devnull, "w") as devnull:
         with warnings.catch_warnings():
@@ -81,15 +60,9 @@ class MolmoSpacesGymConfig:
     benchmark_dir: str = (
         "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231"
     )
-    eval_config_cls: str = (
-        "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"
-    )
-    episode_sampling: Literal["sequential", "random"] = "sequential"
-    seed: int = 0
     # sensor uuids to drop from the task sensor suite before stepping
     # i.e. segmentation masks that are ignored by pi0.5
     drop_sensor_uuids: tuple[str, ...] = ("object_image_points",)
-    reduce_resolution: bool = False
     # initial-state randomization: perturb object XY and robot init_qpos with rejection sampling.
     randomize_init_positions: bool = True
     init_object_position_noise_xy: float = 0.01  # meters, +/- uniform per axis
@@ -120,8 +93,6 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
                 "Expected benchmark.json or house_*/episode_*.json files."
             )
 
-        self._rng = np.random.default_rng(config.seed)
-        self._next_episode_idx = 0
         self._sampler: JsonEvalTaskSampler | None = None
         self._task = None
         self._task_description: str | None = None
@@ -134,22 +105,10 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self.action_space = gym.spaces.Dict({})
 
     def _make_eval_config(self):
-        spec = self._config.eval_config_cls
-        if ":" not in spec:
-            raise ValueError(
-                f"Invalid eval_config_cls '{spec}'. Expected format "
-                "'module.path:ClassName'."
-            )
-        module_name, class_name = spec.split(":", maxsplit=1)
-        module = importlib.import_module(module_name)
-        try:
-            eval_config_cls = getattr(module, class_name)
-        except AttributeError as exc:
-            raise ValueError(
-                f"Could not resolve class '{class_name}' in module '{module_name}'."
-            ) from exc
-        exp_config = eval_config_cls()
-        return exp_config
+        # Imported lazily so that it only happens in the env worker process.
+        from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
+
+        return PiPolicyEvalConfig()
 
     def _make_prompt_sampler(self, exp_config: Any) -> PromptSampler:
         return PromptSampler(
@@ -159,23 +118,11 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         )
 
     def _choose_episode(self):
-        if self._episode_id is not None:
-            if not 0 <= self._episode_id < len(self._episodes):
-                raise ValueError(
-                    f"episode_id {self._episode_id} out of range for available episodes."
-                )
-            idx = self._episode_id
-        elif self._config.episode_sampling == "random":
-            idx = int(self._rng.integers(len(self._episodes)))
-        elif self._config.episode_sampling == "sequential":
-            idx = self._next_episode_idx
-            self._next_episode_idx = (self._next_episode_idx + 1) % len(self._episodes)
-        else:
+        if not 0 <= self._episode_id < len(self._episodes):
             raise ValueError(
-                f"Unsupported episode_sampling='{self._config.episode_sampling}'. "
-                "Expected one of {'sequential', 'random'}."
+                f"episode_id {self._episode_id} out of range for available episodes."
             )
-        return self._episodes[idx]
+        return self._episodes[self._episode_id]
 
     def _close_active_episode(self) -> None:
         if self._sampler is not None:
@@ -205,13 +152,9 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         self._ensure_open()
         super().reset(seed=seed)
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "molmo_0"
         self._episode_id = int(task_id.split("_")[-1])
         episode = self._choose_episode()
-        if self._config.reduce_resolution:
-            episode = episode.model_copy(update={"img_resolution": tuple(int(e // 2) for e in episode.img_resolution)})
         reuse = self._sampler is not None and self._loaded_episode_id == self._episode_id
 
         if not reuse:
@@ -307,7 +250,6 @@ class MolmoActionAdapter(gym.ActionWrapper):
 
 
 def make_env_molmo(config, tasks, num_devices: int = 4):
-    _silence_molmo_spaces_logs()
     env_config = MolmoSpacesGymConfig()
     benchmark_dir = Path(env_config.benchmark_dir).expanduser().resolve()
 

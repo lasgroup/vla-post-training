@@ -1,5 +1,4 @@
 # ruff: noqa: F722
-import dataclasses
 import functools
 import logging
 from typing import Any
@@ -25,13 +24,19 @@ from src.rl.best_of_n.update_critic import (
     _build_pi0_backbone_critic_defs,
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
-from src.rl.networks.rl_networks import ObsType
+from src.rl.networks.rl_networks import ObsType, PREFIX_EMBEDDING_NAME
 from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 from src.training.config import BestofNLearnerConfig
 
 
 class BestofNLearner(FilteredSFTLearner):
+    # Prefixes are cached in the buffer at collection time, so critic updates consume
+    # only `state` + the cached prefix and never read the stored images (the policy is
+    # frozen). Dropping images cuts the buffer footprint ~45x and makes shard
+    # save/restore cheap.
+    _store_prefix_rep = True
+    _buffer_obs_drop_keys = ("image",)
+
     def __init__(self, config):
 
         assert isinstance(config.rl, BestofNLearnerConfig), (
@@ -66,23 +71,8 @@ class BestofNLearner(FilteredSFTLearner):
                 return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, num_bins=num_bins, rngs=rngs)
         else:
             state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
-        
-        self._prefix_embed_dim = None
-        if config.collect.store_prefix_rep and PREFIX_EMBEDDING_NAME in dummy_obs:
-            self._prefix_embed_dim = int(np.asarray(dummy_obs[PREFIX_EMBEDDING_NAME]).shape[-1])
 
-        # When prefixes are cached (store_prefix_rep) and the critic is not retrained on
-        # freshly resampled on-policy actions (train_on_policy_value_function), nothing
-        # ever reads the stored images: critic updates consume only `state` + the cached
-        # prefix, and the policy is frozen. Drop images from the online buffer entirely,
-        # cutting its footprint ~45x and making shard save/restore cheap.
-        self._buffer_obs_drop_keys: tuple[str, ...] = ()
-        if config.collect.store_prefix_rep and not config.rl.train_on_policy_value_function:
-            self._buffer_obs_drop_keys = ("image",)
-            logging.info(
-                "Best-of-N: prefixes are cached and critics are not trained on-policy; "
-                "dropping images from the online replay buffer to save memory."
-            )
+        self._prefix_embed_dim = prefix_embedding_shape[-1]
 
         super().__init__(config)
 
@@ -129,16 +119,11 @@ class BestofNLearner(FilteredSFTLearner):
         self._refresh_critic_update_function()
 
     def _refresh_critic_update_function(self):
-        self._train_state_sharding = sharding.fsdp_sharding(
-            self._train_state, self._mesh, log=False
-        )
-
-        def _critics_wrapper(batch, q_state, value_state, policy_state, rng):
+        def _critics_wrapper(batch, q_state, value_state, rng):
             return self._update_critics(
                 batch=batch,
                 q_state=q_state,
                 value_state=value_state,
-                policy_state=policy_state,
                 rng=rng,
             )
 
@@ -148,7 +133,6 @@ class BestofNLearner(FilteredSFTLearner):
                 self._data_sharding,
                 self._state_action_critic_state_sharding,
                 self._value_state_sharding,
-                self._train_state_sharding,
                 self._replicated_sharding,
             ),
             out_shardings=(
@@ -202,46 +186,15 @@ class BestofNLearner(FilteredSFTLearner):
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
-        if self._prefix_embed_dim is not None:
-            zeros = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
-            dummy["observations"][PREFIX_EMBEDDING_NAME] = zeros
+        dummy["observations"][PREFIX_EMBEDDING_NAME] = np.zeros((1, self._prefix_embed_dim), dtype=np.float32)
         for k in self._buffer_obs_drop_keys:
             dummy["observations"].pop(k, None)
         return dummy
-
-    def _recompute_prefix_embedding(
-            self,
-            *,
-            observation: dict[str, Any],
-            policy_state: training_utils.TrainState,
-    ) -> at.Float[at.Array, "batch embed"] | None:
-        model = self._get_policy_model(policy_state)
-        # Both SFT-loader Observations and online-buffer dicts are already
-        # fully transformed (repack, LiberoInputs, Normalize, tokenize, etc.)
-        # by the data pipeline / _preprocess_insert
-        obs = _model.Observation.from_dict(observation)
-        prefix = self._policy._get_prefix_rep_with_model(model, observation=obs)
-        prefix = prefix.reshape((prefix.shape[0], -1, prefix.shape[-1]))
-        prefix = jnp.mean(prefix, axis=1)
-        return prefix
-
-    @staticmethod
-    def _get_policy_model(policy_state: training_utils.TrainState) -> _model.BaseModel:
-        """Merge policy params into a model. Call once per update() to avoid duplicates."""
-        params = (
-            policy_state.ema_params
-            if policy_state.ema_params is not None
-            else policy_state.params
-        )
-        model = nnx.merge(policy_state.model_def, params)
-        model.eval()
-        return model
 
     @at.typecheck
     def _online_batch_to_critic_batch(
             self,
             online_batch: dict[str, Any],
-            policy_state: training_utils.TrainState,
     ) -> tuple[
         ObsType,
         _model.Actions,
@@ -250,54 +203,18 @@ class BestofNLearner(FilteredSFTLearner):
         at.Float[at.Array, " b"],
         at.Float[at.Array, " b"],
     ]:
-        online_observation = online_batch["observation"]
-        observation_dict: dict[str, Any] = {
-            "state": online_observation["state"],
-        }
-
-        next_observation = online_batch["next_observation"]
-        next_observation_dict: dict[str, Any] = {"state": next_observation["state"]}
-
-        if PREFIX_EMBEDDING_NAME in online_observation and PREFIX_EMBEDDING_NAME in next_observation:
-            observation_dict[PREFIX_EMBEDDING_NAME] = online_observation[PREFIX_EMBEDDING_NAME]
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = next_observation[PREFIX_EMBEDDING_NAME]
-        else:
-            observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
-                observation=online_observation, policy_state=policy_state,
-            )
-            next_observation_dict[PREFIX_EMBEDDING_NAME] = self._recompute_prefix_embedding(
-                observation=next_observation, policy_state=policy_state,
-            )
+        # Critics only see the (normalized) state and the cached prefix embedding.
+        def critic_obs(obs):
+            return {"state": obs["state"], PREFIX_EMBEDDING_NAME: obs[PREFIX_EMBEDDING_NAME]}
 
         return (
-            observation_dict,
+            critic_obs(online_batch["observation"]),
             online_batch["actions"],
-            next_observation_dict,
+            critic_obs(online_batch["next_observation"]),
             online_batch["reward"],
             online_batch["discount"],
             online_batch["mc_return"],
         )
-
-    def _sft_batch_to_actor_batch(
-            self,
-            sft_batch: tuple[_model.Observation, _model.Actions],
-            policy_state: training_utils.TrainState,
-    ) -> tuple[_model.Observation, ObsType, _model.Actions]:
-        policy_observation, actions = sft_batch
-        policy_obs_dict = policy_observation.to_dict()
-
-        critic_observation: dict[str, Any] = {
-            "state": policy_obs_dict["state"],
-        }
-
-        prefix_embedding = self._recompute_prefix_embedding(
-            observation=policy_obs_dict,
-            policy_state=policy_state,
-        )
-
-        critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
-
-        return policy_observation, critic_observation, actions
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
         assert env_index in range(len(self._episode_storage)), \
@@ -334,7 +251,6 @@ class BestofNLearner(FilteredSFTLearner):
             task_to_indices.setdefault(str(task), []).append(i)
 
         env_num = len(task_description)
-        return_prefix_rep = self._config.collect.store_prefix_rep
         all_best_actions = None
         all_best_prefix = None
 
@@ -499,36 +415,18 @@ class BestofNLearner(FilteredSFTLearner):
                 )
             all_best_actions[indices] = np.asarray(best, dtype=np.float32)
 
-            if return_prefix_rep:
-                if all_best_prefix is None:
-                    all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
-                all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
+            if all_best_prefix is None:
+                all_best_prefix = np.zeros((env_num, prefix.shape[-1]), dtype=np.float32)
+            all_best_prefix[indices] = np.asarray(prefix, dtype=np.float32)
 
-        return (all_best_actions, all_best_prefix) if return_prefix_rep else all_best_actions
+        return all_best_actions, all_best_prefix
 
-    @at.typecheck
-    def _get_on_policy_action(
-            self,
-            online_observation: _model.Observation,
-            policy_state: training_utils.TrainState,
-            rng: at.KeyArrayLike,
-    ) -> _model.Actions:
-        model = self._get_policy_model(policy_state)
-        sampled_actions = model.sample_actions(
-            observation=online_observation,
-            rng=rng,
-            return_info_dict=False,
-            return_prefix_rep=False,
-        )
-        return sampled_actions
-        
     @at.typecheck
     def _update_critics(
             self,
             batch: dict[str, Any],
             q_state: training_utils.TrainState,
             value_state: training_utils.TrainState,
-            policy_state: training_utils.TrainState,
             rng: at.KeyArrayLike,
     ) -> tuple[
         training_utils.TrainState,
@@ -536,27 +434,8 @@ class BestofNLearner(FilteredSFTLearner):
         dict[str, at.Array],
         dict[str, at.Array],
     ]:
-        if self._config.rl.train_on_policy_value_function:
-            # We replace the action from the batch with the on policy action
-            # This ensures that we train an on policy critic.
-            policy_sample_rng, rng = jax.random.split(rng, 2)
-            value_actions = self._get_on_policy_action(
-                online_observation=_model.Observation.from_dict(batch["observation"]),
-                policy_state=policy_state,
-                rng=policy_sample_rng,
-            )
-        else:
-            value_actions = batch["actions"]
-        # Add prefix representation to the batch for the critic
-        batch = self._online_batch_to_critic_batch(
-            batch,
-            policy_state,
-        )
-        
-        # Update the state action critic state
+        batch = self._online_batch_to_critic_batch(batch)
         num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
-
-        value_batch = (batch[0], value_actions, batch[2], batch[3], batch[4], batch[5])
 
         for _ in range(num_updates):
             q_rng, v_rng, rng = jax.random.split(rng, 3)
@@ -572,38 +451,13 @@ class BestofNLearner(FilteredSFTLearner):
                 v_rng,
                 value_state,
                 q_state,
-                value_batch,
+                batch,
             )
 
         return q_state, value_state, q_info, value_info
 
     @at.typecheck
     def update(self) -> dict:
-
-        if self._config.rl.critic.pre_training_steps == self.training_steps:
-            # Reset optimizer state of the value and q function
-            q_opt_state = self._state_action_critic_state.tx.init(
-                nnx.filter_state(self._state_action_critic_state.params, nnx.Param)
-            )
-            new_ema_state_action_critic_params = jax.tree.map(jnp.copy, self._state_action_critic_state.params)
-            self._state_action_critic_state = dataclasses.replace(
-                self._state_action_critic_state,
-                opt_state=q_opt_state,
-                ema_params=new_ema_state_action_critic_params,
-            )
-            del new_ema_state_action_critic_params, q_opt_state
-
-            v_opt_state = self._value_state.tx.init(
-                nnx.filter_state(self._value_state.params, nnx.Param)
-            )
-            new_ema_value_params = jax.tree.map(jnp.copy, self._value_state.params)
-            self._value_state = dataclasses.replace(
-                self._value_state,
-                opt_state=v_opt_state,
-                ema_params=new_ema_value_params,
-            )
-            del new_ema_value_params, v_opt_state
-
         self.training_steps += 1
         update_critic = (
                 self.training_steps >= self._config.rl.critic.training_start_step
@@ -619,32 +473,29 @@ class BestofNLearner(FilteredSFTLearner):
         if self._config.rl.critic.batch_size:
             critic_batch_size = self._config.rl.critic.batch_size
         else:
-
-            critic_batch_size = int(self._config.batch_size * min(1.0, self._config.rl.online_ratio))
+            critic_batch_size = self._config.batch_size
 
         use_online = self._online_data_buffer.size >= critic_batch_size
 
         critic_info = {}
         if use_online:
             critic_online_batch = self._online_data_buffer.sample(batch_size=critic_batch_size)
-            if update_critic:
-                critic_rng, self._rng = jax.random.split(self._rng, 2)
-                with sharding.set_mesh(self._mesh):
-                    q_state, value_state, q_info, value_info = (
-                        self._update_critics_jitted(
-                            critic_online_batch,
-                            self._state_action_critic_state,
-                            self._value_state,
-                            self._train_state,
-                            critic_rng,
-                        )
+            critic_rng, self._rng = jax.random.split(self._rng, 2)
+            with sharding.set_mesh(self._mesh):
+                q_state, value_state, q_info, value_info = (
+                    self._update_critics_jitted(
+                        critic_online_batch,
+                        self._state_action_critic_state,
+                        self._value_state,
+                        critic_rng,
                     )
-                self._state_action_critic_state = q_state
-                self._value_state = value_state
+                )
+            self._state_action_critic_state = q_state
+            self._value_state = value_state
 
-                critic_info = {
-                    f"critic/q_{key}": value for key, value in q_info.items()
-                } | {f"critic/value_{key}": value for key, value in value_info.items()}
+            critic_info = {
+                f"critic/q_{key}": value for key, value in q_info.items()
+            } | {f"critic/value_{key}": value for key, value in value_info.items()}
         info = (
                 critic_info
                 | {

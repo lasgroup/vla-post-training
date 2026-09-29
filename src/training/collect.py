@@ -20,9 +20,7 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
-def evaluate_policy(
-    agent: Agent, env: BaseVectorEnv, config, step: int
-):
+def evaluate_policy(agent: Agent, env: BaseVectorEnv, config):
     num_rollouts_per_task = config.collect.num_eval_rollouts
     total_episodes = 0
     total_successes = 0

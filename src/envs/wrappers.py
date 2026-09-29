@@ -114,7 +114,24 @@ def obs_to_pi_zero_input(
     return obs_pi_zero
 
 
+def _expand_space(space: gym.Space, n: int) -> gym.Space:
+    """Space of `n` stacked samples from `space` (leading axis of size n)."""
+    if isinstance(space, gym.spaces.Box):
+        return gym.spaces.Box(
+            low=np.repeat(space.low[None, ...], n, axis=0),
+            high=np.repeat(space.high[None, ...], n, axis=0),
+            dtype=space.dtype,
+        )
+    if isinstance(space, gym.spaces.Discrete):
+        return gym.spaces.MultiDiscrete([space.n] * n)
+    if isinstance(space, gym.spaces.Dict):
+        return gym.spaces.Dict({k: _expand_space(v, n) for k, v in space.spaces.items()})
+    raise NotImplementedError(f"Space type {type(space)} not supported for expansion.")
+
+
 class QueryFrequencyWrapper(gym.Wrapper):
+    """Executes an action chunk for `query_frequency` env steps and stacks the results."""
+
     def __init__(
         self,
         env: gym.Env,
@@ -124,34 +141,12 @@ class QueryFrequencyWrapper(gym.Wrapper):
         self._query_frequency = query_frequency
 
     @property
-    def expand_space(self, space):
-        # We define a function to expand a single space leaf (e.g., a Box)
-        if isinstance(space, gym.spaces.Box):
-            # Expand Box: Shape becomes (query_frequency, *original_shape)
-            # We repeat the low/high bounds to match the new shape
-            return gym.spaces.Box(
-                low=np.repeat(space.low[None, ...], self._query_frequency, axis=0),
-                high=np.repeat(space.high[None, ...], self._query_frequency, axis=0),
-                dtype=space.dtype,
-            )
-        elif isinstance(space, gym.spaces.Discrete):
-            # Expand Discrete: Becomes MultiDiscrete with 'query_frequency' dimensions
-            return gym.spaces.MultiDiscrete([space.n] * self._query_frequency)
-        else:
-            raise NotImplementedError(
-                f"Space type {type(space)} not supported for expansion."
-            )
-
-    @property
     def action_space(self):
-        return jax.tree_util.tree_map(self.expand_space, self.env.action_space)
+        return _expand_space(self.env.action_space, self._query_frequency)
 
     @property
     def observation_space(self):
-        obs_space = jax.tree_util.tree_map(
-            self.expand_space, self.env.observation_space
-        )
-        return obs_space
+        return _expand_space(self.env.observation_space, self._query_frequency)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # 1. Reset the underlying environment
@@ -217,14 +212,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
             stacked["truncated"],
             stacked["info"],
         )
-
-
-class PrefixEmbeddingVectorEnvWrapper(QueryFrequencyWrapper):
-    """Query wrapper that ignores prefix payload when stepping the underlying env."""
-
-    def step(self, action):
-        env_action = action[0] if isinstance(action, tuple) else action
-        return super().step(env_action)
 
 
 class TimeToSuccessAsRewardWrapper(gym.Wrapper):

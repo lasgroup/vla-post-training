@@ -5,8 +5,7 @@ import flax.nnx as nnx
 import jax.numpy as jnp
 
 from src.rl.networks.constants import default_init
-from src.rl.networks.rl_networks import ObsType, ActionType
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.networks.rl_networks import ObsType, ActionType, PREFIX_EMBEDDING_NAME
 
 
 class _BroNetBlock(nnx.Module):

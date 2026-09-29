@@ -2,7 +2,6 @@ import dataclasses
 import etils.epath as epath
 import json
 import logging
-import numpy as np
 from pathlib import Path
 import subprocess
 import wandb
@@ -101,6 +100,7 @@ def init_wandb(
     log_code: bool = False,
     enabled: bool = True,
 ):
+
     ckpt_dir = config.checkpoint_dir
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
@@ -143,16 +143,3 @@ class Logger:
         log_path = epath.Path(self.ckpt_dir) / "metrics.jsonl"
         with log_path.open("a") as f:
             f.write(json.dumps(record) + "\n")
-
-
-def log_images(batch):
-    images_to_log = [
-        wandb.Image(
-            np.concatenate(
-                [(np.array(img[i]) + 1.0) * 127.5 for img in batch[0].images.values()],
-                axis=1,
-            )
-        )
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)

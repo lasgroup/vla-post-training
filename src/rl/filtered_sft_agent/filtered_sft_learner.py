@@ -27,24 +27,21 @@ import openpi.transforms as _transforms
 from openpi.policies import policy_config
 from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
+from src.rl.networks.rl_networks import PREFIX_EMBEDDING_NAME
 from src.rl.replay_buffer import ShardedReplayBuffer
-from src.rl.types import StepData
 from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
-from src.training.data_loader import create_data_loader
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
     Pi0ObservationWrapper,
-    PrefixEmbeddingVectorEnvWrapper,
     QueryFrequencyWrapper,
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
-from src.rl.agent import Agent, EnvFn
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
+from src.rl.agent import Agent
 from src.training.runtime_state import load_resume_state
 
 
 def filtered_sft_wrap_env(
-    env_fn: EnvFn,
+    env_fn,
     config,
     env_num: int | None = None,
 ):
@@ -66,12 +63,7 @@ def filtered_sft_wrap_env(
                 env_class=env_class,
             )
             # Add query-frequency wrapper to rollout action chunks.
-            query_wrapper = (
-                PrefixEmbeddingVectorEnvWrapper
-                if config.collect.store_prefix_rep
-                else QueryFrequencyWrapper
-            )
-            base_env = query_wrapper(
+            base_env = QueryFrequencyWrapper(
                 env=base_env,
                 query_frequency=replan_steps,
             )
@@ -210,6 +202,12 @@ def _get_obs_key_process_fn(domain: str):
 
 
 class FilteredSFTLearner(Agent):
+    # Whether collection also returns the policy's prefix embedding alongside each
+    # action chunk, and stores it in the replay buffer (used by Best-of-N critics).
+    _store_prefix_rep: bool = False
+    # Observation keys that are never read during training and are not stored.
+    _buffer_obs_drop_keys: tuple[str, ...] = ()
+
     def __init__(self, config: OnlineTrainConfig):
         self._config = config
         self.post_step_action_filter = _get_post_step_action_filter(self._config.collect.domain)
@@ -245,29 +243,19 @@ class FilteredSFTLearner(Agent):
         )
 
         # initialize data loader
-        assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
         self._data_config = self._config.data.create(
             self._config.assets_dirs,
             self._config.model,
         )
-        # note that offline data is not seeded upon resume, may induce non-determinism
-        self._offline_batch_size = max(len(jax.devices()), int(self._config.batch_size * (1 - self._config.rl.online_ratio)))
 
-        if self._config.rl.online_ratio < 1.0:
-            self._data_loader = create_data_loader(
-                config, batch_size=self._offline_batch_size, sharding=self._data_sharding, shuffle=True
-            )
-            self._data_iter = iter(self._data_loader)
-        else:
-            class DummyDataLoader:
-                def __init__(self, data_config):
-                    self._data_config = data_config
+        class DummyDataLoader:
+            def __init__(self, data_config):
+                self._data_config = data_config
 
-                def data_config(self):
-                    return self._data_config
+            def data_config(self):
+                return self._data_config
 
-            self._data_loader = DummyDataLoader(self._data_config)
-            self._data_iter = None
+        self._data_loader = DummyDataLoader(self._data_config)
 
         self._online_data_buffer = self._get_online_replay_buffer()
         if self._resuming:
@@ -329,9 +317,8 @@ class FilteredSFTLearner(Agent):
         def _get_prefix_rep_with_model_fn(
             m: _model.BaseModel, observation: _model.Observation
         ):
-            prefix_rep = m.get_prefix_rep(observation)
-            # TODO: remove if below
-            return prefix_rep[0] if isinstance(prefix_rep, tuple) else prefix_rep
+            hidden_state, _kv_cache = m.get_prefix_rep(observation)
+            return hidden_state
 
         self._get_prefix_rep_with_model = nnx.jit(_get_prefix_rep_with_model_fn)
 
@@ -371,11 +358,6 @@ class FilteredSFTLearner(Agent):
         raise NotImplementedError(f"Unknown domain: {domain}")
 
     def _drop_policy_model(self):
-        # For PyTorch policies `infer_with_model` ignores the provided model and uses internal state,
-        # so we cannot safely drop the internal model there.
-        if getattr(self._policy, "_is_pytorch_model", False):
-            return
-
         model = getattr(self._policy, "_model", None)
         model_ref = None
         if model is not None:
@@ -447,7 +429,6 @@ class FilteredSFTLearner(Agent):
             max_capacity=self._config.rl.buffer_capacity,
             data_sharding=self._data_sharding,
             seed=self._config.seed,
-            freeze_dict=False,
         )
 
     def _process_obs_for_pi0(
@@ -540,7 +521,7 @@ class FilteredSFTLearner(Agent):
             actions = actions[np.newaxis, ...]
         return actions, np.asarray(prefix, dtype=np.float32)
 
-    def _generate_actions(
+    def sample_actions(
         self,
         observations: np.ndarray | Dict,
         task_description: list[str],
@@ -553,21 +534,12 @@ class FilteredSFTLearner(Agent):
             observations=processed_obs,
             rng=rng,
             train_state=self._train_state,
-            return_prefix_rep=self._config.collect.store_prefix_rep,
+            return_prefix_rep=self._store_prefix_rep,
         )
-        # TODO: if store_prefix_rep is True, this will crash because (i) openpi output transforms
-        # cannot process tuples and (ii) venvs do not accept tuples as input
-
-        # TODO: check if casting is necessary
         if isinstance(actions, (tuple, list)):
             return tuple(np.asarray(x, dtype=np.float32) for x in actions)
 
         return np.asarray(actions, dtype=np.float32)
-
-    def sample_actions(
-        self, observations: np.ndarray | Dict, **kwargs
-    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        return self._generate_actions(observations, **kwargs)
 
     def _online_batch_to_sft_batch(
         self, online_batch: Dict[str, Any]
@@ -610,7 +582,7 @@ class FilteredSFTLearner(Agent):
         )
         self._rng = jax.random.wrap_key_data(jnp.asarray(key_data))
 
-    def add_data(self, step_data: StepData):
+    def add_data(self, step_data):
         for i in range(self._config.collect.env_num):
             self._episode_storage[i].append(jax.tree.map(lambda x: x[i], step_data))
 
@@ -669,15 +641,12 @@ class FilteredSFTLearner(Agent):
         if is_success:
             self._save_episode_in_buffer(episode_data, task_description, is_success=True)
 
-    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False, target_buffer=None):
-        # target_buffer allows PARL (and other wrappers) to redirect an episode
-        # into a separate buffer without subclassing or duplicating preprocessing.
-
+    def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False):
         assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
             "Only Filtered SFT config should be passed " "to the filtered SFT agent"
         )
 
-        if self._config.collect.store_prefix_rep:
+        if self._store_prefix_rep:
             self._attach_prefix_embeddings_to_episode_data(
                 episode_data, task_description=task_description
             )
@@ -735,13 +704,11 @@ class FilteredSFTLearner(Agent):
         obs_index = np.arange(n_windows, dtype=np.int64)
         next_obs_index = obs_index + act_h
         _is_success = np.full((n_windows,), float(is_success), dtype=np.float32)
-        # Subclasses (e.g. Best-of-N with cached prefixes) may declare observation keys
-        # that are never read during training; drop them so what we store matches the
-        # buffer schema built by _make_buffer_dummy_data. Base class declares none.
-        for k in getattr(self, "_buffer_obs_drop_keys", ()):
+        # Drop unused keys so what we store matches the buffer schema built by
+        # _make_buffer_dummy_data.
+        for k in self._buffer_obs_drop_keys:
             _full_obs.pop(k, None)
-        buf = target_buffer if target_buffer is not None else self._online_data_buffer
-        buf.insert(
+        self._online_data_buffer.insert(
             {
                 "observations": _full_obs,
                 "obs_index": obs_index,
@@ -753,8 +720,7 @@ class FilteredSFTLearner(Agent):
                 "is_success": _is_success,
             }
         )
-        if target_buffer is None:
-            self._collection_success_episodes += 1
+        self._collection_success_episodes += 1
 
     def start_data_collection(self, step: int | None = None):
         # Reset episode storage
@@ -786,24 +752,8 @@ class FilteredSFTLearner(Agent):
 
         if self._online_data_buffer.size == 0:
             return {}
-        online_ratio = self._config.rl.online_ratio
-        if online_ratio < 1.0:
-            batch = next(self._data_iter)
-        if online_ratio > 0.0:
-            online_batch_size = int(self._config.batch_size * min(1.0, online_ratio))
-            online_batch_raw = self._online_data_buffer.sample(
-                batch_size=online_batch_size
-            )
-            online_batch = self._online_batch_to_sft_batch(online_batch_raw)
-            batch = (
-                online_batch
-                if online_ratio >= 1.0
-                else jax.tree.map(
-                    lambda x, y: jnp.concatenate([x, y], axis=0),
-                    batch,
-                    online_batch,
-                )
-            )
+        online_batch_raw = self._online_data_buffer.sample(batch_size=self._config.batch_size)
+        batch = self._online_batch_to_sft_batch(online_batch_raw)
 
         train_rng, self._rng = jax.random.split(self._rng)
         rl_config = self._config.rl

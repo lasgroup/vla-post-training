@@ -125,10 +125,6 @@ def make_env_libero(config, tasks, num_devices: int = 4):
 
 def get_max_steps_libero(task_suite_name):
     _max_steps_map = {
-        "libero_spatial": 220,
-        "libero_object": 280,
-        "libero_goal": 300,
-        "libero_10": 520,
         "libero_90": 400,
     }
     if task_suite_name not in _max_steps_map:

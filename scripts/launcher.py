@@ -2,7 +2,7 @@
 """Launcher for experiments.
 
 Usage:
-    ./scripts/launcher.py --config scripts/configs/filtered_sft.yaml
+    ./scripts/launcher.py --config scripts/configs/multitask/fsft/libero/fsft_libero_tasks1_v0.yaml
 """
 
 import argparse
@@ -19,12 +19,12 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Default SLURM settings matching existing bash scripts
-DEFAULT_ACCOUNT = "a0220"
+DEFAULT_ACCOUNT = "ab037"
 DEFAULT_ENVIRONMENT = "vla-post-training"
-DEFAULT_DURATION = "11:59:00"
+DEFAULT_DURATION = "3:55:00"
 DEFAULT_PARTITION = "normal"
 REQUEUE_EXIT_CODE = 42
-RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unknown')}/results"
+RESULTS_DIR = f"/capstor/store/cscs/swissai/ab037/{os.environ.get('USER', 'unknown')}/results"
 
 
 def generate_srun_command(
@@ -39,7 +39,7 @@ def generate_srun_command(
 
     Args:
         script: Path to the Python training script (relative to project root).
-        config_name: Positional config name (e.g. "pi05_libero_online_flow_grpo_sft").
+        config_name: Positional config name.
         flags: Dictionary of CLI flags and their values.
         account: SLURM account.
         environment: SLURM environment name.
@@ -98,12 +98,10 @@ exec {command}
         f.write(script)
     os.chmod(path, 0o755)
 
-def auto_exp_name(project_name: str, combo: Dict[str, Any], run_idx: int) -> str:
+def auto_exp_name(project_name: str, run_idx: int) -> str:
     """Generate a unique experiment name suitable for checkpoint directories."""
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     suffix = secrets.token_hex(3)
-    if "seed" in combo:
-        return f"{project_name}_{timestamp}_{suffix}_seed{combo['seed']}"
     return f"{project_name}_{timestamp}_{suffix}_run{run_idx}"
 
 
@@ -145,7 +143,7 @@ def flags_to_cli_tokens(flags: Optional[Dict[str, Any]]) -> List[str]:
 
 
 def generate_run_commands(
-    combos: List[str],
+    combos: List[Dict[str, Any]],
     script: str,
     config_name: str,
     result_dir: str,
@@ -183,7 +181,7 @@ def generate_run_commands(
         combo["checkpoint_base_dir"] = os.path.join(results_dir, str(i))
         combo["project_name"] = project_name
         combo["group_name"] = group_name
-        combo["exp_name"] = auto_exp_name(project_name, combo, i)
+        combo["exp_name"] = auto_exp_name(project_name, i)
     
     if not dry:
         # create results directory, handling existing directory
@@ -279,25 +277,16 @@ def dict_permutations(d: dict) -> List[dict]:
 
 
 def apply_requeue_flags(flags: Dict[str, Any]) -> Dict[str, Any]:
-    updated = dict(flags)
-    overrides = {}
-    desired_values = {
-        "resume": True,
-        "overwrite": False,
-    }
-    for key, value in desired_values.items():
-        if updated.get(key) != value:
-            overrides[key] = (updated.get(key), value)
-        updated[key] = value
-    return updated
+    """Requeued jobs must resume from their own checkpoint instead of overwriting it."""
+    return {**flags, "resume": True, "overwrite": False}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/filtered_sft.yaml")
+    parser.add_argument("--config", type=str, required=True, help="Path to a sweep YAML")
     parser.add_argument("--dry", action="store_true", help="Print commands without submitting")
     parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local"], help="Execution mode")
-    parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")
+    parser.add_argument("--duration", default="3:55:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     parser.add_argument("--skip_requeue", action="store_true", help="Submit requeue-safe resumable jobs")
@@ -305,7 +294,7 @@ def main() -> None:
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
-        config = config = yaml.load(f, Loader=yaml.FullLoader)
+        config = yaml.load(f, Loader=yaml.FullLoader)
 
     combos = dict_permutations(config["params"])
     if not args.skip_requeue:

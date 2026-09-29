@@ -20,6 +20,7 @@ from src.rl.networks.rl_networks import (
     ActionType,
     StateActionCritic,
     StateValue,
+    PREFIX_EMBEDDING_NAME,
 )
 from src.rl.value_distribution import (
     get_value_bounds,
@@ -55,7 +56,6 @@ from src.rl.networks.encoders.encoders import MLPEncoder
 from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
 from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
 from src.rl.networks.mlp import MLP
-from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
 
 
 def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, StateValueDef]:
@@ -362,7 +362,7 @@ def train_q_step(
         _lower, _upper = get_value_bounds(config)
         num_bins = config.rl.critic.num_value_bins
         q_dist = make_value_distribution(q_logits, num_bins, _lower, _upper, config.rl.critic.value_target_type)
-        td_weight = config.rl.critic.td_weight_schedule.create()(step)
+        td_weight = config.rl.critic.td_weight_schedule(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
 
         if config.rl.critic.use_distributional_critic:
@@ -448,7 +448,7 @@ def train_value_step(
         mc_return: at.Float[at.ArrayLike, " b"],
         target_q_model: AnyStateActionCritic,
     ) -> tuple[at.Float[at.Array, ""], dict[str, at.Array]]:
-        td_weight = config.rl.critic.td_weight_schedule.create()(step)
+        td_weight = config.rl.critic.td_weight_schedule(step)
         td_weight = jnp.clip(td_weight, 0.0, 1.0)
         value_logits = critic_model(observation)
         _lower, _upper = get_value_bounds(config)

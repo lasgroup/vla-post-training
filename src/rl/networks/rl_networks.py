@@ -12,34 +12,21 @@ from src.rl.networks.decoders.values.state_value import (
     StateValueDecoder,
     StateValueEnsembleDecoder,
 )
-from src.rl.networks.decoders.policies.normal_policy import NormalPolicyDecoder
-from src.rl.networks.decoders.policies.learned_std_normal_policy import (
-    LearnedStdNormalPolicyDecoder,
-    LearnedStdTanhNormalPolicyDecoder,
-)
-from tensorflow_probability.substrates import jax as tfp
-
-# TFP aliases
-tfd = tfp.distributions
 
 ObsType = Union[dict, FrozenDict, jnp.ndarray]
+# Key of the cached VLA prefix embedding in critic observations and replay-buffer entries.
+PREFIX_EMBEDDING_NAME = "prefix_embedding"
 EmbeddingType = jnp.ndarray
 ActionType = jnp.ndarray
 
 StateActionValueDecoderType = Union[StateActionValueDecoder, StateActionEnsembleDecoder]
 StateValueDecoderType = Union[StateValueDecoder, StateValueEnsembleDecoder]
-PolicyDecoderDef = Union[
-    NormalPolicyDecoder,
-    LearnedStdNormalPolicyDecoder,
-    LearnedStdTanhNormalPolicyDecoder,
-]
 
 EncoderDef = Callable[[ObsType, nnx.Rngs], BaseEncoder]
 StateActionDecoderDef = Callable[
     [EmbeddingType, ActionType, nnx.Rngs], StateActionValueDecoderType
 ]
 StateValueDecoderDef = Callable[[EmbeddingType, nnx.Rngs], StateValueDecoderType]
-PolicyDecoderDef = Callable[[EmbeddingType, ActionType, nnx.Rngs], PolicyDecoderDef]
 
 
 class StateActionCritic(nnx.Module):
@@ -88,24 +75,3 @@ class StateValue(nnx.Module):
         embedding = self.encoder(observation, training=training)
         v = self.state_value_decoder(observations=embedding, training=training)
         return v
-
-
-class Policy(nnx.Module):
-    def __init__(
-        self,
-        observation: ObsType,
-        action: ActionType,
-        encoder_def: EncoderDef,
-        decoder_def: PolicyDecoderDef,
-        rngs: nnx.Rngs,
-    ):
-        self.encoder = encoder_def(observation, rngs)
-        dummy_embedding = self.encoder(observation)
-        self.policy_decoder = decoder_def(dummy_embedding, action, rngs)
-
-    def __call__(
-        self, observation: ObsType, training: bool = False
-    ) -> tfd.Distribution:
-        embedding = self.encoder(observation, training=training)
-        policy_dist = self.policy_decoder(observations=embedding, training=training)
-        return policy_dist

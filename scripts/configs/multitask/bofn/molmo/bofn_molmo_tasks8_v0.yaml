@@ -1,0 +1,35 @@
+script: scripts/exp.py
+config_name: pi05_molmo_online_best_of_n
+project_name: vla-post-training
+group_name: multitask_tasks8_bofn_molmo_v0
+params:
+  log_interval: [25]
+  num_train_steps: [500000]
+  max_runtime: [39600]  # 11 hours
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  collect.eval_interval: [499999]
+  collect.collect_interval: [50000]
+  !!python/tuple [collect.tasks, collect.eval_tasks]: [
+    [[
+        molmo_164, molmo_86, molmo_70, molmo_267, molmo_366, molmo_138, molmo_143, molmo_212
+      ],
+      [
+        molmo_164, molmo_86, molmo_70, molmo_267, molmo_366, molmo_138, molmo_143, molmo_212,
+        molmo_8, molmo_273, molmo_222, molmo_73, molmo_346, molmo_49, molmo_21, molmo_379,
+        molmo_140, molmo_356, molmo_345, molmo_155, molmo_357, molmo_163, molmo_208, molmo_226
+      ],
+    ],
+    [[
+        molmo_369, molmo_138, molmo_24, molmo_187, molmo_325, molmo_221, molmo_373, molmo_148
+      ],
+      [
+        molmo_369, molmo_138, molmo_24, molmo_187, molmo_325, molmo_221, molmo_373, molmo_148,
+        molmo_8, molmo_273, molmo_222, molmo_73, molmo_346, molmo_49, molmo_21, molmo_379,
+        molmo_140, molmo_356, molmo_345, molmo_155, molmo_357, molmo_163, molmo_208, molmo_226
+      ],
+    ],
+  ]
+
+  rl.buffer_capacity: [250000]

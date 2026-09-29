@@ -1,33 +1,14 @@
-from typing import Dict, Callable
+from typing import Dict
 
 import numpy as np
 import jax
 from abc import abstractmethod
 
 
-from src.rl.types import StepData
-import openpi.training.utils as training_utils
-from gymnasium import Env
-
-EnvFn = Callable[[int], Env]
-
-
-def get_batch_stats(actor):
-    if hasattr(actor, "batch_stats"):
-        return actor.batch_stats
-    else:
-        return None
-
-
 class Agent(object):
-    _actor: training_utils.TrainState
     _rng: jax.random.PRNGKey
     training_steps: int = 0
-    policy_update_count: int = 0
-    env_steps: int = 0
-    episodes: int = 0
     total_collected_episodes: int = 0
-    base_dir: str = "/agent"
 
     @abstractmethod
     def sample_actions(
@@ -41,7 +22,7 @@ class Agent(object):
         raise NotImplementedError
 
     @abstractmethod
-    def add_data(self, step_data: StepData):
+    def add_data(self, step_data):
         raise NotImplementedError
 
     @abstractmethod
