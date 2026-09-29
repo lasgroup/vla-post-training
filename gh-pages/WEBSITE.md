@@ -8,7 +8,7 @@ Run `python3 -m http.server 8000 --directory gh-pages` from the repository root 
 
 ## Publish
 
-The workflow in [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) publishes the contents of `gh-pages/` as the website root using GitHub Actions. It runs when website files or the workflow change on the `gh-pages` branch, and supports manual dispatch on that branch. No build step is required.
+The workflow in [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) publishes the contents of `gh-pages/` as the website root using GitHub Actions. It runs when website files or the workflow change on the `gh-pages` branch, and supports manual dispatch on that branch. It checks out only `gh-pages/`, then uploads and deploys those static files directly. It does not build the repository or install project dependencies.
 
 One-time setup:
 
