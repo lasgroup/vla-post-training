@@ -8,7 +8,17 @@ Run `python3 -m http.server 8000 --directory gh-pages` from the repository root 
 
 ## Publish
 
-Publish the contents of `gh-pages/` as the website root, for example by uploading that directory as a GitHub Pages deployment artifact. The repository root is no longer the website root. The site is designed for <https://lasgroup.github.io/vla-post-training/>; publishing the directory contents at that URL preserves the canonical and social-preview URLs. `.nojekyll` is included for static serving.
+The workflow in [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) publishes the contents of `gh-pages/` as the website root using GitHub Actions. It runs when website files or the workflow change on the `gh-pages` branch, and supports manual dispatch on that branch. No build step is required.
+
+One-time setup:
+
+1. In the repository's **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**.
+2. If the `github-pages` environment restricts deployment branches, allow `gh-pages` under **Settings → Environments → github-pages**.
+3. Commit the website directory and `.github/workflows/pages.yml`, then push the `gh-pages` branch. Follow the **Deploy research website** run in the Actions tab.
+
+The deployed site will be <https://lasgroup.github.io/vla-post-training/>. The folder name does not add another `/gh-pages/` to the public URL. Deployment uses the built-in `GITHUB_TOKEN`; no personal access token is needed. The workflow and website must be pushed before deployment can run.
+
+See GitHub's [custom Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) for repository setup and deployment permissions.
 
 ## Content and provenance
 
