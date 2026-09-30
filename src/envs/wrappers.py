@@ -6,59 +6,6 @@ import math
 import numpy as np
 
 
-class GymnasiumEnvAdapter(gym.Env):
-    """Wraps non-Gymnasium envs to satisfy gymnasium.Env checks."""
-
-    def __init__(self, env):
-        self.env = env
-
-    @property
-    def observation_space(self):
-        return getattr(self.env, "observation_space", None)
-
-    @property
-    def action_space(self):
-        if hasattr(self.env, "action_space"):
-            return self.env.action_space
-        elif hasattr(self.env, "env") and hasattr(self.env.env, "action_spec"):
-            return gym.spaces.Box(
-                low=self.env.env.action_spec[0],
-                high=self.env.env.action_spec[1],
-            )
-        else:
-            return None
-
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        if seed is not None:
-            self.env.seed(seed)
-        obs = self.env.reset()
-        return obs, {}
-
-    def step(self, action):
-        obs, reward, done, info = self.env.step(action)
-        return obs, reward, bool(done), False, info
-
-    def render(self, *args, **kwargs):
-        if hasattr(self.env, "render"):
-            return self.env.render(*args, **kwargs)
-        return None
-
-    def close(self):
-        if hasattr(self.env, "close"):
-            return self.env.close()
-        return None
-
-    def __getattr__(self, name):
-        """Fallback to the wrapped environment for any unknown attributes."""
-        return getattr(self.env, name, None)
-
-
-def ensure_gymnasium_env(env):
-    if isinstance(env, gym.Env):
-        return env
-    return GymnasiumEnvAdapter(env)
-
-
 def _quat2axisangle(quat):
     """
     Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
@@ -114,21 +61,6 @@ def obs_to_pi_zero_input(
     return obs_pi_zero
 
 
-def _expand_space(space: gym.Space, n: int) -> gym.Space:
-    """Space of `n` stacked samples from `space` (leading axis of size n)."""
-    if isinstance(space, gym.spaces.Box):
-        return gym.spaces.Box(
-            low=np.repeat(space.low[None, ...], n, axis=0),
-            high=np.repeat(space.high[None, ...], n, axis=0),
-            dtype=space.dtype,
-        )
-    if isinstance(space, gym.spaces.Discrete):
-        return gym.spaces.MultiDiscrete([space.n] * n)
-    if isinstance(space, gym.spaces.Dict):
-        return gym.spaces.Dict({k: _expand_space(v, n) for k, v in space.spaces.items()})
-    raise NotImplementedError(f"Space type {type(space)} not supported for expansion.")
-
-
 class QueryFrequencyWrapper(gym.Wrapper):
     """Executes an action chunk for `query_frequency` env steps and stacks the results."""
 
@@ -139,14 +71,6 @@ class QueryFrequencyWrapper(gym.Wrapper):
     ):
         super().__init__(env)
         self._query_frequency = query_frequency
-
-    @property
-    def action_space(self):
-        return _expand_space(self.env.action_space, self._query_frequency)
-
-    @property
-    def observation_space(self):
-        return _expand_space(self.env.observation_space, self._query_frequency)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # 1. Reset the underlying environment

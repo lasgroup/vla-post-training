@@ -2,7 +2,7 @@ from typing import Any
 import jax
 import numpy as np
 from src.envs.venv import BaseVectorEnv
-from src.rl.agent import Agent
+from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 import tqdm_loggable.auto as tqdm
 
 
@@ -20,7 +20,7 @@ def _shift_window(
     return jax.tree.map(move_obs, observation, next_observation)
 
 
-def evaluate_policy(agent: Agent, env: BaseVectorEnv, config):
+def evaluate_policy(agent: FilteredSFTLearner, env: BaseVectorEnv, config):
     num_rollouts_per_task = config.collect.num_eval_rollouts
     total_episodes = 0
     total_successes = 0
@@ -113,9 +113,9 @@ def evaluate_policy(agent: Agent, env: BaseVectorEnv, config):
 
 
 def collect_data(
-    agent: Agent, env: BaseVectorEnv, config, step: int
+    agent: FilteredSFTLearner, env: BaseVectorEnv, config, step: int
 ):
-    agent.start_data_collection(step=step)
+    agent.start_data_collection()
     env.seed(config.seed + step)
 
     total_episodes = 0
@@ -211,7 +211,7 @@ def collect_data(
 
             obs = next_obs
 
-    collected_episodes = agent.end_data_collection(step=step)
+    collected_episodes = agent.end_data_collection()
 
     agent.total_collected_episodes += total_episodes
     metrics = {"success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}

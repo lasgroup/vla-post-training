@@ -1,8 +1,6 @@
 import dataclasses
-import difflib
 import tyro
 from openpi.training.config import (
-    _CONFIGS,
     TrainConfig,
     DataConfig,
     pi0_config,
@@ -12,7 +10,6 @@ from openpi.training.config import (
     LeRobotLiberoDataConfig,
 )
 from typing import Literal, Sequence
-import re
 
 import openpi.training.optimizer as _optimizer
 import openpi.policies.droid_policy as _droid_policy
@@ -53,35 +50,28 @@ class RLAlgorithmConfig:
 @dataclasses.dataclass(frozen=True)
 class PolicyTrainingConfig:
     update_interval: int = 1
-    training_start_step: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
 class CriticTrainingConfig:
     update_interval: int = 1
-    training_start_step: int = 0
-    use_ema: bool = True
     ema_decay: float = 0.995
-    reduction: str = "min"
     encoder_hidden_dims: Sequence[int] = (512, 512)
     decoder_hidden_dims: Sequence[int] = (256, 256)
     num_qs: int = 2
     num_vs: int = 2
-    num_updates_per_batch: int = 1
     td_weight_schedule: StepSchedule = StepSchedule(init_value=1.0, end_value=1.0, switch_step=1_000)  # pure TD
     num_value_bins: int = 1  # 1: Gaussian (MSE-equivalent), >1 = Categorical over bins
-    value_lower_bound: float | None = None  # If None: auto-computed from reward type and discount
-    value_upper_bound: float | None = None
     value_target_type: str = "two_hot"  # "one_hot" | "two_hot"
     use_distributional_critic: bool = False
     distributional_target_reduction: str = "min"
     inference_start_step: int = 1  # step 0 collects with the plain policy (faster)
     # Critics are lightweight (MLP-only); a larger batch than the policy often
     # stabilises TD learning without a meaningful memory cost.
-    batch_size: int | None = 1024  # If None: use the global config.batch_size
+    batch_size: int = 1024
     # Class-level attributes (not dataclass fields) so subclasses can override the default.
     lr_schedule = ConstantSchedule(value=1e-4)
-    optimizer = _optimizer.AdamW(clip_gradient_norm=1.0)
+    optimizer = _optimizer.AdamW()
     # BRONet critic (alternative to the MLP backbone)
     use_bronet: bool = True
     bronet_hidden_dim: int = 1024
@@ -111,72 +101,14 @@ class CollectionConfig:
     num_rollouts: int = 20
     num_initial_rollouts: int | None = None
     domain: Literal["libero", "molmo"] = "libero"
-    tasks: list[str] | str = dataclasses.field(
-        default_factory=lambda: ["libero_90_59"],
-        metadata={
-            "help": (
-                "Task(s) to collect. Can be a single string (e.g., 'libero_90_59') or a list. "
-                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4')."
-            )
-        },
-    )
-    eval_tasks: list[str] | str = dataclasses.field(
-        default_factory=lambda: ["libero_90_59"],
-        metadata={
-            "help": (
-                "Task(s) to evaluate. Can be a single string (e.g., 'libero_90_59') or a list. "
-                "Supports ranges (e.g., 'libero_90_22-56') and optional multipliers (e.g., 'libero_90_59x4' "
-                "or 'libero_90_22-56x4')."
-            )
-        },
-    )
+    tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
+    eval_tasks: list[str] = dataclasses.field(default_factory=lambda: ["libero_90_59"])
     replan_steps: int = 5
     num_steps_wait: int = 10
-    use_time_to_success_as_reward: bool = True
-    fix_mc_returns: bool = True
     eval_env_num: int = 4
     eval_interval: int = 300
     num_eval_rollouts: int = 32
     max_episode_steps: int = 400  # used to auto-compute value bounds
-
-    def expand_tasks(self, tasks: str) -> list[str]:
-        # Expand task ranges and handle multipliers
-        expanded_tasks = []
-        for task in tasks:
-            # 1. Extract optional multiplier (e.g., "x4")
-            multiplier = 1
-            base_task = task
-            mult_match = re.search(r"x(\d+)$", task)
-            if mult_match:
-                multiplier = int(mult_match.group(1))
-                base_task = task[:mult_match.start()]
-
-            # 2. Check if the base task is a range
-            range_match = re.match(r"(.+)_(\d+)-(\d+)$", base_task)
-            sub_tasks = []
-            if range_match:
-                prefix = range_match.group(1)
-                start = int(range_match.group(2))
-                end = int(range_match.group(3))
-                for i in range(start, end + 1):
-                    sub_tasks.append(f"{prefix}_{i}")
-            else:
-                sub_tasks.append(base_task)
-
-            # 3. Add to expanded list, repeating by the multiplier
-            for sub_task in sub_tasks:
-                expanded_tasks.extend([sub_task] * multiplier)
-        return expanded_tasks
-
-    def __post_init__(self):
-        tasks = [self.tasks] if isinstance(self.tasks, str) else self.tasks
-        expanded_tasks = self.expand_tasks(tasks)
-        object.__setattr__(self, 'tasks', expanded_tasks)
-
-        eval_tasks = [self.eval_tasks] if isinstance(self.eval_tasks, str) else self.eval_tasks
-        expanded_eval_tasks = self.expand_tasks(eval_tasks)
-        object.__setattr__(self, 'eval_tasks', expanded_eval_tasks)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -194,20 +126,25 @@ class OnlineTrainConfig(TrainConfig):
         super().__post_init__()
 
 
-def make_base_libero_config(
-    name: str, rl_config: RLAlgorithmConfig, **kwargs
-) -> OnlineTrainConfig:
-    """
-    Factory function to generate a base OnlineTrainConfig.
-    Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
+def _make_config(name: str, rl_config: RLAlgorithmConfig, **domain_kwargs) -> OnlineTrainConfig:
+    return OnlineTrainConfig(
+        name=name,
+        rl=rl_config,
+        batch_size=256,
+        lr_schedule=ConstantSchedule(value=2.5e-5),
+        ema_decay=0.999,
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=10_000,
+        seed=0,
+        **domain_kwargs,
+    )
 
-    Extra kwargs are forwarded to OnlineTrainConfig (e.g. freeze_filter,
-    ema_decay, num_train_steps overrides).
-    """
-    defaults = dict(
-        model=pi0_config.Pi0Config(
-            pi05=True, action_horizon=10, discrete_state_input=False
-        ),
+
+def make_base_libero_config(name: str, rl_config: RLAlgorithmConfig) -> OnlineTrainConfig:
+    return _make_config(
+        name,
+        rl_config,
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         data=LeRobotLiberoDataConfig(
             repo_id="physical-intelligence/libero",
             assets=AssetsConfig(
@@ -215,38 +152,18 @@ def make_base_libero_config(
                 assets_dir="gs://openpi-assets/checkpoints/pi05_libero/assets",
             ),
             base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=False,
         ),
-        batch_size=256,
-        lr_schedule=ConstantSchedule(value=2.5e-5),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_libero/params"
         ),
-        pytorch_weight_path="/path/to/your/pytorch_weight_path",
-        num_train_steps=10_000,
-        num_workers=4,
-        seed=0,
     )
-    defaults.update(kwargs)
-    return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
-def make_base_molmo_config(
-        name: str, rl_config: RLAlgorithmConfig, **kwargs
-) -> OnlineTrainConfig:
-    """
-    Factory function to generate a base OnlineTrainConfig for Molmo.
-    Injects the specific RL algorithm config to keep the _CONFIGS list DRY.
-
-    Extra kwargs are forwarded to OnlineTrainConfig (e.g. freeze_filter,
-    ema_decay, num_train_steps overrides).
-    """
-    defaults = dict(
-        model=pi0_config.Pi0Config(
-            pi05=True, action_horizon=15, discrete_state_input=False
-        ),
+def make_base_molmo_config(name: str, rl_config: RLAlgorithmConfig) -> OnlineTrainConfig:
+    return _make_config(
+        name,
+        rl_config,
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=15, discrete_state_input=False),
         data=SimpleDataConfig(
             repo_id=None,
             assets=AssetsConfig(
@@ -265,58 +182,16 @@ def make_base_molmo_config(
             ),
             base_config=DataConfig(prompt_from_task=True),
         ),
-        batch_size=256,
-        lr_schedule=ConstantSchedule(value=2.5e-5),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "gs://openpi-assets/checkpoints/pi05_droid_jointpos/params"
-        ),
-        pytorch_weight_path="/path/to/your/pytorch_weight_path",
-        num_train_steps=10_000,
-        num_workers=4,  # override default num_workers
-        seed=0,
-        collect=CollectionConfig(
-            domain="molmo",
-            max_episode_steps=450,
-            resize_image_h=224,
-            resize_image_w=224,
-        ),
+        collect=CollectionConfig(domain="molmo", max_episode_steps=450),
     )
-    defaults.update(kwargs)
-    return OnlineTrainConfig(name=name, rl=rl_config, **defaults)
 
 
-# Use `get_config` if you need to get a config by name in your code.
-_CONFIGS.extend(
-    [
-        #
-        # Online training configs.
-        #
-        # These train configs define the hyperparameters for online data collection and fine-tuning.
-        # 1. Filtered SFT
-        make_base_libero_config(
-            name="pi05_libero_online_filtered_sft",
-            rl_config=FilteredSFTLearnerConfig(),
-        ),
-        make_base_molmo_config(
-            name="pi05_molmo_online_filtered_sft",
-            rl_config=FilteredSFTLearnerConfig(),
-        ),
-        # 2. Best of N
-        make_base_libero_config(
-            name="pi05_libero_online_best_of_n",
-            rl_config=BestofNLearnerConfig(),
-        ),
-        make_base_molmo_config(
-            name="pi05_molmo_online_best_of_n",
-            rl_config=BestofNLearnerConfig(),
-        ),
-    ]
-)
-
-if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
-    raise ValueError("Config names must be unique.")
+_CONFIGS = [
+    make_base_libero_config("pi05_libero_online_filtered_sft", FilteredSFTLearnerConfig()),
+    make_base_molmo_config("pi05_molmo_online_filtered_sft", FilteredSFTLearnerConfig()),
+    make_base_libero_config("pi05_libero_online_best_of_n", BestofNLearnerConfig()),
+    make_base_molmo_config("pi05_molmo_online_best_of_n", BestofNLearnerConfig()),
+]
 _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
 
@@ -324,15 +199,3 @@ def cli() -> TrainConfig:
     return tyro.extras.overridable_config_cli(
         {k: (k, v) for k, v in _CONFIGS_DICT.items()}
     )
-
-
-def get_config(config_name: str) -> TrainConfig:
-    """Get a config by name."""
-    if config_name not in _CONFIGS_DICT:
-        closest = difflib.get_close_matches(
-            config_name, _CONFIGS_DICT.keys(), n=1, cutoff=0.0
-        )
-        closest_str = f" Did you mean '{closest[0]}'? " if closest else ""
-        raise ValueError(f"Config '{config_name}' not found.{closest_str}")
-
-    return _CONFIGS_DICT[config_name]

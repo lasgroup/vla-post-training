@@ -10,8 +10,6 @@ import gymnasium as gym
 from gymnasium.wrappers import TimeLimit
 import numpy as np
 
-from src.envs.wrappers import ensure_gymnasium_env
-
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +75,10 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
 
     def __init__(
         self,
-        episode_id: int | None = None,
         render_device: int = 0,
         config: MolmoSpacesGymConfig = MolmoSpacesGymConfig(),
     ):
         super().__init__()
-        self._episode_id = episode_id
         self._render_device = render_device
         self._config = config
         self._benchmark_dir = Path(config.benchmark_dir).expanduser().resolve()
@@ -96,33 +92,12 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self._sampler: JsonEvalTaskSampler | None = None
         self._task = None
         self._task_description: str | None = None
-        self._closed = False
         self._loaded_episode_id: int | None = None
         self._prompt_sampler = None
 
         # Minimal placeholder spaces for v1.
         self.observation_space = gym.spaces.Dict({})
         self.action_space = gym.spaces.Dict({})
-
-    def _make_eval_config(self):
-        # Imported lazily so that it only happens in the env worker process.
-        from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
-
-        return PiPolicyEvalConfig()
-
-    def _make_prompt_sampler(self, exp_config: Any) -> PromptSampler:
-        return PromptSampler(
-            task_type=exp_config.task_type,
-            prompt_templates=exp_config.policy_config.prompt_templates,
-            prompt_object_word_num=exp_config.policy_config.prompt_object_word_num,
-        )
-
-    def _choose_episode(self):
-        if not 0 <= self._episode_id < len(self._episodes):
-            raise ValueError(
-                f"episode_id {self._episode_id} out of range for available episodes."
-            )
-        return self._episodes[self._episode_id]
 
     def _close_active_episode(self) -> None:
         if self._sampler is not None:
@@ -131,18 +106,7 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self._task = None
         self._task_description = None
 
-    def _ensure_open(self) -> None:
-        if self._closed:
-            raise RuntimeError("Environment is closed.")
-
-    def _info_with_task_description(self, info: dict[str, Any]) -> dict[str, Any]:
-        if self._task_description is None:
-            raise RuntimeError("Task description is unavailable before reset().")
-        return {**info, "task_description": self._task_description}
-
     def _prune_unused_sensors(self) -> None:
-        if not self._config.drop_sensor_uuids:
-            return
         sensor_suite = getattr(self._task, "_sensor_suite", None)
         if sensor_suite is None or not hasattr(sensor_suite, "sensors"):
             return
@@ -150,16 +114,20 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             sensor_suite.sensors.pop(uuid, None)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
-        self._ensure_open()
         super().reset(seed=seed)
+        # The "seed" command of the vector env resets without options, hence the fallback.
         task_id = options["task_id"] if (options is not None and "task_id" in options) else "molmo_0"
-        self._episode_id = int(task_id.split("_")[-1])
-        episode = self._choose_episode()
-        reuse = self._sampler is not None and self._loaded_episode_id == self._episode_id
+        episode_id = int(task_id.split("_")[-1])
+        if not 0 <= episode_id < len(self._episodes):
+            raise ValueError(f"episode_id {episode_id} out of range for available episodes.")
+        episode = self._episodes[episode_id]
 
-        if not reuse:
+        if not (self._sampler is not None and self._loaded_episode_id == episode_id):
+            # Imported lazily so that it only happens in the env worker process.
+            from molmo_spaces.evaluation.configs.evaluation_configs import PiPolicyEvalConfig
+
             self._close_active_episode()
-            exp_config = self._make_eval_config()
+            exp_config = PiPolicyEvalConfig()
             exp_config.scene_dataset = episode.scene_dataset
             exp_config.data_split = episode.data_split
             exp_config.task_sampler_config.render_device = self._render_device
@@ -169,10 +137,14 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
             ts_cfg.init_object_position_noise_xy = self._config.init_object_position_noise_xy
             ts_cfg.init_qpos_noise = self._config.init_qpos_noise
             ts_cfg.init_position_randomization_max_attempts = self._config.randomization_max_attempts
-            self._prompt_sampler = self._make_prompt_sampler(exp_config)
+            self._prompt_sampler = PromptSampler(
+                task_type=exp_config.task_type,
+                prompt_templates=exp_config.policy_config.prompt_templates,
+                prompt_object_word_num=exp_config.policy_config.prompt_object_word_num,
+            )
             with _suppress_molmo_spaces_output():
                 self._sampler = JsonEvalTaskSampler(exp_config, episode)
-            self._loaded_episode_id = self._episode_id
+            self._loaded_episode_id = episode_id
 
         self._prompt_sampler.next()
         with _suppress_molmo_spaces_output():
@@ -195,36 +167,20 @@ class MolmoSpacesBenchmarkGymEnv(gym.Env):
         self._task_description = self._prompt_sampler.get_prompt(self._task).lower()
 
         observations, infos = self._task.reset()
-        if not observations:
-            raise RuntimeError("Task reset returned empty observations.")
-        if not infos:
-            raise RuntimeError("Task reset returned empty infos.")
-        return observations[0], self._info_with_task_description(infos[0])
+        return observations[0], {**infos[0], "task_description": self._task_description}
 
     def step(self, action: dict[str, np.ndarray]):
-        self._ensure_open()
-        if self._task is None:
-            raise RuntimeError("No active task. Call reset() before step().")
-
         observations, rewards, terminated, truncated, infos = self._task.step(action)
-        if not observations:
-            raise RuntimeError("Task step returned empty observations.")
-        if not infos:
-            raise RuntimeError("Task step returned empty infos.")
-
         return (
             observations[0],
             float(rewards[0]),
             bool(infos[0]["success"]),
             bool(truncated[0]),
-            self._info_with_task_description(infos[0]),
+            {**infos[0], "task_description": self._task_description},
         )
 
     def close(self) -> None:
-        if self._closed:
-            return
         self._close_active_episode()
-        self._closed = True
 
 
 class MolmoActionAdapter(gym.ActionWrapper):
@@ -268,18 +224,12 @@ def make_env_molmo(config, tasks, num_devices: int = 4):
 
     def env_fn(rank: int):
         env = MolmoSpacesBenchmarkGymEnv(
-            episode_id=task_ids[0],
             render_device=rank % num_devices,
             config=env_config,
         )
         env = MolmoActionAdapter(env=env)
-        # Converts gym envs to gymnasium style envs
-        env = ensure_gymnasium_env(env)
         # Add timelimit wrapper
-        env = TimeLimit(
-            env,
-            max_episode_steps=450,
-        )
+        env = TimeLimit(env, max_episode_steps=config.collect.max_episode_steps)
         return env
 
     return env_fn

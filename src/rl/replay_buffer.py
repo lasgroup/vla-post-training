@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Any
 import h5py
 import jax
 import numpy as np
@@ -7,13 +7,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-
-
-# Keys that, when present in `dummy_data`, switch the buffer into
-# "linked observation" mode: observations are stored once per episode step and
-# transitions reference them through `obs_index` / `next_obs_index`.
-_LINKED_OBS_KEY = "observations"
-_LINKED_INDEX_KEYS = ("obs_index", "next_obs_index")
 
 
 def write_nested(group: h5py.Group, data: dict):
@@ -34,13 +27,34 @@ def read_nested(group: h5py.Group) -> dict:
     return result
 
 
+def _zeros_like_tree(template: Any, capacity: int) -> Any:
+    return jax.tree_util.tree_map(
+        lambda leaf: np.zeros((capacity,) + np.asarray(leaf).shape[1:], dtype=np.asarray(leaf).dtype),
+        template,
+    )
+
+
+def _split_insert_data(data: dict) -> tuple[dict, dict]:
+    """Split insert data into (observations, transition fields without the linking indices)."""
+    transition = {
+        k: v for k, v in data.items() if k not in ("observations", "obs_index", "next_obs_index")
+    }
+    return data["observations"], transition
+
+
 class ShardedReplayBuffer:
+    """Ring buffer of transitions with linked observations.
+
+    Observations are stored once per episode step in their own ring; transitions
+    reference them through absolute `obs_index` / `next_obs_index` pointers.
+    """
+
     def __init__(
         self,
-        dummy_data: Any,
+        dummy_data: dict,
         max_capacity: int,
-        data_sharding: jax.sharding.NamedSharding | None = None,
-        seed: Optional[int] = None,
+        data_sharding: jax.sharding.NamedSharding,
+        seed: int,
     ):
         """
         Args:
@@ -56,47 +70,27 @@ class ShardedReplayBuffer:
         self.total_inserted = 0
         self.persisted_total_inserted = 0
 
-        self._allocate_linked_storage(dummy_data)
-
-        self._rng = np.random.default_rng(seed)
-
-    @staticmethod
-    def _zeros_like_tree(template: Any, capacity: int) -> Any:
-        def create_buffer(leaf_array):
-            leaf_array = np.asarray(leaf_array)
-            return np.zeros((capacity,) + leaf_array.shape[1:], dtype=leaf_array.dtype)
-        return jax.tree_util.tree_map(create_buffer, template)
-
-    def _allocate_linked_storage(self, dummy_data: dict) -> None:
-        observations = dummy_data[_LINKED_OBS_KEY]
-        transition_dummy = {
-            k: v for k, v in dummy_data.items()
-            if k != _LINKED_OBS_KEY and k not in _LINKED_INDEX_KEYS
-        }
-
-        self.obs_storage = self._zeros_like_tree(observations, self.max_capacity)
+        observations, transition_dummy = _split_insert_data(dummy_data)
+        self.obs_storage = _zeros_like_tree(observations, self.max_capacity)
         self._obs_leaves, self._obs_treedef = jax.tree_util.tree_flatten(self.obs_storage)
         self.obs_total = 0
 
-        self.storage = self._zeros_like_tree(transition_dummy, self.max_capacity)
+        self.storage = _zeros_like_tree(transition_dummy, self.max_capacity)
         self._storage_leaves, self._storage_treedef = jax.tree_util.tree_flatten(self.storage)
         self.obs_pos = np.zeros((self.max_capacity,), dtype=np.int64)
         self.next_obs_pos = np.zeros((self.max_capacity,), dtype=np.int64)
-
         self.valid_start = 0
 
+        self._rng = np.random.default_rng(seed)
+
     def insert(self, data: Any):
-        observations = data[_LINKED_OBS_KEY]
         obs_index = np.asarray(data["obs_index"])
         next_obs_index = np.asarray(data["next_obs_index"])
+        observations, transition = _split_insert_data(data)
 
         obs_leaves, obs_treedef = jax.tree_util.tree_flatten(observations)
         if obs_treedef != self._obs_treedef:
             raise ValueError("Insert observation structure does not match buffer structure")
-        transition = {
-            k: v for k, v in data.items()
-            if k != _LINKED_OBS_KEY and k not in _LINKED_INDEX_KEYS
-        }
         txn_leaves, txn_treedef = jax.tree_util.tree_flatten(transition)
         if txn_treedef != self._storage_treedef:
             raise ValueError("Insert transition structure does not match buffer structure")
@@ -161,9 +155,7 @@ class ShardedReplayBuffer:
         batch.update(transition)
         # device_put broadcasts a single sharding across the whole pytree, so we
         # shard the assembled batch in one call rather than leaf by leaf.
-        if self.data_sharding is not None:
-            batch = jax.device_put(batch, self.data_sharding)
-        return batch
+        return jax.device_put(batch, self.data_sharding)
 
     def rng_state_json(self) -> str:
         return json.dumps(self._rng.bit_generator.state)
@@ -202,36 +194,27 @@ class ShardedReplayBuffer:
         rel_obs_index = (self.obs_pos[ring] - obs_lo).astype(np.int64)
         rel_next_obs_index = (self.next_obs_pos[ring] - obs_lo).astype(np.int64)
 
-        def write_fn(f):
-            write_nested(f.create_group("observations"), obs_slice)
-            write_nested(f.create_group("transitions"), txn_slice)
-            links = f.create_group("links")
-            links.create_dataset("obs_index", data=rel_obs_index)
-            links.create_dataset("next_obs_index", data=rel_next_obs_index)
-
-        self._write_h5_atomic(path, write_fn)
+        # Write to a temp file and rename, so an interrupted save never leaves a partial shard.
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+        try:
+            with h5py.File(tmp_path, "w") as f:
+                write_nested(f.create_group("observations"), obs_slice)
+                write_nested(f.create_group("transitions"), txn_slice)
+                links = f.create_group("links")
+                links.create_dataset("obs_index", data=rel_obs_index)
+                links.create_dataset("next_obs_index", data=rel_next_obs_index)
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
         self.persisted_total_inserted = self.total_inserted
         logging.info(
             "Saved replay shard to %s (transitions=%d, observations=%d, replay size=%d)",
             path, delta_count, int(obs_hi - obs_lo), self.size,
         )
-
-    def _write_h5_atomic(self, path: Path, write_fn) -> None:
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-
-        try:
-            with h5py.File(tmp_path, "w") as f:
-                write_fn(f)
-            os.replace(tmp_path, path)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
 
     def restore_shards(
         self,
@@ -253,7 +236,7 @@ class ShardedReplayBuffer:
         for shard_path in shard_paths:
             with h5py.File(shard_path, "r") as f:
                 restored = {
-                    _LINKED_OBS_KEY: read_nested(f["observations"]),
+                    "observations": read_nested(f["observations"]),
                     "obs_index": f["links/obs_index"][()],
                     "next_obs_index": f["links/next_obs_index"][()],
                 }

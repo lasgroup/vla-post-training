@@ -109,9 +109,9 @@ def _bool_flag_name(flag: str, value: bool) -> str:
     """Build tyro-compatible bool flag names for flat and nested fields.
 
     Examples:
-        rl.normalize_adv=True  -> --rl.normalize_adv
-        rl.normalize_adv=False -> --rl.no-normalize_adv
-        overwrite=False        -> --no-overwrite
+        requeue_before_eval=True   -> --requeue_before_eval
+        rl.critic.use_bronet=False -> --rl.critic.no-use_bronet
+        overwrite=False            -> --no-overwrite
     """
     if value:
         return flag

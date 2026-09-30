@@ -21,7 +21,7 @@ from src.rl.best_of_n.update_critic import (
     init_state_value_train_state,
     train_q_step,
     train_value_step,
-    _build_pi0_backbone_critic_defs,
+    _build_mlp_critic_defs,
 )
 from src.rl.value_distribution import get_value_bounds, make_value_distribution
 from src.rl.networks.rl_networks import ObsType, PREFIX_EMBEDDING_NAME
@@ -70,7 +70,7 @@ class BestofNLearner(FilteredSFTLearner):
             def state_value_def(observation, rngs):
                 return BroNetStateValue(observation=observation, hidden_dim=hidden_dim, depth=depth, num_vs=num_vs, num_bins=num_bins, rngs=rngs)
         else:
-            state_action_critic_def, state_value_def = _build_pi0_backbone_critic_defs(config)
+            state_action_critic_def, state_value_def = _build_mlp_critic_defs(config)
 
         self._prefix_embed_dim = prefix_embedding_shape[-1]
 
@@ -435,45 +435,33 @@ class BestofNLearner(FilteredSFTLearner):
         dict[str, at.Array],
     ]:
         batch = self._online_batch_to_critic_batch(batch)
-        num_updates = max(self._config.rl.critic.num_updates_per_batch, 1)
-
-        for _ in range(num_updates):
-            q_rng, v_rng, rng = jax.random.split(rng, 3)
-            # Update the state action critic state
-            q_state, q_info = self._q_train_step(
-                q_rng,
-                q_state,
-                value_state,
-                batch,
-            )
-            # Update the value state
-            value_state, value_info = self._value_train_step(
-                v_rng,
-                value_state,
-                q_state,
-                batch,
-            )
-
+        q_rng, v_rng, rng = jax.random.split(rng, 3)
+        # Update the state action critic state
+        q_state, q_info = self._q_train_step(
+            q_rng,
+            q_state,
+            value_state,
+            batch,
+        )
+        # Update the value state
+        value_state, value_info = self._value_train_step(
+            v_rng,
+            value_state,
+            q_state,
+            batch,
+        )
         return q_state, value_state, q_info, value_info
 
     @at.typecheck
     def update(self) -> dict:
         self.training_steps += 1
-        update_critic = (
-                self.training_steps >= self._config.rl.critic.training_start_step
-                and self.training_steps % self._config.rl.critic.update_interval == 0
-        )
-
-        if not update_critic:
+        if self.training_steps % self._config.rl.critic.update_interval != 0:
             return {
                 "online_buffer_size": jnp.asarray(
                     float(self._online_data_buffer.size), dtype=jnp.float32
                 )
             }
-        if self._config.rl.critic.batch_size:
-            critic_batch_size = self._config.rl.critic.batch_size
-        else:
-            critic_batch_size = self._config.batch_size
+        critic_batch_size = self._config.rl.critic.batch_size
 
         use_online = self._online_data_buffer.size >= critic_batch_size
 

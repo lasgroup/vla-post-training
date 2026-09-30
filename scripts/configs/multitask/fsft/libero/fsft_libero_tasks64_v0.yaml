@@ -4,7 +4,7 @@ project_name: vla-post-training
 group_name: multitask_fsft_libero_tasks64_v0
 params:
   num_train_steps: [5_000]
-  max_runtime: [21600]  # 7 hours
+  max_runtime: [36000]  # 10 hours
 
   collect.env_num: [8]
   collect.eval_env_num: [8]

@@ -8,10 +8,20 @@ import pathlib
 import os
 import torch
 
-from src.envs.wrappers import (
-    ensure_gymnasium_env,
-    WarmUpOnResetWrapper,
-)
+from src.envs.wrappers import WarmUpOnResetWrapper
+
+# All tasks come from the libero_90 suite; task ids look like "libero_90_<i>".
+_TASK_SUITE = "libero_90"
+# Gripper-open no-op action executed while the scene settles after a reset.
+_WARM_START_ACTION = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+
+
+def _get_task(task_id: str):
+    task_suite = benchmark.get_benchmark_dict()[_TASK_SUITE]()
+    task_index = int(task_id.split("_")[-1])
+    task = task_suite.get_task(task_index)
+    bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
+    return task_suite, task_index, task, bddl_file
 
 
 class LiberoWrapper(gym.Wrapper):
@@ -27,16 +37,9 @@ class LiberoWrapper(gym.Wrapper):
         if seed is not None:
             self.rng, _ = seeding.np_random(seed)
 
-    def reset(self, seed=None, options={}):
-        task_id = options["task_id"] if (options is not None and "task_id" in options) else "libero_90_0"
-        task_id = int(task_id.split("_")[-1])
-        task_suite = benchmark.get_benchmark_dict()["libero_90"]()
-        task = task_suite.get_task(task_id)
-        bddl_file = (
-            pathlib.Path(get_libero_path("bddl_files"))
-            / task.problem_folder
-            / task.bddl_file
-        )
+    def reset(self, seed=None, options=None):
+        task_id = options["task_id"] if (options is not None and "task_id" in options) else f"{_TASK_SUITE}_0"
+        task_suite, task_index, task, bddl_file = _get_task(task_id)
         if bddl_file != self._current_bddl_file:
             self.env.close()
             self._args["bddl_file_name"] = bddl_file
@@ -44,7 +47,7 @@ class LiberoWrapper(gym.Wrapper):
             super().__init__(env)
             self._current_bddl_file = bddl_file
         self.env.reset()
-        init_states = get_task_init_states(task_suite, task_id)
+        init_states = get_task_init_states(task_suite, task_index)
         random_index = self.rng.integers(low=0, high=init_states.shape[0])
         init_state = init_states[random_index]
         obs = self.env.set_init_state(init_state)
@@ -76,59 +79,25 @@ def get_task_init_states(task_suite, task_id: int):
     return init_states
 
 
-def get_libero_warm_start_action():
-    return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
-
-
 def make_env_libero(config, tasks, num_devices: int = 4):
-    benchmark_dict = benchmark.get_benchmark_dict()
-    warm_start_action = get_libero_warm_start_action()
-
-    task = tasks[0]
-    task_suite_name = "_".join(task.split("_")[:-1]) 
-    task_id = int(task.split("_")[-1])
-    task_suite = benchmark_dict[task_suite_name]()
-    task = task_suite.get_task(task_id)
-    task_bddl_file = (
-        pathlib.Path(get_libero_path("bddl_files"))
-        / task.problem_folder
-        / task.bddl_file
-    )
+    _, _, _, bddl_file = _get_task(tasks[0])
     env_args = {
-        "bddl_file_name": task_bddl_file,
+        "bddl_file_name": bddl_file,
         "camera_heights": config.collect.env_resolution,
         "camera_widths": config.collect.env_resolution,
     }
-    max_steps = get_max_steps_libero(task_suite_name)
 
     def env_fn(rank: int):
         args = env_args.copy()
         args["render_gpu_device_id"] = rank % num_devices
         env = LiberoWrapper(**args)
-        # Converts gym envs to gymnasium style envs
-        env = ensure_gymnasium_env(env)
         # Warm ups upon reset
         env = WarmUpOnResetWrapper(
             env=env,
             num_steps_wait=config.collect.num_steps_wait,
-            warm_up_action=warm_start_action,
+            warm_up_action=_WARM_START_ACTION,
         )
-        # Add timelimit wrapper
-        env = TimeLimit(
-            env,
-            max_episode_steps=max_steps,
-        )
+        env = TimeLimit(env, max_episode_steps=config.collect.max_episode_steps)
         return env
 
     return env_fn
-
-
-def get_max_steps_libero(task_suite_name):
-    _max_steps_map = {
-        "libero_90": 400,
-    }
-    if task_suite_name not in _max_steps_map:
-        raise ValueError(
-            f"Unknown task suite name {task_suite_name}. Max steps for known task suites: {_max_steps_map}"
-        )
-    return _max_steps_map[task_suite_name]

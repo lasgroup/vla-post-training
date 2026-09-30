@@ -58,7 +58,7 @@ def _collect(agent, config: _config.OnlineTrainConfig, logger: Logger, step: int
 def _evaluate(agent, config: _config.OnlineTrainConfig, logger: Logger, step: int) -> None:
     if config.free_buffer_before_eval:
         # Persist the replay buffer and free its host memory for the duration of the eval.
-        save_epoch_state(agent, config, prepare_for_resume=True)
+        save_epoch_state(agent, config)
         del agent._online_data_buffer
 
     # Molmo envs can hold onto GPU render memory, so keep eval envs
@@ -96,7 +96,7 @@ def main(config: _config.OnlineTrainConfig):
         agent = FilteredSFTLearner(config)
     else:
         raise ValueError(f"Unsupported algorithm: {config.rl}")
-    logger = Logger(config, resuming=agent._resuming, enabled=config.wandb_enabled)
+    logger = Logger(config, resuming=agent._resuming)
 
     start_step = int(agent.training_steps)
     pbar = tqdm.tqdm(
@@ -127,7 +127,7 @@ def main(config: _config.OnlineTrainConfig):
         about_to_eval = (step + 1) % config.collect.eval_interval == 0
         out_of_time = (time.monotonic() - _PROCESS_START_TIME) >= config.max_runtime
         if about_to_collect or about_to_eval or out_of_time:
-            save_epoch_state(agent, config, prepare_for_resume=True)
+            save_epoch_state(agent, config)
             if out_of_time or (about_to_eval and config.requeue_before_eval):
                 logging.info("Exiting at step %d for requeue.", step)
                 requeue = True

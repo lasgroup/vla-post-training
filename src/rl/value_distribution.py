@@ -17,9 +17,10 @@ import optax
 import openpi.shared.array_typing as at
 
 
-def _bin_centers(
+def make_bin_centers(
     lower_bound: float, upper_bound: float, num_bins: int
 ) -> at.Float[at.Array, " k"]:
+    """Uniformly spaced value-bin centers."""
     return jnp.linspace(lower_bound, upper_bound, num_bins, dtype=jnp.float32)
 
 
@@ -36,18 +37,8 @@ def _discretize(
     return jnp.clip(jnp.rint(scaled).astype(jnp.int32), 0, num_bins - 1)
 
 
-class ValueDistribution:
-    """Base class for critic output distributions."""
-
-    def log_prob(self, targets: at.Float[at.Array, "..."]) -> at.Float[at.Array, "..."]:
-        raise NotImplementedError
-
-    def mean(self) -> at.Float[at.Array, "..."]:
-        raise NotImplementedError
-
-
 @dataclasses.dataclass
-class GaussianValueDistribution(ValueDistribution):
+class GaussianValueDistribution:
     """Wraps scalar logits as a Gaussian with fixed scale.
 
     log_prob is gradient-equivalent to MSE. mean() is the identity.
@@ -63,7 +54,7 @@ class GaussianValueDistribution(ValueDistribution):
 
 
 @dataclasses.dataclass
-class CategoricalValueDistribution(ValueDistribution):
+class CategoricalValueDistribution:
     """Categorical distribution over uniformly spaced value bins.
 
     log_prob converts continuous targets to bin probabilities according to target_type:
@@ -116,34 +107,19 @@ class CategoricalValueDistribution(ValueDistribution):
 def get_value_bounds(config) -> tuple[float, float]:
     """Return (lower_bound, upper_bound) for the value function output range.
 
-    Resolved lazily. An explicit user override (both bounds set) wins;
-    otherwise the range is derived from the reward type, discount and episode
-    length, padded by half a bin for categorical critics.
+    The range is derived from the time-to-success reward (-1 per step), the
+    discount and the episode length, padded by half a bin for categorical critics.
     """
     crit = config.rl.critic
-    if crit.value_lower_bound is not None and crit.value_upper_bound is not None:
-        return float(crit.value_lower_bound), float(crit.value_upper_bound)
-
     discount = float(config.rl.discount)
     T = int(config.collect.max_episode_steps)
-    if config.collect.use_time_to_success_as_reward:
-        lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
-        upper = 0.0
-    else:
-        lower = 0.0
-        upper = 1.0
+    lower = -(1.0 - discount**T) / (1.0 - discount) if discount < 1.0 else -float(T)
+    upper = 0.0
     if crit.num_value_bins > 1:
         half_bw = (upper - lower) / (2 * (crit.num_value_bins - 1))
         lower -= half_bw
         upper += half_bw
     return float(lower), float(upper)
-
-
-def make_bin_centers(
-    lower_bound: float, upper_bound: float, num_bins: int
-) -> at.Float[at.Array, " k"]:
-    """Public accessor for the uniformly spaced value-bin centers."""
-    return _bin_centers(lower_bound, upper_bound, num_bins)
 
 
 def reduce_ensemble_probs(
@@ -215,7 +191,7 @@ def make_value_distribution(
     value_lower_bound: float = 0.0,
     value_upper_bound: float = 1.0,
     target_type: str = "one_hot",
-) -> ValueDistribution:
+) -> GaussianValueDistribution | CategoricalValueDistribution:
     """Create a value distribution from raw network logits.
 
     Args:
@@ -230,7 +206,7 @@ def make_value_distribution(
     logits = jnp.asarray(logits, dtype=jnp.float32)
     if num_value_bins <= 1:
         return GaussianValueDistribution(logits=logits)
-    centers = _bin_centers(value_lower_bound, value_upper_bound, num_value_bins)
+    centers = make_bin_centers(value_lower_bound, value_upper_bound, num_value_bins)
     return CategoricalValueDistribution(
         logits=logits,
         bin_centers=centers,

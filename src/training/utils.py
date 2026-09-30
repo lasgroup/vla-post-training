@@ -130,8 +130,8 @@ def init_wandb(
 
 class Logger:
 
-    def __init__(self, config, resuming, enabled):
-        init_wandb(config, resuming=resuming, enabled=enabled)
+    def __init__(self, config, resuming):
+        init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
         self.ckpt_dir = config.checkpoint_dir
         self.wandb_enabled = config.wandb_enabled
 

@@ -1,6 +1,6 @@
 # ruff: noqa: F722
 import dataclasses
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 import flax.nnx as nnx
@@ -15,13 +15,7 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 from src.training.config import OnlineTrainConfig, BestofNLearnerConfig
-from src.rl.networks.rl_networks import (
-    ObsType,
-    ActionType,
-    StateActionCritic,
-    StateValue,
-    PREFIX_EMBEDDING_NAME,
-)
+from src.rl.networks.rl_networks import ObsType, ActionType
 from src.rl.value_distribution import (
     get_value_bounds,
     make_value_distribution,
@@ -30,13 +24,14 @@ from src.rl.value_distribution import (
     reduce_ensemble_probs,
 )
 from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
+from src.rl.networks.mlp_critic import MLPStateActionCritic, MLPStateValue
 
-# The critic may be either the MLP backbone (StateActionCritic / StateValue) or the
-# BroNet backbone, depending on config.rl.critic.use_bronet. Both expose the same
-# call signature and output convention, so the loss is architecture-agnostic; these
-# unions just let @at.typecheck accept either backbone.
-AnyStateActionCritic = StateActionCritic | BroNetStateActionCritic
-AnyStateValue = StateValue | BroNetStateValue
+# The critic may be either the MLP or the BroNet backbone, depending on
+# config.rl.critic.use_bronet. Both expose the same call signature and output
+# convention, so the loss is architecture-agnostic; these unions just let
+# @at.typecheck accept either backbone.
+AnyStateActionCritic = MLPStateActionCritic | BroNetStateActionCritic
+AnyStateValue = MLPStateValue | BroNetStateValue
 
 
 CriticBatch = tuple[
@@ -48,92 +43,32 @@ CriticBatch = tuple[
     at.Float[at.Array, " b"],  # MC returns
 ]
 
-StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], StateActionCritic]
-StateValueDef = Callable[[ObsType, nnx.Rngs], StateValue]
+StateActionCriticDef = Callable[[ObsType, ActionType, nnx.Rngs], AnyStateActionCritic]
+StateValueDef = Callable[[ObsType, nnx.Rngs], AnyStateValue]
 
 
-from src.rl.networks.encoders.encoders import MLPEncoder
-from src.rl.networks.decoders.values.state_action_value import StateActionEnsembleDecoder
-from src.rl.networks.decoders.values.state_value import StateValueEnsembleDecoder
-from src.rl.networks.mlp import MLP
-
-
-def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, StateValueDef]:
+def _build_mlp_critic_defs(config) -> tuple[StateActionCriticDef, StateValueDef]:
     # The distributional V-target is the Q distribution itself (and vice versa), which is
     # only valid when both critics share an identical categorical support.
     if config.rl.critic.use_distributional_critic:
         assert config.rl.critic.num_value_bins > 1, (
             "use_distributional_critic=True requires num_value_bins > 1."
         )
-    critic_encoder_hidden_dims = config.rl.critic.encoder_hidden_dims
-    critic_decoder_hidden_dims = config.rl.critic.decoder_hidden_dims
-    critic_num_qs = config.rl.critic.num_qs
-    critic_num_vs = config.rl.critic.num_vs
+    crit = config.rl.critic
 
-    def encoder_def(observation: ObsType, rngs: nnx.Rngs):
-        network_def = lambda o, rg: MLP(
-            input=o,
-            hidden_dims=critic_encoder_hidden_dims,
-            activate_final=True,
-            rngs=rg,
-        )
-        state_vector_keys = ["state"]
-        if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
-            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
-        return MLPEncoder(
-            dummy_obs=observation,
-            encoder_def=network_def,
-            state_vector_keys=state_vector_keys,
-            rngs=rngs,
+    def state_action_critic_def(observation: ObsType, action: ActionType, rngs: nnx.Rngs) -> MLPStateActionCritic:
+        return MLPStateActionCritic(
+            observation, action, crit.encoder_hidden_dims, crit.decoder_hidden_dims,
+            num_qs=crit.num_qs, num_bins=crit.num_value_bins, rngs=rngs,
         )
 
-    def state_action_decoder_def(
-        embedding: jax.Array, action: jax.Array, rngs: nnx.Rngs
-    ) -> StateActionEnsembleDecoder:
-        return StateActionEnsembleDecoder(
-            observation=embedding,
-            action=action,
-            hidden_dims=critic_decoder_hidden_dims,
-            num_qs=critic_num_qs,
-            num_bins=config.rl.critic.num_value_bins,
-            rngs=rngs,
-        )
-
-    def state_value_decoder_def(
-        embedding: jax.Array, rngs: nnx.Rngs
-    ) -> StateValueEnsembleDecoder:
-        return StateValueEnsembleDecoder(
-            observation=embedding,
-            hidden_dims=critic_decoder_hidden_dims,
-            num_vs=critic_num_vs,
-            num_bins=config.rl.critic.num_value_bins,
-            rngs=rngs,
-        )
-
-    def state_action_critic_def(
-        observation: ObsType, action: jax.Array, rngs: nnx.Rngs
-    ) -> StateActionCritic:
-        return StateActionCritic(
-            observation=observation,
-            action=action,
-            encoder_def=encoder_def,
-            decoder_def=state_action_decoder_def,
-            rngs=rngs,
-        )
-
-    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> StateValue:
-        return StateValue(
-            observation=observation,
-            encoder_def=encoder_def,
-            decoder_def=state_value_decoder_def,
-            rngs=rngs,
+    def state_value_def(observation: ObsType, rngs: nnx.Rngs) -> MLPStateValue:
+        return MLPStateValue(
+            observation, crit.encoder_hidden_dims, crit.decoder_hidden_dims,
+            num_vs=crit.num_vs, num_bins=crit.num_value_bins, rngs=rngs,
         )
 
     return state_action_critic_def, state_value_def
-
-
-def _use_ema_critic(config: OnlineTrainConfig) -> bool:
-    return config.rl.critic.use_ema
 
 
 def _critic_ema_decay(config: OnlineTrainConfig) -> float | None:
@@ -145,7 +80,7 @@ def create_critic(
     config: OnlineTrainConfig,
 ) -> AnyStateActionCritic | AnyStateValue:
     critic_params = critic_state.params
-    if critic_state.ema_params is not None and _use_ema_critic(config):
+    if critic_state.ema_params is not None:
         critic_params = critic_state.ema_params
     return nnx.merge(critic_state.model_def, critic_params)
 
@@ -164,7 +99,6 @@ def _as_scalar_batch(values: at.ArrayLike) -> at.Float[at.Array, " b"]:
 def summarize_critic_values(
     critic_logits: at.ArrayLike,
     config: OnlineTrainConfig,
-    critic_reduction: str = "min",
 ) -> at.Float[at.Array, " b"]:
     assert isinstance(config.rl, BestofNLearnerConfig)
     lower, upper = get_value_bounds(config)
@@ -172,14 +106,7 @@ def summarize_critic_values(
     expected_values = dist.mean()
     if expected_values.ndim > 1:
         # Take min across the ensemble members
-        if critic_reduction == "min":
-            expected_values = jnp.min(expected_values, axis=0)
-        elif critic_reduction == "mean":
-            expected_values = jnp.mean(expected_values, axis=0)
-        else:
-            raise NotImplementedError(
-                f"Critic reduction {critic_reduction} is not implemented."
-            )
+        expected_values = jnp.min(expected_values, axis=0)
     return _as_scalar_batch(expected_values)
 
 
@@ -336,7 +263,7 @@ def train_q_step(
     value_model.eval()
     assert isinstance(config.rl, BestofNLearnerConfig)
 
-    step = q_state.step // config.rl.critic.num_updates_per_batch
+    step = q_state.step
     observation, actions, next_observation, reward, discount, mc_return = batch
     reward = _as_scalar_batch(reward)
     discount = _as_scalar_batch(discount)
@@ -379,11 +306,7 @@ def train_q_step(
             q_logprobs = jax.nn.log_softmax(q_logits, axis=-1)
             td_loss = -jnp.mean(jnp.sum(target_probs[jnp.newaxis] * q_logprobs, axis=-1))
         else:
-            bootstrapped_values = summarize_critic_values(
-                target_value_model(next_observation),
-                config,
-                critic_reduction=config.rl.critic.reduction,
-            )
+            bootstrapped_values = summarize_critic_values(target_value_model(next_observation), config)
             td_targets = reward + discount * jax.lax.stop_gradient(bootstrapped_values)
             td_loss = -jnp.mean(q_dist.log_prob(td_targets))
 
@@ -429,7 +352,7 @@ def train_value_step(
 ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
     del rng
     assert isinstance(config.rl, BestofNLearnerConfig)
-    step = value_state.step // config.rl.critic.num_updates_per_batch
+    step = value_state.step
     value_model = nnx.merge(value_state.model_def, value_state.params)
     value_model.train()
 
@@ -468,11 +391,7 @@ def train_value_step(
             v_logprobs = jax.nn.log_softmax(value_logits, axis=-1)
             td_loss = -jnp.mean(jnp.sum(target_probs[jnp.newaxis] * v_logprobs, axis=-1))
         else:
-            q_values = summarize_critic_values(
-                target_q_model(observation, actions),
-                config,
-                critic_reduction=config.rl.critic.reduction,
-            )
+            q_values = summarize_critic_values(target_q_model(observation, actions), config)
             td_loss = -jnp.mean(v_dist.log_prob(jax.lax.stop_gradient(q_values)))
 
         mc_loss = -jnp.mean(v_dist.log_prob(mc_return))

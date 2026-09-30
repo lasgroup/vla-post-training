@@ -4,7 +4,6 @@ import functools
 import gc
 import json
 import logging
-import weakref
 from typing import Any, Dict
 
 import etils.epath as epath
@@ -29,14 +28,13 @@ from openpi_client import image_tools
 from src.rl.filtered_sft_agent.update import train_step
 from src.rl.networks.rl_networks import PREFIX_EMBEDDING_NAME
 from src.rl.replay_buffer import ShardedReplayBuffer
-from src.training.config import OnlineTrainConfig, FilteredSFTLearnerConfig
+from src.training.config import OnlineTrainConfig
 from src.envs.wrappers import (
     TimeToSuccessAsRewardWrapper,
     Pi0ObservationWrapper,
     QueryFrequencyWrapper,
 )
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
-from src.rl.agent import Agent
 from src.training.runtime_state import load_resume_state
 
 
@@ -54,9 +52,7 @@ def filtered_sft_wrap_env(
 
         def _make_env(rank=i):
             # Create the base environment
-            base_env = env_fn(rank)
-            if config.collect.use_time_to_success_as_reward:
-                base_env = TimeToSuccessAsRewardWrapper(base_env)
+            base_env = TimeToSuccessAsRewardWrapper(env_fn(rank))
             # Add Pi related obs to the environment
             base_env = Pi0ObservationWrapper(
                 env=base_env,
@@ -201,7 +197,9 @@ def _get_obs_key_process_fn(domain: str):
     return lambda k: k
 
 
-class FilteredSFTLearner(Agent):
+class FilteredSFTLearner:
+    training_steps: int = 0
+    total_collected_episodes: int = 0
     # Whether collection also returns the policy's prefix embedding alongside each
     # action chunk, and stores it in the replay buffer (used by Best-of-N critics).
     _store_prefix_rep: bool = False
@@ -308,8 +306,18 @@ class FilteredSFTLearner(Agent):
         )
         gc.collect()
 
-        # prepare train_step
-        self._refresh_train_step()
+        # prepare train_step (the train state no longer holds the EMA, so recompute its sharding)
+        self._train_state_sharding = sharding.fsdp_sharding(self._train_state, self._mesh, log=False)
+        self._train_step = jax.jit(
+            functools.partial(train_step, self._config),
+            in_shardings=(
+                self._replicated_sharding,
+                self._train_state_sharding,
+                self._data_sharding,
+            ),
+            out_shardings=(self._train_state_sharding, self._replicated_sharding),
+            donate_argnums=(1,),
+        )
 
         # Create temporary episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
@@ -358,43 +366,11 @@ class FilteredSFTLearner(Agent):
         raise NotImplementedError(f"Unknown domain: {domain}")
 
     def _drop_policy_model(self):
-        model = getattr(self._policy, "_model", None)
-        model_ref = None
-        if model is not None:
-            try:
-                model_ref = weakref.ref(model)
-            except TypeError:
-                model_ref = None
-
         self._policy._model = None
         # These JAX callables are created from bound model methods and can capture model state.
-        if hasattr(self._policy, "_sample_actions"):
-            self._policy._sample_actions = None
-        if hasattr(self._policy, "_get_prefix_rep"):
-            self._policy._get_prefix_rep = None
-
-        del model
+        self._policy._sample_actions = None
+        self._policy._get_prefix_rep = None
         gc.collect()
-
-        if model_ref is not None and model_ref() is not None:
-            logging.warning(
-                "Policy model object is still alive after cleanup; other references remain."
-            )
-
-    def _refresh_train_step(self):
-        self._train_state_sharding = sharding.fsdp_sharding(
-            self._train_state, self._mesh, log=False
-        )
-        self._train_step = jax.jit(
-            functools.partial(train_step, self._config),
-            in_shardings=(
-                self._replicated_sharding,
-                self._train_state_sharding,
-                self._data_sharding,
-            ),
-            out_shardings=(self._train_state_sharding, self._replicated_sharding),
-            donate_argnums=(1,),
-        )
 
     def _make_buffer_dummy_data(self) -> dict:
         obs_spec, act_spec = self._config.model.inputs_spec(batch_size=1)
@@ -464,38 +440,25 @@ class FilteredSFTLearner(Agent):
         train_state: training_utils.TrainState,
         return_prefix_rep: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        params = (
-            train_state.ema_params
-            if train_state.ema_params is not None
-            else train_state.params
-        )
-        model = nnx.merge(train_state.model_def, params)
+        # Only called during data collection, when the EMA params are on device.
+        model = nnx.merge(train_state.model_def, train_state.ema_params)
         model.eval()
-        first_obs = next(iter(observations.values()), None)
-        if first_obs is None:
-            raise ValueError("Observation dictionary is empty.")
-        first_obs = np.asarray(first_obs)
-        batch_size = first_obs.shape[0] if first_obs.ndim > 1 else 1
+        batch_size = np.asarray(next(iter(observations.values()))).shape[0]
         noise = jax.random.normal(
             rng, (batch_size, self._policy.action_horizon, self._policy.action_dim)
         )
-        # Vector envs expect a batch dimension for actions. Policy inference
-        # unbatches when batch_size == 1, so add it back for single-env runs.
         num_devices = len(jax.devices())
         sharding_spec = (
             self._data_sharding if batch_size % num_devices == 0 else None
         )
         if not return_prefix_rep:
-            actions = self._policy.infer_with_model(
+            return self._policy.infer_with_model(
                 model=model,
                 obs=observations,
                 noise=noise,
                 return_prefix_rep=False,
                 sharding_spec=sharding_spec,
             )["actions"]
-            if batch_size == 1 and actions.ndim == 2:
-                actions = actions[np.newaxis, ...]
-            return actions
 
         # Bypass infer_with_model: _output_transform cannot handle the (actions, prefix) tuple
         inputs = self._policy._input_transform(observations)
@@ -513,12 +476,7 @@ class FilteredSFTLearner(Agent):
             **self._policy._sample_kwargs,
         )
         outputs = {"state": inputs["state"], "actions": raw_actions}
-        if batch_size == 1:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0]), outputs)
-        outputs = self._policy._output_transform(outputs)
-        actions = outputs["actions"]
-        if batch_size == 1 and actions.ndim == 2:
-            actions = actions[np.newaxis, ...]
+        actions = self._policy._output_transform(outputs)["actions"]
         return actions, np.asarray(prefix, dtype=np.float32)
 
     def sample_actions(
@@ -541,21 +499,11 @@ class FilteredSFTLearner(Agent):
 
         return np.asarray(actions, dtype=np.float32)
 
-    def _online_batch_to_sft_batch(
-        self, online_batch: Dict[str, Any]
-    ) -> tuple[_model.Observation, _model.Actions]:
-        return (
-            _model.Observation.from_dict(online_batch["observation"]),
-            online_batch["actions"],
-        )
-
     def save_checkpoint(self, step: int | None = None):
-        state_to_save = self._train_state
-        if self._ema is not None:
-            ema_rep = jax.device_put(self._ema, self._replicated_sharding)
-            state_to_save = dataclasses.replace(
-                state_to_save, ema_params=ema_rep, ema_decay=self._config.ema_decay
-            )
+        ema_rep = jax.device_put(self._ema, self._replicated_sharding)
+        state_to_save = dataclasses.replace(
+            self._train_state, ema_params=ema_rep, ema_decay=self._config.ema_decay
+        )
         _checkpoints.save_state(
             self._checkpoint_manager, state_to_save, self._data_loader, step
         )
@@ -642,10 +590,6 @@ class FilteredSFTLearner(Agent):
             self._save_episode_in_buffer(episode_data, task_description, is_success=True)
 
     def _save_episode_in_buffer(self, episode_data, task_description, is_success: bool = False):
-        assert isinstance(self._config.rl, FilteredSFTLearnerConfig), (
-            "Only Filtered SFT config should be passed " "to the filtered SFT agent"
-        )
-
         if self._store_prefix_rep:
             self._attach_prefix_embeddings_to_episode_data(
                 episode_data, task_description=task_description
@@ -684,7 +628,7 @@ class FilteredSFTLearner(Agent):
         _mc_return = ((all_gammas * episode_data["reward"][:n_steps])[::-1].cumsum()[::-1] / all_gammas)[:n_windows]
 
         # if the reward is constant, set the MC returns to reward/(1-gamma)
-        if self._config.collect.fix_mc_returns and np.all(episode_data["reward"] == episode_data["reward"][0]):
+        if np.all(episode_data["reward"] == episode_data["reward"][0]):
             _mc_return = np.full_like(_mc_return, episode_data["reward"][0] / (1 - self._config.rl.discount))
 
         def transform(input):
@@ -722,7 +666,7 @@ class FilteredSFTLearner(Agent):
         )
         self._collection_success_episodes += 1
 
-    def start_data_collection(self, step: int | None = None):
+    def start_data_collection(self):
         # Reset episode storage
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
         self._collection_success_episodes = 0
@@ -730,7 +674,7 @@ class FilteredSFTLearner(Agent):
         ema_rep = jax.device_put(self._ema, self._replicated_sharding)
         self._train_state = dataclasses.replace(self._train_state, ema_params=ema_rep)
 
-    def end_data_collection(self, step: int | None = None) -> int:
+    def end_data_collection(self) -> int:
         collected_episodes = int(self._collection_success_episodes)
         # Reset episode storage and counter for the next collection round.
         self._episode_storage = [[] for _ in range(self._config.collect.env_num)]
@@ -743,21 +687,15 @@ class FilteredSFTLearner(Agent):
 
     def update(self):
         self.training_steps += 1
-        update_policy = (
-            self.training_steps >= self._config.rl.policy.training_start_step
-            and self.training_steps % self._config.rl.policy.update_interval == 0
-        )
-        if not update_policy:
+        if self.training_steps % self._config.rl.policy.update_interval != 0:
             return {"online_buffer_size": self._online_data_buffer.size}
 
         if self._online_data_buffer.size == 0:
             return {}
-        online_batch_raw = self._online_data_buffer.sample(batch_size=self._config.batch_size)
-        batch = self._online_batch_to_sft_batch(online_batch_raw)
+        online_batch = self._online_data_buffer.sample(batch_size=self._config.batch_size)
+        batch = (_model.Observation.from_dict(online_batch["observation"]), online_batch["actions"])
 
         train_rng, self._rng = jax.random.split(self._rng)
-        rl_config = self._config.rl
-        assert isinstance(rl_config, FilteredSFTLearnerConfig)
         with sharding.set_mesh(self._mesh):
             policy_state, info = self._train_step(train_rng, self._train_state, batch)
         self._train_state = policy_state
