@@ -183,6 +183,7 @@ class BestofNLearner(FilteredSFTLearner):
             path,
             self._rl_checkpoint_state(),
         )
+        self._rl_state_checkpointer.wait_until_finished()
 
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()

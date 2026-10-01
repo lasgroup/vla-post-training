@@ -182,6 +182,9 @@ def make_base_molmo_config(name: str, rl_config: RLAlgorithmConfig) -> OnlineTra
             ),
             base_config=DataConfig(prompt_from_task=True),
         ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_droid_jointpos/params"
+        ),
         collect=CollectionConfig(domain="molmo", max_episode_steps=450),
     )
 
