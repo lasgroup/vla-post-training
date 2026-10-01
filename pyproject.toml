@@ -51,6 +51,10 @@ dependencies = [
     "stringcase==1.2.0",
     "teledex",
     "zstandard",
+
+    "openpi",
+    "openpi-client",
+    "molmo-spaces",
 ]
 
 [project.urls]
@@ -65,4 +69,20 @@ dev = [
     "ipywidgets>=8.1.5",
     "matplotlib>=3.10.0",
     "pynvml>=12.0.0",
+]
+
+[tool.uv.sources]
+openpi = { path = "openpi", editable = true }
+openpi-client = { path = "openpi/packages/openpi-client", editable = true }
+molmo-spaces = { path = "molmospaces", editable = true }
+
+[tool.uv]
+# molmospaces declares jax~=0.6.2/numpy>=2.2, incompatible with openpi's
+# jax==0.5.3/numpy==1.26.4 pins above — force the versions openpi needs.
+override-dependencies = [
+    "jax[cuda12]==0.5.3",
+    "jaxlib==0.5.3",
+    "numpy==1.26.4",
+    "ml-dtypes==0.4.1",
+    "tensorstore==0.1.74",
 ]
