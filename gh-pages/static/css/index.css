@@ -300,7 +300,7 @@ strong {
   color:var(--muted);
   margin-bottom:1.2em;
 }
-.abstract-copy {
+.tldr-copy {
   font-size:16px;
   line-height:1.9;
 }
@@ -755,7 +755,7 @@ body.figure-open {
   .section-lead {
     font-size:21px;
   }
-  .content,.abstract-copy,.intro-copy {
+  .content,.tldr-copy,.intro-copy {
     font-size:14px;
     line-height:1.85;
   }

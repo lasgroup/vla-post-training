@@ -114,16 +114,15 @@
   </section>
 
   <nav class="section-nav" aria-label="Page sections"><div>
-    <a href="#abstract">Abstract</a><a href="#motivation">Motivation</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
+    <a href="#tldr">TL;DR</a><a href="#motivation">Motivation</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
   </div></nav>
 
-  <section class="section band" id="abstract" aria-labelledby="abstract-title">
+  <section class="section band" id="tldr" aria-labelledby="tldr-title">
     <div class="container reading-width">
-      <h2 class="section-title" id="abstract-title">Abstract</h2>
-      <div class="content abstract-copy">
-        <p>The introduction of generalist robot policies has enabled a single, large model to learn a variety of tasks from a vast pre-training corpus. While these models often display powerful zero-shot generalization capabilities, they nonetheless typically require an adaptation phase to reach sufficient performance in deployment. Iterated self-improvement via reinforcement learning (RL) has demonstrated promise in enabling this adaptation, yet such approaches have been largely explored in <em>single-task</em> settings—where the goal is to simply improve on a narrow deployment task—which lies in stark contrast to the <em>multi-task</em> capabilities of the base policy.</p>
-        <p>In this work we ask whether generalist robot policies are capable of multi-task, <strong>generalist improvement in deployment</strong>—targeting many diverse tasks simultaneously—and what algorithmic recipe enables this. To answer this question, we first develop a set of structured evaluations to test generalist improvement capabilities, and systematically evaluate algorithmic and practical design choices regarding value estimation, policy extraction and resource allocation.</p>
-        <p>We show that not only generalist policies can be improved online across diverse tasks, but that the right recipe can enable <strong>generalization</strong> and increase performance on tasks not considered during online training. We characterize when this generalization occurs, and show that the training task distribution as well as the use of value-based RL are both critical. To the best of our knowledge, this is the first evidence for online generalist improvement for robot foundation models.</p>
+      <h2 class="section-title" id="tldr-title">TL;DR</h2>
+      <div class="content tldr-copy">
+        <p>Post-training of generalist policies often specializes them to a narrow set of tasks and reduces performance elsewhere. We study whether learning from experience across diverse tasks can improve a single policy on both its training tasks and related tasks it has not seen during post-training.</p>
+        <p>With enough task diversity, we show that critic-guided reinforcement learning improves performance on unseen scenes and objects in MolmoSpaces. Filtered supervised fine-tuning also improves training-task performance, but generalizes less reliably. Our results identify <strong>task diversity and value learning</strong> as key ingredients for generalist policy improvement.</p>
       </div>
     </div>
   </section>
@@ -131,7 +130,7 @@
   <section class="section" id="motivation" aria-labelledby="motivation-title">
     <div class="container reading-width">
       <h2 class="section-title" id="motivation-title">Motivation</h2>
-      <p class="section-lead">Can a generalist robot become a better generalist?</p>
+      <p class="section-lead">Generalization in post-training generalist policies</p>
       <div class="content"><p>Online post-training often improves a robot on one deployment task while degrading its performance elsewhere. We ask whether experience across many tasks can improve the whole policy: both on the tasks it practices and on related tasks it has never encountered during post-training.</p></div>
     </div>
   </section>
