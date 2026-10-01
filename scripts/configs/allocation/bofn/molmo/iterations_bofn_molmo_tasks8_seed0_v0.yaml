@@ -1,0 +1,45 @@
+script: scripts/exp.py
+config_name: pi05_molmo_online_best_of_n
+project_name: vla-post-training
+group_name: iterations_multitask_tasks8_bofn_molmo_v0_seed0
+params:
+  log_interval: [25]
+  max_runtime: [39600]  # 11 hours
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts, num_train_steps, collect.eval_interval]: [
+    [500000, 200, 500000, 499999],
+    [100000, 40, 500000, 499999],
+    [25000, 10, 500000, 499999],
+  ]
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [molmo, [
+        molmo_369, molmo_138, molmo_24, molmo_187, molmo_325, molmo_221, molmo_373, molmo_148
+      ],
+      [
+        molmo_369, molmo_138, molmo_24, molmo_187, molmo_325, molmo_221, molmo_373, molmo_148,
+        molmo_8, molmo_273, molmo_222, molmo_73, molmo_346, molmo_49, molmo_21, molmo_379,
+        molmo_140, molmo_356, molmo_345, molmo_155, molmo_357, molmo_163, molmo_208, molmo_226
+      ],
+    ],
+  ]
+
+  collect.store_prefix_rep: [True]
+
+  rl.critic.batch_size: [1024]
+  rl.critic.inference_start_step: [1]   # To speed up data collection at step 0
+  rl.critic.pre_training_steps: [0]
+  rl.critic.td_weight_schedule.switch_step: [999999]  # No switch
+
+  !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
+    [1, 1, False, 1],     # TD (regression)
+  ]
+
+  rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
+
+  rl.buffer_capacity: [250000]
+  rl.online_ratio: [1.0]
+
+  seed: [0]

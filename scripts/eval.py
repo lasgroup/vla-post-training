@@ -9,19 +9,29 @@ config's weight loader, so no trained checkpoint is needed -- run with
 `resume=False` (the default).
 
 Trained checkpoint: point `checkpoint_base_dir` + `exp_name` at an existing run
-and pass `--resume` to restore its (EMA) weights. Keep `--no-requeue` so the
-replay buffer / shards are NOT restored as eval does not need them (buffer
-restore is gated on resume AND requeue).
+and pass `--resume` to restore its (EMA) weights. NOTE: `--resume` always
+restores the replay shards (see FilteredSFTLearner.__init__) even though eval
+never samples from the buffer; there is no `--no-requeue` flag any more. To skip
+that 12-25 GB load, point `checkpoint_base_dir` at a staging directory whose
+`runtime_state/replay_shards/` is empty.
+
+Which checkpoint is loaded is decided ENTIRELY by
+`runtime_state/resume_state.json`'s "step" -- both the policy and the critic
+(`rl_state/<step>`) are restored at that step. There is no --eval_step flag.
+
+Set EVAL_METRIC_PREFIX to log under a namespace other than `eval/` (e.g.
+`eval_newtasks`). Without it, re-evaluating a finished run overwrites its
+original `eval/success_rate` at the same wandb step.
 
 Examples:
     # Base pi0.5 on all 90 LIBERO-90 tasks (via the launcher / eval.yaml)
     ./scripts/launcher.py --config scripts/configs/eval.yaml
 
     # A trained checkpoint, run directly
-    uv run scripts/eval.py pi05_libero_online_aw_sft \\
+    EVAL_METRIC_PREFIX=eval_newtasks uv run scripts/eval.py pi05_libero_online_aw_sft \\
         --checkpoint_base_dir /capstor/scratch/cscs/ralfroemer/checkpoints \\
         --exp_name <run_dir_name> \\
-        --resume --no-requeue \\
+        --resume \\
         --collect.eval_tasks libero_90_44 libero_90_59 libero_90_5 \\
         --collect.num_eval_rollouts 5 --collect.eval_env_num 5 \\
         --rl.online_ratio 1.0
@@ -54,6 +64,7 @@ import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 
 import json
+import os
 import platform
 
 import jax
@@ -107,24 +118,36 @@ def main(config: _config.OnlineTrainConfig):
     finally:
         eval_env.close()
 
+    # Re-namespace the metrics when asked. `evaluate_policy` always emits
+    # `eval/...`; logging that into a finished run at its original eval step
+    # would overwrite the eval already recorded there (same wandb step, same
+    # key). A distinct prefix keeps both side by side.
+    prefix = (os.environ.get("EVAL_METRIC_PREFIX") or "eval").strip().strip("/") or "eval"
+    if prefix != "eval":
+        metrics = {
+            (f"{prefix}/{k[len('eval/'):]}" if k.startswith("eval/") else k): v
+            for k, v in metrics.items()
+        }
+
     if config.wandb_enabled:
         wandb.log(metrics, step=step)
 
     # Console report: overall first, then per-task success rates sorted by task.
-    logging.info(f"=== Eval at step {step} ===")
-    overall = metrics.get("eval/success_rate")
+    logging.info(f"=== Eval at step {step} (metric prefix: {prefix}/) ===")
+    overall = metrics.get(f"{prefix}/success_rate")
     if overall is not None:
         logging.info(f"overall success_rate: {overall:.4f}")
     per_task = {
-        k.removeprefix("eval/success_rate/"): v
+        k.removeprefix(f"{prefix}/success_rate/"): v
         for k, v in metrics.items()
-        if k.startswith("eval/success_rate/")
+        if k.startswith(f"{prefix}/success_rate/")
     }
     for task in sorted(per_task):
         logging.info(f"  {task}: {per_task[task]:.4f}")
 
     # Persist a JSON summary next to the checkpoint dir for offline inspection.
-    out_path = config.checkpoint_dir / f"eval_metrics_step{step}.json"
+    # The prefix is in the filename so a re-eval cannot clobber an earlier one.
+    out_path = config.checkpoint_dir / f"eval_metrics_{prefix}_step{step}.json"
     try:
         with open(out_path, "w") as f:
             json.dump(metrics, f, indent=2)

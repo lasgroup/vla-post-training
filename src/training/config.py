@@ -150,6 +150,9 @@ class CriticTrainingConfig:
     use_bronet: bool = False
     bronet_hidden_dim: int = 512
     bronet_depth: int = 2
+    # Whether the critic observation includes the proprioceptive `state` vector.
+    # When False, the critic conditions only on the policy prefix embedding.
+    use_proprio: bool = True
 
 
 # Define hyperparameter structures for your algorithms
@@ -517,24 +520,18 @@ _CONFIGS.extend(
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
-        # 2b. Best-of-N + Filtered SFT (Molmo): train the critic AND fine-tune the
-        # policy on its own successful rollouts. The AWR learner already trains
-        # both a critic and the policy; setting awr_loss_weight=0 + filtered_sft_weight=1
-        # makes the policy loss pure filtered SFT (BC on successful transitions),
-        # and n_samples>1 turns on best-of-N action selection at collection/eval.
         make_base_molmo_config(
             name="pi05_molmo_online_aw_sft",
             rl_config=AdvantageWeightedSFTLearnerConfig(
                 online_ratio=1.0,
-                awr_loss_weight=0.0,
-                filtered_sft_weight=1.0,
-                n_samples=32,
                 policy=PolicyTrainingConfig(update_interval=20, training_start_step=100),
             ),
         ),
-        # 2c. Same as 2b, but with PaliGemma LLM stack 0 and SigLIP img tower frozen.
-        # Only the action expert (LLM stack 1) and the small action-projection MLPs
-        # receive gradients; frozen params are cast to bfloat16 by init_train_state.
+        # 3. BoN+FSFT (expert-only): PaliGemma LLM stack 0 and the SigLIP img tower are
+        # frozen, so only the action expert (LLM stack 1) and the small
+        # action-projection MLPs receive gradients; frozen params are cast to
+        # bfloat16 by init_train_state. These need their own config names because
+        # freeze_filter is a pytree path filter, not a CLI-overridable scalar.
         make_base_molmo_config(
             name="pi05_molmo_online_aw_sft_expert_only",
             rl_config=AdvantageWeightedSFTLearnerConfig(
@@ -546,7 +543,6 @@ _CONFIGS.extend(
             ),
             freeze_filter=_make_ogpo_freeze_filter(),
         ),
-        # Libero counterpart of 2c.
         make_base_libero_config(
             name="pi05_libero_online_aw_sft_expert_only",
             rl_config=AdvantageWeightedSFTLearnerConfig(

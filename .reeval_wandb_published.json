@@ -1,0 +1,400 @@
+{
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153155_0d94e3_seed0",
+    "group": "bofn_molmo_tasks16",
+    "keys": 11,
+    "run_id": "sc8zpwfr"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153253_43e4ed_seed1",
+    "group": "bofn_molmo_tasks16",
+    "keys": 11,
+    "run_id": "4d2d36fb"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153302_6ebea4_seed2",
+    "group": "bofn_molmo_tasks16",
+    "keys": 11,
+    "run_id": "l4psuv20"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153310_2fc80a_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks16",
+    "keys": 22,
+    "run_id": "aoeo1lyx"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153316_4ad86f_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks16",
+    "keys": 22,
+    "run_id": "sm0n8imh"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153323_b3f0c8_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks16",
+    "keys": 22,
+    "run_id": "m863hxub"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153328_0cc41b_seed0",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "bwukzxij"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153334_f7eb26_seed0",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "6hbxzo2m"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/1": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153340_dba12b_seed0",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "iogvfdvq"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/2": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153348_87dc2e_seed0",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "uscoep5w"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153354_8ff959_seed1",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "p76eqgz4"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153400_571000_seed1",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "yqb3d0n9"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/1": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153404_4e1190_seed1",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "w5lc919x"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/2": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153411_1ed649_seed1",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "06mr9qbu"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153416_3eab62_seed2",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "2gecu9vf"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153422_0fe60b_seed2",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "nb7rekg7"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/1": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153428_426f93_seed2",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "nzllnr5z"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/2": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153432_bb069d_seed2",
+    "group": "bofn_molmo_tasks1",
+    "keys": 11,
+    "run_id": "193ascim"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153439_734845_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "5f7a0pst"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153446_d2475a_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "mo1qiqgk"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153452_273611_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "j5w2iv4g"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153458_395aed_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "4hicqgzz"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153504_032ee8_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "iabtzn70"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153513_355490_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "fgzlkgar"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153521_bb2a24_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "n3w2rwgd"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153528_b0a0e8_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "7zum3ln2"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153535_84be83_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "7lrulirg"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153540_d32c14_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "9lav8cyi"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153545_f72305_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "ubxigtkk"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153552_4818ff_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks1",
+    "keys": 22,
+    "run_id": "0wqf7gv2"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153558_9a134b_seed0",
+    "group": "bofn_molmo_tasks4",
+    "keys": 11,
+    "run_id": "5jlv68lb"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153604_ce7957_seed1",
+    "group": "bofn_molmo_tasks4",
+    "keys": 11,
+    "run_id": "20pl7a12"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153611_016cf0_seed2",
+    "group": "bofn_molmo_tasks4",
+    "keys": 11,
+    "run_id": "p2n1zq9m"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153618_2ac06d_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks4",
+    "keys": 22,
+    "run_id": "i8476pz3"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": [
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153625_b005d7_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks4",
+    "keys": 11,
+    "run_id": "1deq1p81"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153632_7b41ae_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks4",
+    "keys": 22,
+    "run_id": "vpddf7fx"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153641_988e31_seed0",
+    "group": "bofn_molmo_tasks8",
+    "keys": 11,
+    "run_id": "gbkv2jq9"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153647_54dc68_seed1",
+    "group": "bofn_molmo_tasks8",
+    "keys": 11,
+    "run_id": "befxkww3"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2/0": {
+    "arms": [
+      "final"
+    ],
+    "exp_name": "different_instances_eval_20260911-153658_f1d516_seed2",
+    "group": "bofn_molmo_tasks8",
+    "keys": 11,
+    "run_id": "uefnrswn"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153705_d1e438_seed0",
+    "group": "bofn_plus_fsft_eo_molmo_tasks8",
+    "keys": 22,
+    "run_id": "ouqcdomg"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153712_538b76_seed1",
+    "group": "bofn_plus_fsft_eo_molmo_tasks8",
+    "keys": 22,
+    "run_id": "op6broer"
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "different_instances_eval_20260911-153718_f33d4b_seed2",
+    "group": "bofn_plus_fsft_eo_molmo_tasks8",
+    "keys": 22,
+    "run_id": "tptnijd5"
+  }
+}

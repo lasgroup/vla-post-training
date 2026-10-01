@@ -1,0 +1,2234 @@
+{
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 167.1206896551724,
+          "success_rate": 0.6796875,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.90625,
+          "success_rate/molmo_543": 0.96875,
+          "success_rate/molmo_602": 0.375,
+          "success_rate/molmo_666": 0.46875,
+          "success_rate/molmo_675": 0.65625,
+          "success_rate/molmo_769": 0.875,
+          "success_rate/molmo_916": 0.96875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074102_e33cdd_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074102_e33cdd_seed0/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074102_e33cdd_seed0",
+    "group_name": "bofn_molmo_tasks16",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 155.66455696202533,
+          "success_rate": 0.6171875,
+          "success_rate/molmo_273": 0.375,
+          "success_rate/molmo_505": 0.5625,
+          "success_rate/molmo_543": 0.875,
+          "success_rate/molmo_602": 0.5625,
+          "success_rate/molmo_666": 0.53125,
+          "success_rate/molmo_675": 0.625,
+          "success_rate/molmo_769": 0.625,
+          "success_rate/molmo_916": 0.78125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074103_45b3fe_seed1/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074103_45b3fe_seed1/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074103_45b3fe_seed1",
+    "group_name": "bofn_molmo_tasks16",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 153.59116022099448,
+          "success_rate": 0.70703125,
+          "success_rate/molmo_273": 0.15625,
+          "success_rate/molmo_505": 0.75,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.75,
+          "success_rate/molmo_666": 0.71875,
+          "success_rate/molmo_675": 0.6875,
+          "success_rate/molmo_769": 0.84375,
+          "success_rate/molmo_916": 0.8125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074104_8d49b8_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074104_8d49b8_seed2/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074104_8d49b8_seed2",
+    "group_name": "bofn_molmo_tasks16",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 186.8560606060606,
+          "success_rate": 0.515625,
+          "success_rate/molmo_273": 0.34375,
+          "success_rate/molmo_505": 0.59375,
+          "success_rate/molmo_543": 0.59375,
+          "success_rate/molmo_602": 0.15625,
+          "success_rate/molmo_666": 0.5625,
+          "success_rate/molmo_675": 0.8125,
+          "success_rate/molmo_769": 1.0,
+          "success_rate/molmo_916": 0.0625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_10b3d5_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_10b3d5_seed0/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 146.0054054054054,
+          "success_rate": 0.72265625,
+          "success_rate/molmo_273": 0.1875,
+          "success_rate/molmo_505": 0.9375,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.78125,
+          "success_rate/molmo_675": 0.8125,
+          "success_rate/molmo_769": 0.90625,
+          "success_rate/molmo_916": 0.8125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_10b3d5_seed0/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_10b3d5_seed0/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074107_10b3d5_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks16",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 199.48876404494382,
+          "success_rate": 0.6953125,
+          "success_rate/molmo_273": 0.4375,
+          "success_rate/molmo_505": 0.84375,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.8125,
+          "success_rate/molmo_675": 0.5,
+          "success_rate/molmo_769": 0.71875,
+          "success_rate/molmo_916": 0.90625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_0d7823_seed1/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_0d7823_seed1/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 139.3542857142857,
+          "success_rate": 0.68359375,
+          "success_rate/molmo_273": 0.5625,
+          "success_rate/molmo_505": 0.875,
+          "success_rate/molmo_543": 0.71875,
+          "success_rate/molmo_602": 0.75,
+          "success_rate/molmo_666": 0.40625,
+          "success_rate/molmo_675": 0.4375,
+          "success_rate/molmo_769": 0.875,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_0d7823_seed1/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074107_0d7823_seed1/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074107_0d7823_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks16",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 195.36507936507937,
+          "success_rate": 0.4921875,
+          "success_rate/molmo_273": 0.0625,
+          "success_rate/molmo_505": 0.75,
+          "success_rate/molmo_543": 0.46875,
+          "success_rate/molmo_602": 0.8125,
+          "success_rate/molmo_666": 0.125,
+          "success_rate/molmo_675": 0.75,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074108_9e94c1_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074108_9e94c1_seed2/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 172.954802259887,
+          "success_rate": 0.69140625,
+          "success_rate/molmo_273": 0.0625,
+          "success_rate/molmo_505": 0.71875,
+          "success_rate/molmo_543": 0.90625,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.875,
+          "success_rate/molmo_769": 0.96875,
+          "success_rate/molmo_916": 0.90625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074108_9e94c1_seed2/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074108_9e94c1_seed2/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_207",
+      "molmo_393",
+      "molmo_146",
+      "molmo_55",
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212",
+      "molmo_351",
+      "molmo_333",
+      "molmo_289",
+      "molmo_122"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074108_9e94c1_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks16",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2/0",
+    "tasks": 16
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 169.26923076923077,
+          "success_rate": 0.40625,
+          "success_rate/molmo_273": 0.34375,
+          "success_rate/molmo_505": 0.28125,
+          "success_rate/molmo_543": 0.5625,
+          "success_rate/molmo_602": 0.0625,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.625,
+          "success_rate/molmo_769": 0.34375,
+          "success_rate/molmo_916": 0.34375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260625-083520_519e39_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260625-083520_519e39_seed0/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260625-083520_519e39_seed0",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 212.66265060240963,
+          "success_rate": 0.32421875,
+          "success_rate/molmo_273": 0.125,
+          "success_rate/molmo_505": 0.3125,
+          "success_rate/molmo_543": 0.28125,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.40625,
+          "success_rate/molmo_675": 0.5,
+          "success_rate/molmo_769": 0.15625,
+          "success_rate/molmo_916": 0.40625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_6cd3af_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_6cd3af_seed0/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071507_6cd3af_seed0",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 163.71653543307087,
+          "success_rate": 0.49609375,
+          "success_rate/molmo_273": 0.28125,
+          "success_rate/molmo_505": 0.625,
+          "success_rate/molmo_543": 0.8125,
+          "success_rate/molmo_602": 0.21875,
+          "success_rate/molmo_666": 0.625,
+          "success_rate/molmo_675": 0.34375,
+          "success_rate/molmo_769": 0.5,
+          "success_rate/molmo_916": 0.5625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_c45c76_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_c45c76_seed0/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071507_c45c76_seed0",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 168.75892857142858,
+          "success_rate": 0.4375,
+          "success_rate/molmo_273": 0.34375,
+          "success_rate/molmo_505": 0.375,
+          "success_rate/molmo_543": 0.65625,
+          "success_rate/molmo_602": 0.3125,
+          "success_rate/molmo_666": 0.21875,
+          "success_rate/molmo_675": 0.25,
+          "success_rate/molmo_769": 0.625,
+          "success_rate/molmo_916": 0.71875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_123511_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071507_123511_seed0/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071507_123511_seed0",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 157.6198347107438,
+          "success_rate": 0.47265625,
+          "success_rate/molmo_273": 0.25,
+          "success_rate/molmo_505": 0.46875,
+          "success_rate/molmo_543": 0.28125,
+          "success_rate/molmo_602": 0.25,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.5,
+          "success_rate/molmo_769": 0.6875,
+          "success_rate/molmo_916": 0.65625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115531_549684_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115531_549684_seed1/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260706-115531_549684_seed1",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 171.86458333333334,
+          "success_rate": 0.375,
+          "success_rate/molmo_273": 0.4375,
+          "success_rate/molmo_505": 0.28125,
+          "success_rate/molmo_543": 0.125,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.4375,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.125,
+          "success_rate/molmo_916": 0.53125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_6153f1_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_6153f1_seed1/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071518_6153f1_seed1",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 197.60176991150442,
+          "success_rate": 0.44140625,
+          "success_rate/molmo_273": 0.53125,
+          "success_rate/molmo_505": 0.53125,
+          "success_rate/molmo_543": 0.40625,
+          "success_rate/molmo_602": 0.15625,
+          "success_rate/molmo_666": 0.375,
+          "success_rate/molmo_675": 0.25,
+          "success_rate/molmo_769": 0.8125,
+          "success_rate/molmo_916": 0.46875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_80d846_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_80d846_seed1/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071518_80d846_seed1",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 171.50943396226415,
+          "success_rate": 0.4140625,
+          "success_rate/molmo_273": 0.0625,
+          "success_rate/molmo_505": 0.21875,
+          "success_rate/molmo_543": 0.59375,
+          "success_rate/molmo_602": 0.375,
+          "success_rate/molmo_666": 0.8125,
+          "success_rate/molmo_675": 0.15625,
+          "success_rate/molmo_769": 0.75,
+          "success_rate/molmo_916": 0.34375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_918368_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071518_918368_seed1/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071518_918368_seed1",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 175.73076923076923,
+          "success_rate": 0.5078125,
+          "success_rate/molmo_273": 0.53125,
+          "success_rate/molmo_505": 0.59375,
+          "success_rate/molmo_543": 0.6875,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.40625,
+          "success_rate/molmo_675": 0.25,
+          "success_rate/molmo_769": 0.625,
+          "success_rate/molmo_916": 0.46875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115541_98127e_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115541_98127e_seed2/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260706-115541_98127e_seed2",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 165.4375,
+          "success_rate": 0.4375,
+          "success_rate/molmo_273": 0.4375,
+          "success_rate/molmo_505": 0.21875,
+          "success_rate/molmo_543": 0.59375,
+          "success_rate/molmo_602": 0.3125,
+          "success_rate/molmo_666": 0.34375,
+          "success_rate/molmo_675": 0.46875,
+          "success_rate/molmo_769": 0.46875,
+          "success_rate/molmo_916": 0.65625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_265f92_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/0/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_265f92_seed2/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071520_265f92_seed2",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 211.99248120300751,
+          "success_rate": 0.51953125,
+          "success_rate/molmo_273": 0.5,
+          "success_rate/molmo_505": 0.53125,
+          "success_rate/molmo_543": 0.5625,
+          "success_rate/molmo_602": 0.375,
+          "success_rate/molmo_666": 0.625,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_84b38f_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/1/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_84b38f_seed2/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071520_84b38f_seed2",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 172.320987654321,
+          "success_rate": 0.31640625,
+          "success_rate/molmo_273": 0.0,
+          "success_rate/molmo_505": 0.09375,
+          "success_rate/molmo_543": 0.34375,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.4375,
+          "success_rate/molmo_675": 0.46875,
+          "success_rate/molmo_769": 0.6875,
+          "success_rate/molmo_916": 0.0,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_52a6b4_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/2/pi05_molmo_online_best_of_n/vla-post-training_20260904-071520_52a6b4_seed2/rl_state/99999",
+        "step": 99999
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071520_52a6b4_seed2",
+    "group_name": "bofn_molmo_tasks1",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 172.91358024691357,
+          "success_rate": 0.6328125,
+          "success_rate/molmo_273": 0.46875,
+          "success_rate/molmo_505": 0.65625,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.5,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155410_5ed5c8_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155410_5ed5c8_seed0/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 189.73684210526315,
+          "success_rate": 0.296875,
+          "success_rate/molmo_273": 0.125,
+          "success_rate/molmo_505": 0.3125,
+          "success_rate/molmo_543": 0.4375,
+          "success_rate/molmo_602": 0.25,
+          "success_rate/molmo_666": 0.5,
+          "success_rate/molmo_675": 0.125,
+          "success_rate/molmo_769": 0.1875,
+          "success_rate/molmo_916": 0.4375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155410_5ed5c8_seed0/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155410_5ed5c8_seed0/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155410_5ed5c8_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 152.44615384615383,
+          "success_rate": 0.5078125,
+          "success_rate/molmo_273": 0.40625,
+          "success_rate/molmo_505": 0.53125,
+          "success_rate/molmo_543": 0.4375,
+          "success_rate/molmo_602": 0.4375,
+          "success_rate/molmo_666": 0.5,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.4375,
+          "success_rate/molmo_916": 0.71875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_dfaac4_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_dfaac4_seed0/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 215.26356589147287,
+          "success_rate": 0.50390625,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.5,
+          "success_rate/molmo_543": 0.5625,
+          "success_rate/molmo_602": 0.28125,
+          "success_rate/molmo_666": 0.78125,
+          "success_rate/molmo_675": 0.5,
+          "success_rate/molmo_769": 0.6875,
+          "success_rate/molmo_916": 0.5,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_dfaac4_seed0/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_dfaac4_seed0/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071527_dfaac4_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 158.90857142857143,
+          "success_rate": 0.68359375,
+          "success_rate/molmo_273": 0.65625,
+          "success_rate/molmo_505": 0.71875,
+          "success_rate/molmo_543": 0.875,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.78125,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.75,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_47642f_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_47642f_seed0/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 156.25641025641025,
+          "success_rate": 0.45703125,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.4375,
+          "success_rate/molmo_543": 0.71875,
+          "success_rate/molmo_602": 0.46875,
+          "success_rate/molmo_666": 0.8125,
+          "success_rate/molmo_675": 0.46875,
+          "success_rate/molmo_769": 0.375,
+          "success_rate/molmo_916": 0.15625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_47642f_seed0/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_47642f_seed0/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071527_47642f_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 147.0796460176991,
+          "success_rate": 0.44140625,
+          "success_rate/molmo_273": 0.1875,
+          "success_rate/molmo_505": 0.1875,
+          "success_rate/molmo_543": 0.5625,
+          "success_rate/molmo_602": 0.28125,
+          "success_rate/molmo_666": 0.84375,
+          "success_rate/molmo_675": 0.46875,
+          "success_rate/molmo_769": 0.65625,
+          "success_rate/molmo_916": 0.34375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_7d4d86_seed0/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_7d4d86_seed0/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 124.63829787234043,
+          "success_rate": 0.55078125,
+          "success_rate/molmo_273": 0.125,
+          "success_rate/molmo_505": 0.34375,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.5625,
+          "success_rate/molmo_666": 0.625,
+          "success_rate/molmo_675": 0.3125,
+          "success_rate/molmo_769": 0.84375,
+          "success_rate/molmo_916": 0.8125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_7d4d86_seed0/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071527_7d4d86_seed0/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071527_7d4d86_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 178.3939393939394,
+          "success_rate": 0.64453125,
+          "success_rate/molmo_273": 0.53125,
+          "success_rate/molmo_505": 0.59375,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.4375,
+          "success_rate/molmo_666": 0.71875,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.71875,
+          "success_rate/molmo_916": 0.71875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155411_57aec0_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155411_57aec0_seed1/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 141.71428571428572,
+          "success_rate": 0.41015625,
+          "success_rate/molmo_273": 0.03125,
+          "success_rate/molmo_505": 0.375,
+          "success_rate/molmo_543": 0.375,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.25,
+          "success_rate/molmo_675": 0.21875,
+          "success_rate/molmo_769": 0.8125,
+          "success_rate/molmo_916": 0.71875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155411_57aec0_seed1/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155411_57aec0_seed1/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155411_57aec0_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 206.98648648648648,
+          "success_rate": 0.2890625,
+          "success_rate/molmo_273": 0.375,
+          "success_rate/molmo_505": 0.25,
+          "success_rate/molmo_543": 0.15625,
+          "success_rate/molmo_602": 0.25,
+          "success_rate/molmo_666": 0.28125,
+          "success_rate/molmo_675": 0.40625,
+          "success_rate/molmo_769": 0.1875,
+          "success_rate/molmo_916": 0.40625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_29e280_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_29e280_seed1/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 202.26666666666668,
+          "success_rate": 0.234375,
+          "success_rate/molmo_273": 0.25,
+          "success_rate/molmo_505": 0.34375,
+          "success_rate/molmo_543": 0.09375,
+          "success_rate/molmo_602": 0.0625,
+          "success_rate/molmo_666": 0.4375,
+          "success_rate/molmo_675": 0.3125,
+          "success_rate/molmo_769": 0.21875,
+          "success_rate/molmo_916": 0.15625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_29e280_seed1/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_29e280_seed1/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071529_29e280_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 151.95857988165682,
+          "success_rate": 0.66015625,
+          "success_rate/molmo_273": 0.3125,
+          "success_rate/molmo_505": 0.78125,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.53125,
+          "success_rate/molmo_666": 0.84375,
+          "success_rate/molmo_675": 0.71875,
+          "success_rate/molmo_769": 0.75,
+          "success_rate/molmo_916": 0.5625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_f93398_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_f93398_seed1/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 169.96621621621622,
+          "success_rate": 0.578125,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.84375,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.1875,
+          "success_rate/molmo_666": 0.59375,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.78125,
+          "success_rate/molmo_916": 0.5625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_f93398_seed1/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_f93398_seed1/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071529_f93398_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 153.5,
+          "success_rate": 0.375,
+          "success_rate/molmo_273": 0.0,
+          "success_rate/molmo_505": 0.0625,
+          "success_rate/molmo_543": 0.40625,
+          "success_rate/molmo_602": 0.4375,
+          "success_rate/molmo_666": 0.90625,
+          "success_rate/molmo_675": 0.46875,
+          "success_rate/molmo_769": 0.71875,
+          "success_rate/molmo_916": 0.0,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_bcd6f1_seed1/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_bcd6f1_seed1/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 191.02777777777777,
+          "success_rate": 0.421875,
+          "success_rate/molmo_273": 0.03125,
+          "success_rate/molmo_505": 0.3125,
+          "success_rate/molmo_543": 0.4375,
+          "success_rate/molmo_602": 0.53125,
+          "success_rate/molmo_666": 0.84375,
+          "success_rate/molmo_675": 0.15625,
+          "success_rate/molmo_769": 0.78125,
+          "success_rate/molmo_916": 0.28125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_bcd6f1_seed1/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071529_bcd6f1_seed1/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071529_bcd6f1_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 180.8556701030928,
+          "success_rate": 0.37890625,
+          "success_rate/molmo_273": 0.09375,
+          "success_rate/molmo_505": 0.21875,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.125,
+          "success_rate/molmo_666": 0.75,
+          "success_rate/molmo_675": 0.21875,
+          "success_rate/molmo_769": 0.78125,
+          "success_rate/molmo_916": 0.0625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_fa6a2f_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_fa6a2f_seed2/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 124.28205128205128,
+          "success_rate": 0.15234375,
+          "success_rate/molmo_273": 0.09375,
+          "success_rate/molmo_505": 0.09375,
+          "success_rate/molmo_543": 0.25,
+          "success_rate/molmo_602": 0.03125,
+          "success_rate/molmo_666": 0.34375,
+          "success_rate/molmo_675": 0.0,
+          "success_rate/molmo_769": 0.40625,
+          "success_rate/molmo_916": 0.0,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_fa6a2f_seed2/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_fa6a2f_seed2/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_138"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155412_fa6a2f_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 148.92261904761904,
+          "success_rate": 0.65625,
+          "success_rate/molmo_273": 0.5,
+          "success_rate/molmo_505": 0.8125,
+          "success_rate/molmo_543": 0.875,
+          "success_rate/molmo_602": 0.53125,
+          "success_rate/molmo_666": 0.625,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.5625,
+          "success_rate/molmo_916": 0.78125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_53565c_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_53565c_seed2/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 196.91304347826087,
+          "success_rate": 0.62890625,
+          "success_rate/molmo_273": 0.53125,
+          "success_rate/molmo_505": 0.75,
+          "success_rate/molmo_543": 0.5,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.65625,
+          "success_rate/molmo_675": 0.75,
+          "success_rate/molmo_769": 0.5,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_53565c_seed2/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_53565c_seed2/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071530_53565c_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 150.2,
+          "success_rate": 0.68359375,
+          "success_rate/molmo_273": 0.25,
+          "success_rate/molmo_505": 0.9375,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.5,
+          "success_rate/molmo_666": 0.90625,
+          "success_rate/molmo_675": 0.65625,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.6875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_31ce13_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_31ce13_seed2/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 191.92792792792793,
+          "success_rate": 0.43359375,
+          "success_rate/molmo_273": 0.15625,
+          "success_rate/molmo_505": 0.65625,
+          "success_rate/molmo_543": 0.59375,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.34375,
+          "success_rate/molmo_675": 0.34375,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_31ce13_seed2/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_31ce13_seed2/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_366"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071530_31ce13_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 221.06741573033707,
+          "success_rate": 0.34765625,
+          "success_rate/molmo_273": 0.0,
+          "success_rate/molmo_505": 0.15625,
+          "success_rate/molmo_543": 0.59375,
+          "success_rate/molmo_602": 0.15625,
+          "success_rate/molmo_666": 0.5625,
+          "success_rate/molmo_675": 0.0625,
+          "success_rate/molmo_769": 0.65625,
+          "success_rate/molmo_916": 0.59375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_abd286_seed2/100000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_abd286_seed2/rl_state/99998",
+        "step": 99998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 199.03773584905662,
+          "success_rate": 0.4140625,
+          "success_rate/molmo_273": 0.125,
+          "success_rate/molmo_505": 0.53125,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.15625,
+          "success_rate/molmo_666": 0.53125,
+          "success_rate/molmo_675": 0.1875,
+          "success_rate/molmo_769": 0.6875,
+          "success_rate/molmo_916": 0.25,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_abd286_seed2/50000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260904-071530_abd286_seed2/rl_state/50000",
+        "step": 50000
+      }
+    },
+    "collect_tasks": [
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260904-071530_abd286_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks1",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2",
+    "tasks": 1
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 185.90740740740742,
+          "success_rate": 0.6328125,
+          "success_rate/molmo_273": 0.5,
+          "success_rate/molmo_505": 0.78125,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.40625,
+          "success_rate/molmo_666": 0.625,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.8125,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074059_56da8a_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074059_56da8a_seed0/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074059_56da8a_seed0",
+    "group_name": "bofn_molmo_tasks4",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 183.2469135802469,
+          "success_rate": 0.6328125,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.71875,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.625,
+          "success_rate/molmo_666": 0.5625,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.9375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074101_a66677_seed1/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074101_a66677_seed1/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074101_a66677_seed1",
+    "group_name": "bofn_molmo_tasks4",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 174.45911949685535,
+          "success_rate": 0.62109375,
+          "success_rate/molmo_273": 0.34375,
+          "success_rate/molmo_505": 0.78125,
+          "success_rate/molmo_543": 0.75,
+          "success_rate/molmo_602": 0.59375,
+          "success_rate/molmo_666": 0.5,
+          "success_rate/molmo_675": 0.40625,
+          "success_rate/molmo_769": 0.75,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074102_369b21_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260829-074102_369b21_seed2/rl_state/499998",
+        "step": 499998
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074102_369b21_seed2",
+    "group_name": "bofn_molmo_tasks4",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 193.07692307692307,
+          "success_rate": 0.55859375,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.46875,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.625,
+          "success_rate/molmo_666": 0.5625,
+          "success_rate/molmo_675": 0.4375,
+          "success_rate/molmo_769": 0.65625,
+          "success_rate/molmo_916": 0.71875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_a52660_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_a52660_seed0/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 173.66467065868264,
+          "success_rate": 0.65234375,
+          "success_rate/molmo_273": 0.125,
+          "success_rate/molmo_505": 0.5,
+          "success_rate/molmo_543": 0.96875,
+          "success_rate/molmo_602": 0.5625,
+          "success_rate/molmo_666": 0.84375,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.78125,
+          "success_rate/molmo_916": 0.875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_a52660_seed0/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_a52660_seed0/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074105_a52660_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks4",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": {
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 197.9235668789809,
+          "success_rate": 0.61328125,
+          "success_rate/molmo_273": 0.03125,
+          "success_rate/molmo_505": 0.40625,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.5625,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.59375,
+          "success_rate/molmo_769": 0.8125,
+          "success_rate/molmo_916": 0.875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_f70295_seed1/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074105_f70295_seed1/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074105_f70295_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks4",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 234.15300546448088,
+          "success_rate": 0.71484375,
+          "success_rate/molmo_273": 0.40625,
+          "success_rate/molmo_505": 0.84375,
+          "success_rate/molmo_543": 0.96875,
+          "success_rate/molmo_602": 0.46875,
+          "success_rate/molmo_666": 0.8125,
+          "success_rate/molmo_675": 0.71875,
+          "success_rate/molmo_769": 0.625,
+          "success_rate/molmo_916": 0.875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074106_06eeb3_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074106_06eeb3_seed2/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 195.86746987951807,
+          "success_rate": 0.6484375,
+          "success_rate/molmo_273": 0.1875,
+          "success_rate/molmo_505": 0.84375,
+          "success_rate/molmo_543": 0.84375,
+          "success_rate/molmo_602": 0.25,
+          "success_rate/molmo_666": 0.90625,
+          "success_rate/molmo_675": 0.65625,
+          "success_rate/molmo_769": 0.65625,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074106_06eeb3_seed2/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260829-074106_06eeb3_seed2/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260829-074106_06eeb3_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks4",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2/0",
+    "tasks": 4
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 165.6315789473684,
+          "success_rate": 0.66796875,
+          "success_rate/molmo_273": 0.71875,
+          "success_rate/molmo_505": 0.71875,
+          "success_rate/molmo_543": 0.90625,
+          "success_rate/molmo_602": 0.53125,
+          "success_rate/molmo_666": 0.4375,
+          "success_rate/molmo_675": 0.53125,
+          "success_rate/molmo_769": 0.65625,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115127_66720d_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k/0/pi05_molmo_online_best_of_n/vla-post-training_20260706-115127_66720d_seed0/rl_state/499999",
+        "step": 499999
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260706-115127_66720d_seed0",
+    "group_name": "bofn_molmo_tasks8",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k/0",
+    "tasks": 8
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 186.04469273743015,
+          "success_rate": 0.69921875,
+          "success_rate/molmo_273": 0.34375,
+          "success_rate/molmo_505": 0.625,
+          "success_rate/molmo_543": 0.90625,
+          "success_rate/molmo_602": 0.65625,
+          "success_rate/molmo_666": 0.84375,
+          "success_rate/molmo_675": 0.6875,
+          "success_rate/molmo_769": 0.78125,
+          "success_rate/molmo_916": 0.75,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260721-090912_06b16b_seed1/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1/0/pi05_molmo_online_best_of_n/vla-post-training_20260721-090912_06b16b_seed1/rl_state/499999",
+        "step": 499999
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260721-090912_06b16b_seed1",
+    "group_name": "bofn_molmo_tasks8",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1/0",
+    "tasks": 8
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 173.67613636363637,
+          "success_rate": 0.6875,
+          "success_rate/molmo_273": 0.4375,
+          "success_rate/molmo_505": 0.8125,
+          "success_rate/molmo_543": 0.78125,
+          "success_rate/molmo_602": 0.46875,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.75,
+          "success_rate/molmo_769": 0.625,
+          "success_rate/molmo_916": 0.9375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260721-090914_04e566_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2/0/pi05_molmo_online_best_of_n/vla-post-training_20260721-090914_04e566_seed2/rl_state/499999",
+        "step": 499999
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260721-090914_04e566_seed2",
+    "group_name": "bofn_molmo_tasks8",
+    "recipe": "pi05_molmo_online_best_of_n",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2/0",
+    "tasks": 8
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 194.63125,
+          "success_rate": 0.625,
+          "success_rate/molmo_273": 0.21875,
+          "success_rate/molmo_505": 0.875,
+          "success_rate/molmo_543": 0.625,
+          "success_rate/molmo_602": 0.5625,
+          "success_rate/molmo_666": 0.78125,
+          "success_rate/molmo_675": 0.5625,
+          "success_rate/molmo_769": 0.46875,
+          "success_rate/molmo_916": 0.90625,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_21d3ad_seed0/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_21d3ad_seed0/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 191.25333333333333,
+          "success_rate": 0.5859375,
+          "success_rate/molmo_273": 0.375,
+          "success_rate/molmo_505": 0.96875,
+          "success_rate/molmo_543": 0.40625,
+          "success_rate/molmo_602": 0.46875,
+          "success_rate/molmo_666": 0.5625,
+          "success_rate/molmo_675": 0.4375,
+          "success_rate/molmo_769": 0.59375,
+          "success_rate/molmo_916": 0.875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_21d3ad_seed0/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155412_21d3ad_seed0/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155412_21d3ad_seed0",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks8",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 0,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0/0",
+    "tasks": 8
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 178.24870466321244,
+          "success_rate": 0.75390625,
+          "success_rate/molmo_273": 0.4375,
+          "success_rate/molmo_505": 0.9375,
+          "success_rate/molmo_543": 0.6875,
+          "success_rate/molmo_602": 0.53125,
+          "success_rate/molmo_666": 0.875,
+          "success_rate/molmo_675": 0.6875,
+          "success_rate/molmo_769": 0.90625,
+          "success_rate/molmo_916": 0.96875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155414_607115_seed1/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155414_607115_seed1/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 175.62944162436548,
+          "success_rate": 0.76953125,
+          "success_rate/molmo_273": 0.65625,
+          "success_rate/molmo_505": 0.84375,
+          "success_rate/molmo_543": 0.875,
+          "success_rate/molmo_602": 0.3125,
+          "success_rate/molmo_666": 0.875,
+          "success_rate/molmo_675": 0.65625,
+          "success_rate/molmo_769": 0.96875,
+          "success_rate/molmo_916": 0.96875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155414_607115_seed1/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155414_607115_seed1/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155414_607115_seed1",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks8",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 1,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1/0",
+    "tasks": 8
+  },
+  "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "arms": {
+      "final": {
+        "metrics": {
+          "mean_success_episode_length": 207.78735632183907,
+          "success_rate": 0.6796875,
+          "success_rate/molmo_273": 0.65625,
+          "success_rate/molmo_505": 0.75,
+          "success_rate/molmo_543": 0.71875,
+          "success_rate/molmo_602": 0.25,
+          "success_rate/molmo_666": 0.65625,
+          "success_rate/molmo_675": 0.65625,
+          "success_rate/molmo_769": 0.875,
+          "success_rate/molmo_916": 0.875,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155415_86563e_seed2/500000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155415_86563e_seed2/rl_state/499998",
+        "step": 499998
+      },
+      "mid": {
+        "metrics": {
+          "mean_success_episode_length": 172.434554973822,
+          "success_rate": 0.74609375,
+          "success_rate/molmo_273": 0.53125,
+          "success_rate/molmo_505": 0.75,
+          "success_rate/molmo_543": 0.9375,
+          "success_rate/molmo_602": 0.4375,
+          "success_rate/molmo_666": 0.6875,
+          "success_rate/molmo_675": 0.8125,
+          "success_rate/molmo_769": 0.96875,
+          "success_rate/molmo_916": 0.84375,
+          "total_collected_episodes": 0
+        },
+        "params_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155415_86563e_seed2/250000/params",
+        "rl_state_path": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0/pi05_molmo_online_aw_sft_expert_only/vla-post-training_20260828-155415_86563e_seed2/rl_state/250000",
+        "step": 250000
+      }
+    },
+    "collect_tasks": [
+      "molmo_164",
+      "molmo_86",
+      "molmo_70",
+      "molmo_267",
+      "molmo_366",
+      "molmo_138",
+      "molmo_143",
+      "molmo_212"
+    ],
+    "eval_tasks": [
+      "molmo_666",
+      "molmo_602",
+      "molmo_543",
+      "molmo_273",
+      "molmo_916",
+      "molmo_505",
+      "molmo_769",
+      "molmo_675"
+    ],
+    "exp_name_src": "vla-post-training_20260828-155415_86563e_seed2",
+    "group_name": "bofn_plus_fsft_eo_molmo_tasks8",
+    "recipe": "pi05_molmo_online_aw_sft_expert_only",
+    "seed": 2,
+    "subrun": "/capstor/store/cscs/swissai/a0220/ralfroemer/results/vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2/0",
+    "tasks": 8
+  }
+}

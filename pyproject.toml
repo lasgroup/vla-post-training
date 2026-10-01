@@ -65,4 +65,6 @@ dev = [
     "ipywidgets>=8.1.5",
     "matplotlib>=3.10.0",
     "pynvml>=12.0.0",
+    "tueplots>=0.0.17",
+    "rliable>=1.2.0",
 ]

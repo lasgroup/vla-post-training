@@ -73,6 +73,17 @@ def save_epoch_state(
     step = agent.training_steps
     agent.save_checkpoint(step=step)
     agent._checkpoint_manager.wait_until_finished()
+    # The RL-state checkpointer (critic/value/normalizer) is a SEPARATE async
+    # checkpointer and is NOT covered by the manager's wait above. Callers exit
+    # with sys.exit(REQUEUE_EXIT_CODE) immediately after this returns, which
+    # kills an in-flight write and leaves only `<step>.orbax-checkpoint-tmp-*`
+    # while the manifest below already advertises `step` -- the run then cannot
+    # resume at all. This was masked while saves only happened at round
+    # boundaries (the large policy save gave the RL write time to land) and
+    # started killing runs once mid-round requeue saves were enabled.
+    rl_ckptr = getattr(agent, "_rl_state_checkpointer", None)
+    if rl_ckptr is not None and hasattr(rl_ckptr, "wait_until_finished"):
+        rl_ckptr.wait_until_finished()
 
     if not prepare_for_resume:
         logging.info("Saved checkpoint at step %d to %s", step, _checkpoint_dir(config))

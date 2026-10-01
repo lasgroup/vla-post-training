@@ -1,0 +1,46 @@
+script: scripts/exp.py
+config_name: pi05_libero_online_best_of_n
+project_name: vla-post-training
+group_name: episodes_multitask_tasks4_bofn_libero_v0_seed0
+params:
+  log_interval: [25]
+  max_runtime: [36000]  # 10 hours
+
+  collect.env_num: [8]
+  collect.eval_env_num: [8]
+  !!python/tuple [collect.collect_interval, collect.num_rollouts, num_train_steps, collect.eval_interval]: [
+    [50000, 5, 500000, 499999],
+    [50000, 10, 500000, 499999],
+  ]
+  !!python/tuple [collect.domain, collect.tasks, collect.eval_tasks]: [
+    [libero, [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_38,
+      ],
+      [
+        libero_90_79, libero_90_31, libero_90_82, libero_90_38,
+
+        libero_90_34, libero_90_37, libero_90_4, libero_90_71, libero_90_66, libero_90_52, libero_90_75, libero_90_11,
+        libero_90_18, libero_90_23, libero_90_81, libero_90_10, libero_90_69, libero_90_48, libero_90_7, libero_90_13,
+        libero_90_0, libero_90_26, libero_90_77, libero_90_19, libero_90_72, libero_90_22, libero_90_2, libero_90_68, libero_90_57
+      ],
+    ],
+  ]
+
+  collect.store_prefix_rep: [True]
+
+  rl.critic.batch_size: [1024]
+  rl.critic.inference_start_step: [1]   # To speed up data collection at step 0
+  rl.critic.pre_training_steps: [0]
+  rl.critic.td_weight_schedule.switch_step: [999999]  # No switch
+  
+  !!python/tuple [rl.critic.td_weight_schedule.init_value, rl.critic.td_weight_schedule.end_value, rl.critic.use_distributional_critic, rl.critic.num_value_bins]: [
+    [1, 1, False, 1],     # TD (regression)
+  ]
+
+  rl.critic.use_bronet: [True]
+  rl.critic.bronet_hidden_dim: [1024]
+
+  rl.buffer_capacity: [250000]
+  rl.online_ratio: [1.0]
+
+  seed: [0]

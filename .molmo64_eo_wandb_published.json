@@ -1,0 +1,32 @@
+{
+  "tasks64_eo_seed0": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "split_eval_20260918-202341_f64cfe_seed0",
+    "group": "splitval_tasks64_bofn_plus_fsft_eo_molmo_v0",
+    "keys": 166,
+    "run_id": "avki60x3"
+  },
+  "tasks64_eo_seed1": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "split_eval_20260918-202344_ab53d0_seed1",
+    "group": "splitval_tasks64_bofn_plus_fsft_eo_molmo_v0",
+    "keys": 166,
+    "run_id": "ntqj75cb"
+  },
+  "tasks64_eo_seed2": {
+    "arms": [
+      "final",
+      "mid"
+    ],
+    "exp_name": "split_eval_20260918-202347_f05d9f_seed2",
+    "group": "splitval_tasks64_bofn_plus_fsft_eo_molmo_v0",
+    "keys": 166,
+    "run_id": "afpspy71"
+  }
+}
