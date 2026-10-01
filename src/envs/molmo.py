@@ -31,8 +31,21 @@ def _suppress_molmo_spaces_output():
 
 with _suppress_molmo_spaces_output():
     from molmo_spaces.evaluation.benchmark_schema import load_all_episodes
+    from molmo_spaces.molmo_spaces_constants import ASSETS_DIR
     from molmo_spaces.policy.learned_policy.utils import PromptSampler
     from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
+
+
+# FrankaPickDroidMiniBench inside the MolmoSpaces assets dir (MLSPACES_ASSETS_DIR);
+# MLSPACES_BENCHMARK_DIR overrides it entirely.
+_DEFAULT_BENCHMARK_DIR = os.environ.get(
+    "MLSPACES_BENCHMARK_DIR",
+    str(
+        ASSETS_DIR
+        / "benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench"
+        / "FrankaPickDroidMiniBench_json_benchmark_20251231"
+    ),
+)
 
 
 class _RegisteredPolicyAdapter:
@@ -55,9 +68,7 @@ class _RegisteredPolicyAdapter:
 
 @dataclasses.dataclass(frozen=True)
 class MolmoSpacesGymConfig:
-    benchmark_dir: str = (
-        "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231"
-    )
+    benchmark_dir: str = _DEFAULT_BENCHMARK_DIR
     # sensor uuids to drop from the task sensor suite before stepping
     # i.e. segmentation masks that are ignored by pi0.5
     drop_sensor_uuids: tuple[str, ...] = ("object_image_points",)

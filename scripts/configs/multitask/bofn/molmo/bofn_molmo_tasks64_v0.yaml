@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_molmo_online_best_of_n
-project_name: vla-post-training
+project_name: generalist-pi
 group_name: multitask_tasks64_bofn_molmo_v0
 params:
   log_interval: [25]

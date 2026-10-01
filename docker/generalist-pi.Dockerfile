@@ -1,15 +1,4 @@
-# Dockerfile for custon CSCS container
-
-# Build the container:
-# cd vla-post-training
-# podman build . -f docker/vla-pt.Dockerfile -t vla-pt
-# enroot import -x mount -o vla-pt.sqsh podman://vla-pt:latest
-# mv vla-pt.sqsh /capstor/store/cscs/swissai/a143/project-vla-pt
-
-# Run the container:
-# podman run --rm -it --network=host -v .:/app --gpus=all vla-pt zsh
-
-FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04@sha256:2d913b09e6be8387e1a10976933642c73c840c0b735f0bf3c28d97fc9bc422e0
+:qFROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04@sha256:2d913b09e6be8387e1a10976933642c73c840c0b735f0bf3c28d97fc9bc422e0
 COPY --from=ghcr.io/astral-sh/uv:0.5.1 /uv /uvx /bin/
 
 WORKDIR /app

@@ -1,6 +1,6 @@
 script: scripts/exp.py
 config_name: pi05_libero_online_filtered_sft
-project_name: vla-post-training
+project_name: generalist-pi
 group_name: multitask_fsft_libero_tasks1_v0
 params:
   num_train_steps: [1_000]

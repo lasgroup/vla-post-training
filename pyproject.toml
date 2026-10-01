@@ -1,5 +1,5 @@
 [project]
-name = "vla-post-training"
+name = "generalist-pi"
 version = "0.0.1"
 description = "Multi-task post-training for VLAs"
 readme = "README.md"
@@ -54,7 +54,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/lasgroup/vla-post-training"
+Repository = "https://github.com/lasgroup/generalist-pi"
 
 [dependency-groups]
 dev = [
