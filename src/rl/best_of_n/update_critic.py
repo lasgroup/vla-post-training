@@ -77,9 +77,12 @@ def _build_pi0_backbone_critic_defs(config) -> tuple[StateActionCriticDef, State
             activate_final=True,
             rngs=rg,
         )
-        state_vector_keys = ["state"]
+        state_vector_keys = []
         if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
-            state_vector_keys = [PREFIX_EMBEDDING_NAME, "state"]
+            state_vector_keys.append(PREFIX_EMBEDDING_NAME)
+        if not isinstance(observation, dict) or "state" in observation:
+            state_vector_keys.append("state")
+        assert state_vector_keys, "Critic observation must contain a prefix embedding and/or `state`."
         return MLPEncoder(
             dummy_obs=observation,
             encoder_def=network_def,

@@ -1,0 +1,67 @@
+# bofn_plus_fsft multitask results registry
+# =====================================================================
+# Same structure as results_registry.yaml but for the bofn_plus_fsft twin
+# runs: pi05_{env}_online_aw_sft with n_samples=32, awr_loss_weight=0,
+# filtered_sft_weight=1 (BoN action selection + filtered-SFT policy update).
+#
+# Structure:  <domain>: <num_tasks>: <seed>: <dir | null>
+#
+# Task-count layout mirrors bofn's:
+#   libero num_tasks=1 : indices 0-3 are the four single-task runs.
+#   molmo  num_tasks=8 : index 0 = "8 inst x cat 1", index 1 = "1 inst x cat 1-8".
+#   molmo  num_tasks=1 : four single-task runs (molmo_267/366/138/143) spread
+#                        over two dirs -- see the molmo: 1: entry below.
+# =====================================================================
+
+results_root: /capstor/store/cscs/swissai/a0220/ralfroemer/results
+
+libero:
+  1:
+    0: vla-post-training_multitask_tasks1_bofn_plus_fsft_libero_v0_seed0
+    1: vla-post-training_multitask_tasks1_bofn_plus_fsft_libero_v0_seed1
+    2: vla-post-training_multitask_tasks1_bofn_plus_fsft_libero_v0_seed2
+  4:
+    0: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed0
+    1: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed1
+    2: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed2
+  16:
+    0: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed0
+    1: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed1
+    2: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_libero_v0_seed2
+  64:
+    0: null
+    1: null
+    2: null
+
+molmo:
+  1:
+    # The four molmo_1 single-task runs, split across two group dirs: the
+    # original sweep ran only molmo_138 (index 0 of the first dir), the `_rest`
+    # sweep adds molmo_267 / molmo_366 / molmo_143 (indices 0/1/2 of the second).
+    # Consumers must aggregate every index of every listed dir, as for libero 1.
+    0: [vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest]
+    1: [vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest]
+    2: [vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest]
+  4:
+    # 2/3 seeds complete as of 2026-09-10: seeds 0/1 have the final eval at 499998,
+    # seed 2 is at 499998 awaiting its final eval (job 3289553) -- do not read seed 2 yet.
+    0: vla-post-training_multitask_tasks4_bofn_plus_fsft_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks4_bofn_plus_fsft_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks4_bofn_plus_fsft_molmo_v0_seed2
+  8:
+    0: vla-post-training_multitask_tasks8_bofn_plus_fsft_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks8_bofn_plus_fsft_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks8_bofn_plus_fsft_molmo_v0_seed2
+  16:
+    # STILL RUNNING as of 2026-09-10 (seeds 0/1 at 400k, seed 2 at 499998 queued for its
+    # final eval). Mid-eval at 249999 is present for all 3 -- no final eval yet.
+    0: vla-post-training_multitask_tasks16_bofn_plus_fsft_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks16_bofn_plus_fsft_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks16_bofn_plus_fsft_molmo_v0_seed2
+  64:
+    0: null
+    1: null
+    2: null

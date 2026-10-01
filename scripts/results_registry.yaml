@@ -1,0 +1,72 @@
+# Best-of-N multitask results registry
+# =====================================================================
+# Maps each experiment setting -> the results directory that holds its run(s),
+# so tooling (e.g. scripts/plot_sr_improvement.py) can locate wandb ids and
+# job scripts without hard-coded paths scattered through the code.
+#
+# Structure:  <domain>: <num_tasks>: <seed>: <dir | null>
+#   - domain    : libero | molmo
+#   - num_tasks : the task-count of the sweep config (1, 4, 8, 16, 64)
+#   - seed      : 0 | 1 | 2
+#   - value     : results directory name, relative to `results_root`
+#                 (null = run not generated yet; fill in when it exists)
+#
+# Each results dir contains numbered index subdirs (0, 1, ...), one per run in
+# the sweep config. In particular:
+#   - libero num_tasks=1 : indices 0-3 are the four single-task runs.
+#   - molmo  num_tasks=8 : index 0 = "8 inst x cat 1", index 1 = "1 inst x cat 1-8".
+#   - molmo  num_tasks=1 : four single-task runs over two dirs (see below);
+#                          num_tasks=64 : "8 inst x cat 1-8".
+#
+# The "_50k" suffix on some LIBERO dirs marks the 500k-step re-runs that
+# supersede the earlier 100k runs (which lived together in the tasks4-16 dir).
+# =====================================================================
+
+results_root: /capstor/store/cscs/swissai/a0220/ralfroemer/results
+
+libero:
+  1:
+    0: vla-post-training_multitask_tasks1_bofn_libero_v0_seed0
+    1: vla-post-training_multitask_tasks1_bofn_libero_v0_seed1
+    2: vla-post-training_multitask_tasks1_bofn_libero_v0_seed2
+  4:
+    0: vla-post-training_multitask_tasks4_bofn_libero_v0_seed0_50k
+    1: vla-post-training_multitask_tasks4_bofn_libero_v0_seed1   # pulled from wandb (colleague's run qbvwnq2r)
+    2: vla-post-training_multitask_tasks4_bofn_libero_v0_seed2   # pulled from wandb (colleague's run 0t71bubc)
+  16:
+    0: vla-post-training_multitask_tasks16_bofn_libero_v0_seed0_50k
+    1: vla-post-training_multitask_tasks16_bofn_libero_v0_seed1  # pulled from wandb (colleague's run mmuar1sf)
+    2: vla-post-training_multitask_tasks16_bofn_libero_v0_seed2  # pulled from wandb (colleague's run 4feth1s8)
+  64:
+    0: vla-post-training_multitask_tasks64_bofn_libero_v0_seed0
+    1: vla-post-training_multitask_tasks64_bofn_libero_v0_seed1
+    2: vla-post-training_multitask_tasks64_bofn_libero_v0_seed2
+
+molmo:
+  1:
+    # The four molmo_1 single-task runs, split across two group dirs: the
+    # original sweep ran only molmo_138 (index 0 of the first dir), the `_rest`
+    # sweep adds molmo_267 / molmo_366 / molmo_143 (indices 0/1/2 of the second).
+    # Consumers must aggregate every index of every listed dir, as for libero 1.
+    0: [vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0,
+        vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest]
+    1: [vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1,
+        vla-post-training_multitask_tasks1_bofn_molmo_v0_seed1_rest]
+    2: [vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2,
+        vla-post-training_multitask_tasks1_bofn_molmo_v0_seed2_rest]
+  4:
+    0: vla-post-training_multitask_tasks4_bofn_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks4_bofn_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks4_bofn_molmo_v0_seed2
+  8:
+    0: vla-post-training_multitask_tasks8_bofn_molmo_v0_seed0_50k
+    1: vla-post-training_multitask_tasks8_bofn_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks8_bofn_molmo_v0_seed2
+  16:
+    0: vla-post-training_multitask_tasks16_bofn_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks16_bofn_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks16_bofn_molmo_v0_seed2
+  64:
+    0: vla-post-training_multitask_tasks64_bofn_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks64_bofn_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks64_bofn_molmo_v0_seed2

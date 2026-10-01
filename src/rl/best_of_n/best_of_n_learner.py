@@ -49,6 +49,9 @@ class BestofNLearner(FilteredSFTLearner):
             PREFIX_EMBEDDING_NAME: jnp.zeros((1, *prefix_embedding_shape), dtype=jnp.float32)
         }
         dummy_act = config.model.fake_act(batch_size=1)
+        # Ablation: drop proprioception from the critic input (prefix embedding only).
+        self._critic_use_proprio: bool = bool(config.rl.critic.use_proprio)
+        critic_dummy_obs = self._filter_critic_obs(dummy_obs)
         if config.rl.critic.use_bronet:
             from src.rl.networks.bronet_critic import BroNetStateActionCritic, BroNetStateValue
             hidden_dim = config.rl.critic.bronet_hidden_dim
@@ -102,7 +105,7 @@ class BestofNLearner(FilteredSFTLearner):
                 q_init_rng,
                 self._mesh,
                 critic_def=state_action_critic_def,
-                dummy_obs=dummy_obs,
+                dummy_obs=critic_dummy_obs,
                 dummy_act=dummy_act,
             )
         )
@@ -112,7 +115,7 @@ class BestofNLearner(FilteredSFTLearner):
             v_init_rng,
             self._mesh,
             critic_def=state_value_def,
-            dummy_obs=dummy_obs,
+            dummy_obs=critic_dummy_obs,
         )
         self._rl_state_checkpointer = ocp.StandardCheckpointer()
         if self._resuming:
@@ -200,6 +203,12 @@ class BestofNLearner(FilteredSFTLearner):
             self._rl_checkpoint_state(),
         )
 
+    def _filter_critic_obs(self, obs: dict) -> dict:
+        """Drops `state` from a critic observation when critic.use_proprio=False."""
+        if self._critic_use_proprio:
+            return obs
+        return {k: v for k, v in obs.items() if k != "state"}
+
     def _make_buffer_dummy_data(self) -> dict:
         dummy = super()._make_buffer_dummy_data()
         if self._prefix_embed_dim is not None:
@@ -270,9 +279,9 @@ class BestofNLearner(FilteredSFTLearner):
             )
 
         return (
-            observation_dict,
+            self._filter_critic_obs(observation_dict),
             online_batch["actions"],
-            next_observation_dict,
+            self._filter_critic_obs(next_observation_dict),
             online_batch["reward"],
             online_batch["discount"],
             online_batch["mc_return"],
@@ -297,7 +306,7 @@ class BestofNLearner(FilteredSFTLearner):
 
         critic_observation[PREFIX_EMBEDDING_NAME] = prefix_embedding
 
-        return policy_observation, critic_observation, actions
+        return policy_observation, self._filter_critic_obs(critic_observation), actions
 
     def save_episode(self, is_success: bool, env_index: int, task_description: str):
         assert env_index in range(len(self._episode_storage)), \
@@ -473,7 +482,7 @@ class BestofNLearner(FilteredSFTLearner):
             flat_actions = jnp.asarray(
                 actions_norm.reshape(group_env_num * n_samples, -1)
             )
-            q_logits = q_model(critic_obs, flat_actions)
+            q_logits = q_model(self._filter_critic_obs(critic_obs), flat_actions)
             # q_logits: [num_qs, batch] for Gaussian or [num_qs, batch, K] for Categorical
 
             # 4. Reduce ensemble, select best per env

@@ -1,0 +1,146 @@
+{
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0",
+    "keys": 22,
+    "run_id": "tpch2la4",
+    "success_rate": 0.24080882352941177
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "zxrn5lvc",
+    "success_rate": 0.23345588235294118
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "km92ijkc",
+    "success_rate": 0.25
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "54nw544j",
+    "success_rate": 0.2849264705882353
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1",
+    "keys": 22,
+    "run_id": "8pga30br",
+    "success_rate": 0.22426470588235295
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "s00dkkcl",
+    "success_rate": 0.24816176470588236
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "clipvfeq",
+    "success_rate": 0.27941176470588236
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "fv9vtl0l",
+    "success_rate": 0.2647058823529412
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2",
+    "keys": 22,
+    "run_id": "5od8scoe",
+    "success_rate": 0.2261029411764706
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "bye0wiag",
+    "success_rate": 0.22058823529411764
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "g9ifn7q3",
+    "success_rate": 0.23345588235294118
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "41bqolcg",
+    "success_rate": 0.2977941176470588
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0",
+    "keys": 22,
+    "run_id": "u4pec7f2",
+    "success_rate": 0.23161764705882354
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "71a83c8j",
+    "success_rate": 0.28860294117647056
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "sy9f25tt",
+    "success_rate": 0.23161764705882354
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed0_rest",
+    "keys": 22,
+    "run_id": "9nefo5rx",
+    "success_rate": 0.2867647058823529
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1",
+    "keys": 22,
+    "run_id": "6jhm08cb",
+    "success_rate": 0.22242647058823528
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "uejdcl3i",
+    "success_rate": 0.23529411764705882
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "aeb5c6b7",
+    "success_rate": 0.19669117647058823
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed1_rest",
+    "keys": 22,
+    "run_id": "7ldqixd9",
+    "success_rate": 0.26838235294117646
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2",
+    "keys": 22,
+    "run_id": "vtradavs",
+    "success_rate": 0.20036764705882354
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest/0": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "8ydet2fu",
+    "success_rate": 0.3014705882352941
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest/1": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "8t1nqmnm",
+    "success_rate": 0.22242647058823528
+  },
+  "vla-post-training_multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest/2": {
+    "group": "multitask_tasks1_bofn_plus_fsft_molmo_v0_seed2_rest",
+    "keys": 22,
+    "run_id": "nbqh2os1",
+    "success_rate": 0.33088235294117646
+  }
+}

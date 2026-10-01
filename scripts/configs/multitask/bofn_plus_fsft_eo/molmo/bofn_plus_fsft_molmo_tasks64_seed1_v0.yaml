@@ -6,8 +6,20 @@ params:
   log_interval: [25]
   num_train_steps: [500000]
   lr_schedule.value: [2.5e-5]
-  max_runtime: [14400]  # 4h: one 64-task collect cycle (~5-7h, growing) fits per 12h wall
+  # 2026-09-14: 14400 -> 7200. With exp.py's mid-round requeue the check only fires
+  # between training steps, never inside a collect, so the worst allocation is
+  # max_runtime + one collect (~8h and growing). At 14400 that is 4+8=12h, i.e. every
+  # round started a collect it could not finish and discarded it (~168 GPU-h across
+  # the 3 seeds). At 7200 the worst case is 2+8=10h, leaving room for the collect to
+  # grow to ~9.5h before the wall is at risk again.
+  max_runtime: [7200]
 
+  # Kept at 8. Raising it to 16 on 2026-09-10 was tried and REVERTED 2026-09-11: it made
+  # the same round SLOWER (8.46h -> 10.6h at env_num 16, measured on seed 1 resuming from
+  # the same manifest step) and it exhausted the node's 450G, killing all three seeds with
+  # host OOM - a failure never seen at env_num 8. The wall problem is instead solved by
+  # exp.py's mid-round requeue (commit b533001), which banks a finished collect instead of
+  # requiring collect+train to fit one 12h allocation.
   collect.env_num: [8]
   collect.eval_env_num: [8]
   # Single final eval at step 249999 (end of round 5).

@@ -1,0 +1,74 @@
+{
+  "seed0_idx0_libero_90_79": {
+    "final_eval": 0.2776442307692308,
+    "group": "multitask_tasks1_bofn_libero_v0_seed0",
+    "name": "vla-post-training_20260624-090021_1661cf_seed0",
+    "rows": 4011,
+    "run_id": "o6b3pwo3",
+    "task": "libero_90_79"
+  },
+  "seed0_idx1_libero_90_31": {
+    "final_eval": 0.28125,
+    "group": "multitask_tasks1_bofn_libero_v0_seed0",
+    "name": "vla-post-training_20260624-090021_498b44_seed0",
+    "rows": 4011,
+    "run_id": "ls7j9ev7",
+    "task": "libero_90_31"
+  },
+  "seed0_idx2_libero_90_82": {
+    "final_eval": 0.2800480769230769,
+    "group": "multitask_tasks1_bofn_libero_v0_seed0",
+    "name": "vla-post-training_20260624-090021_b6cca5_seed0",
+    "rows": 4011,
+    "run_id": "dndlmlga",
+    "task": "libero_90_82"
+  },
+  "seed1_idx0_libero_90_79": {
+    "final_eval": 0.28365384615384615,
+    "group": "multitask_tasks1_bofn_libero_v0_seed1",
+    "name": "vla-post-training_20260706-115304_f049bd_seed1",
+    "rows": 4011,
+    "run_id": "4xurkv4p",
+    "task": "libero_90_79"
+  },
+  "seed1_idx1_libero_90_31": {
+    "final_eval": 0.28966346153846156,
+    "group": "multitask_tasks1_bofn_libero_v0_seed1",
+    "name": "vla-post-training_20260706-115304_e5b2b5_seed1",
+    "rows": 4011,
+    "run_id": "iee10os0",
+    "task": "libero_90_31"
+  },
+  "seed1_idx2_libero_90_82": {
+    "final_eval": 0.25721153846153844,
+    "group": "multitask_tasks1_bofn_libero_v0_seed1",
+    "name": "vla-post-training_20260706-115304_0c788c_seed1",
+    "rows": 4011,
+    "run_id": "iq737oqp",
+    "task": "libero_90_82"
+  },
+  "seed2_idx0_libero_90_79": {
+    "final_eval": 0.27403846153846156,
+    "group": "multitask_tasks1_bofn_libero_v0_seed2",
+    "name": "vla-post-training_20260706-115458_cb9891_seed2",
+    "rows": 4011,
+    "run_id": "cpnelz7m",
+    "task": "libero_90_79"
+  },
+  "seed2_idx1_libero_90_31": {
+    "final_eval": 0.2956730769230769,
+    "group": "multitask_tasks1_bofn_libero_v0_seed2",
+    "name": "vla-post-training_20260706-115458_985e4b_seed2",
+    "rows": 4011,
+    "run_id": "2l4mly99",
+    "task": "libero_90_31"
+  },
+  "seed2_idx2_libero_90_82": {
+    "final_eval": 0.2644230769230769,
+    "group": "multitask_tasks1_bofn_libero_v0_seed2",
+    "name": "vla-post-training_20260706-115458_9ea358_seed2",
+    "rows": 4011,
+    "run_id": "d6yeza1p",
+    "task": "libero_90_82"
+  }
+}

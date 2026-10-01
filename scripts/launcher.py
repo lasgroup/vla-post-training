@@ -19,11 +19,17 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Default SLURM settings matching existing bash scripts
-DEFAULT_ACCOUNT = "a0220"
+DEFAULT_ACCOUNT = "ab037"
 DEFAULT_ENVIRONMENT = "vla-post-training"
 DEFAULT_DURATION = "11:59:00"
 DEFAULT_PARTITION = "normal"
+# GPU memory fraction reserved for JAX. 0.85 leaves headroom for the EGL/MuJoCo
+# renderer during collection; raise (e.g. 0.9) when policy training needs more.
+DEFAULT_MEM_FRACTION = 0.85
 REQUEUE_EXIT_CODE = 42
+# How many times in a row a job may crash (non-zero exit that is not the
+# graceful requeue code) before the launcher stops retrying it.
+MAX_CRASH_RETRIES = 3
 RESULTS_DIR = f"/capstor/store/cscs/swissai/a0220/{os.environ.get('USER', 'unknown')}/results"
 
 
@@ -34,6 +40,7 @@ def generate_srun_command(
     flags: Optional[Dict[str, Any]] = None,
     account: str = DEFAULT_ACCOUNT,
     environment: str = DEFAULT_ENVIRONMENT,
+    mem_fraction: float = DEFAULT_MEM_FRACTION,
 ) -> str:
     """Generate an srun command for a training script.
 
@@ -43,6 +50,9 @@ def generate_srun_command(
         flags: Dictionary of CLI flags and their values.
         account: SLURM account.
         environment: SLURM environment name.
+        mem_fraction: XLA_PYTHON_CLIENT_MEM_FRACTION. Lower (e.g. 0.85) leaves more
+            GPU for the EGL/MuJoCo renderer; higher (e.g. 0.9) gives JAX more room
+            for policy training at the cost of render headroom.
 
     Returns:
         Full srun command string.
@@ -53,6 +63,11 @@ def generate_srun_command(
         f"--environment={environment}",
     ] if mode == 'swiss-ai' else []
     tokens += [
+        # XLA_PYTHON_CLIENT_MEM_FRACTION trades GPU between JAX and the EGL/MuJoCo
+        # renderer: lower leaves headroom for rendering (fewer read_pixels worker
+        # crashes during collection), higher gives JAX room for policy training.
+        "env",
+        f"XLA_PYTHON_CLIENT_MEM_FRACTION={mem_fraction}",
         "uv",
         "run",
         script,
@@ -65,22 +80,58 @@ def generate_srun_command(
 def _write_sbatch_script(path: str, *, command: str, requeue: bool) -> None:
     cwd = os.getcwd()
     if requeue:
+        crash_state = f"{path}.crash_retries"
         script = f"""#!/bin/bash
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
 
+# Disable core dumps: the Molmo OpenGL renderer occasionally SIGABRTs and dumps
+# multi-GB core files into cwd, which fills the home-dir quota and then breaks
+# job startup (uv cache writes fail with EDQUOT).
+ulimit -c 0
+
+# Consecutive-crash counter. Reset on any clean exit or planned requeue, so a
+# long run that requeues many times at walltime keeps its full crash budget.
+CRASH_STATE={shlex.quote(crash_state)}
+MAX_CRASH_RETRIES={MAX_CRASH_RETRIES}
+
 child_status=0
 {command} || child_status=$?
 
+if [[ "$child_status" -eq 0 ]]; then
+  rm -f "$CRASH_STATE"
+  exit 0
+fi
+
 if [[ "$child_status" -eq {REQUEUE_EXIT_CODE} ]]; then
   echo "[$(date --iso-8601=seconds)] Job ${{SLURM_JOB_ID}} requested requeue." >&2
+  rm -f "$CRASH_STATE"
   if scontrol requeue "${{SLURM_JOB_ID}}"; then
     echo "[$(date --iso-8601=seconds)] Requeue submitted for job ${{SLURM_JOB_ID}}." >&2
     exit 0
   fi
   echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}}." >&2
   exit "$child_status"
+fi
+
+# Unplanned crash (e.g. the Molmo env worker dying with EOFError, or the
+# renderer SIGABRTing). These exit non-zero and are NOT the graceful requeue
+# code, so without this branch SLURM marks the job FAILED and training stops.
+# The run resumes from its last checkpoint, so retry a bounded number of times.
+crashes=0
+if [[ -f "$CRASH_STATE" ]]; then
+  crashes=$(cat "$CRASH_STATE" 2>/dev/null || echo 0)
+fi
+if [[ "$crashes" -lt "$MAX_CRASH_RETRIES" ]]; then
+  echo $((crashes + 1)) > "$CRASH_STATE"
+  echo "[$(date --iso-8601=seconds)] Job ${{SLURM_JOB_ID}} crashed (status $child_status); requeue attempt $((crashes + 1))/$MAX_CRASH_RETRIES." >&2
+  if scontrol requeue "${{SLURM_JOB_ID}}"; then
+    exit 0
+  fi
+  echo "[$(date --iso-8601=seconds)] Failed to requeue job ${{SLURM_JOB_ID}} after crash." >&2
+else
+  echo "[$(date --iso-8601=seconds)] Job ${{SLURM_JOB_ID}} crashed $crashes times in a row; giving up." >&2
 fi
 
 exit "$child_status"
@@ -90,6 +141,9 @@ exit "$child_status"
 set -euo pipefail
 
 cd {shlex.quote(cwd)}
+
+# Disable core dumps (see requeue branch comment above).
+ulimit -c 0
 
 exec {command}
 """
@@ -158,6 +212,7 @@ def generate_run_commands(
     dry: bool = False,
     prompt: bool = True,
     requeue: bool = False,
+    mem_fraction: float = DEFAULT_MEM_FRACTION,
 ) -> None:
     """Submit or run a list of commands.
 
@@ -212,7 +267,7 @@ def generate_run_commands(
             f.write(git_diff)
 
     # create command list
-    command_list = [generate_srun_command(script, config_name, flags=combo, mode=mode) for combo in combos]
+    command_list = [generate_srun_command(script, config_name, flags=combo, mode=mode, account=account, mem_fraction=mem_fraction) for combo in combos]
     if mode == "swiss-ai":
 
         bsub_cmd = f"sbatch --account={account} --time={duration} --partition={partition} "
@@ -299,8 +354,10 @@ def main() -> None:
     parser.add_argument("--mode", default="swiss-ai", choices=["swiss-ai", "local"], help="Execution mode")
     parser.add_argument("--duration", default="11:59:00", help="SLURM time limit")
     parser.add_argument("--partition", default="normal", help="SLURM partition")
+    parser.add_argument("--account", default=DEFAULT_ACCOUNT, help=f"SLURM account / project to charge (default {DEFAULT_ACCOUNT}). Applies to both the outer sbatch and the inner srun.")
     parser.add_argument("--force", action="store_true", help="Skip confirmation prompt")
     parser.add_argument("--skip_requeue", action="store_true", help="Submit requeue-safe resumable jobs")
+    parser.add_argument("--mem_fraction", type=float, default=DEFAULT_MEM_FRACTION, help=f"XLA_PYTHON_CLIENT_MEM_FRACTION (default {DEFAULT_MEM_FRACTION}). Raise (e.g. 0.9) to give JAX more room for policy training; lowers renderer headroom.")
 
     args = parser.parse_args()
 
@@ -321,9 +378,11 @@ def main() -> None:
         mode=args.mode,
         duration=args.duration,
         partition=args.partition,
+        account=args.account,
         dry=args.dry,
         prompt=not args.force,
-        requeue=not args.skip_requeue
+        requeue=not args.skip_requeue,
+        mem_fraction=args.mem_fraction,
     )
 
 

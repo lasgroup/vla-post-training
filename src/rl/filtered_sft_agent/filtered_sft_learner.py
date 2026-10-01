@@ -4,6 +4,7 @@ import functools
 import gc
 import json
 import logging
+import os
 import weakref
 from typing import Any, Dict
 
@@ -177,6 +178,33 @@ def init_train_state(
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
     if resume:
+        # `jax.eval_shape` produces ShapeDtypeStructs with `sharding=None`. Orbax
+        # can restore against that only while the current device topology matches
+        # the one the checkpoint was written with; restoring a 4-way-sharded
+        # checkpoint onto a single device then fails with
+        #   ValueError: sharding passed to deserialization should be specified,
+        #   concrete and an instance of `jax.sharding.Sharding`. Got None
+        # Attaching `state_sharding` (already computed above) to the target lets
+        # orbax reshard on restore, which is what a 1-device run needs.
+        #
+        # Opt-in via RESTORE_EXPLICIT_SHARDING because this repo's working tree is
+        # what running jobs execute: an edit here reaches every job that starts or
+        # requeues afterwards. Unset (the default) is byte-for-byte the old path.
+        # Set it for single-device restores, e.g. the BoN latency benchmark.
+        if os.environ.get("RESTORE_EXPLICIT_SHARDING"):
+            train_state_shape = jax.tree.map(
+                lambda x, s: (
+                    jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=s)
+                    if hasattr(x, "shape") and hasattr(x, "dtype")
+                    else x
+                ),
+                train_state_shape,
+                state_sharding,
+            )
+            logging.info(
+                "RESTORE_EXPLICIT_SHARDING: restore target carries explicit shardings "
+                "(%d devices, mesh %s)", jax.device_count(), mesh.shape
+            )
         return train_state_shape, state_sharding
 
     partial_params = _load_weights_and_validate(
@@ -283,12 +311,39 @@ class FilteredSFTLearner(Agent):
             self._config, init_rng, self._mesh, resume=self._resuming
         )
         if self._resuming:
-            self._train_state = _checkpoints.restore_state(
-                self._checkpoint_manager,
-                self._train_state,
-                self._data_loader,
-                step=self._resume_state.step,
-            )
+            if os.environ.get("RESTORE_EXPLICIT_SHARDING"):
+                # openpi's restore_state calls CheckpointManager.restore(items=...)
+                # without restore_args, so orbax uses the sharding recorded in the
+                # checkpoint. When the current topology differs it cannot map that
+                # ("available devices are different from the devices used to save"),
+                # falls back to sharding=None and dies in deserialization. Passing
+                # restore_args built from the target -- whose leaves carry the
+                # current mesh's shardings, see init_train_state -- makes orbax
+                # reshard on restore instead. Kept here rather than in openpi
+                # because openpi is a submodule (lasgroup/openpi).
+                import orbax.checkpoint as ocp
+
+                with at.disable_typechecking():
+                    ts, params = _checkpoints._split_params(self._train_state)
+                    items = {"train_state": ts, "params": {"params": params}}
+                    restored = self._checkpoint_manager.restore(
+                        self._resume_state.step,
+                        items=items,
+                        restore_kwargs={
+                            k: {"restore_args": ocp.checkpoint_utils.construct_restore_args(v)}
+                            for k, v in items.items()
+                        },
+                    )
+                self._train_state = _checkpoints._merge_params(
+                    restored["train_state"], restored["params"]
+                )
+            else:
+                self._train_state = _checkpoints.restore_state(
+                    self._checkpoint_manager,
+                    self._train_state,
+                    self._data_loader,
+                    step=self._resume_state.step,
+                )
             logging.info(
                 "Restored training checkpoint from %s at committed step %d",
                 self._config.checkpoint_dir,

@@ -77,11 +77,17 @@ class BroNet(nnx.Module):
 
 
 def _obs_vector_keys(observation: ObsType) -> list[str]:
-    """Returns observation keys in concat order: prefix embedding first, then state."""
+    """Returns observation keys in concat order: prefix embedding first, then state.
+
+    Either key is optional (e.g. `state` is absent when critic.use_proprio=False),
+    but at least one must be present.
+    """
     keys = []
     if isinstance(observation, dict) and PREFIX_EMBEDDING_NAME in observation:
         keys.append(PREFIX_EMBEDDING_NAME)
-    keys.append("state")
+    if not isinstance(observation, dict) or "state" in observation:
+        keys.append("state")
+    assert keys, "Critic observation must contain a prefix embedding and/or `state`."
     return keys
 
 

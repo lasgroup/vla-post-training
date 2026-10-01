@@ -150,6 +150,9 @@ class CriticTrainingConfig:
     use_bronet: bool = False
     bronet_hidden_dim: int = 512
     bronet_depth: int = 2
+    # Whether the critic observation includes the proprioceptive `state` vector.
+    # When False, the critic conditions only on the policy prefix embedding.
+    use_proprio: bool = True
 
 
 # Define hyperparameter structures for your algorithms

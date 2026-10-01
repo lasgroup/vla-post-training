@@ -1,0 +1,36 @@
+# Best-of-N critic-proprioception ablation results registry
+# =====================================================================
+# Does the critic need proprioception? Standard best recipe
+# (TD + regression + BroNet, bronet_hidden_dim 1024, buffer 250k, single final
+# eval) with and without the proprioceptive `state` vector in the critic input
+# (rl.critic.use_proprio). Without it the critic sees only the policy prefix
+# embedding.
+#
+# Structure:  <domain>: <num_tasks>: <variant>: <seed>: [ {dir, index}, ... ]
+#             Each seed is a LIST of subruns (one per single task); consumers must
+#             aggregate over all listed entries.
+#
+# Task split molmo 1 (all four single tasks, in index order):
+#   molmo_267, molmo_366, molmo_138, molmo_143
+#
+# with_proprio  = the main BoN multitask sweep (results_registry.yaml, molmo: 1),
+#                 i.e. the original tasks1 dir + its _rest dir.
+# no_proprio    = configs/tuning/bofn/proprio/bofn_molmo_tasks1_no_proprio_v0.yaml
+#                 (group bofn_proprio_ablation_tasks1_molmo_v0, jobs 3316031-3316034,
+#                 ab037, submitted 2026-09-07). Seed 0 only.
+#                 DONE 2026-09-08: all 4 subruns have the final eval at 99999.
+# =====================================================================
+molmo:
+  1:
+    with_proprio:
+      0:
+        - {dir: vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0,      index: 0}
+        - {dir: vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest, index: 0}
+        - {dir: vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest, index: 1}
+        - {dir: vla-post-training_multitask_tasks1_bofn_molmo_v0_seed0_rest, index: 2}
+    no_proprio:
+      0:
+        - {dir: vla-post-training_bofn_proprio_ablation_tasks1_molmo_v0, index: 0}  # molmo_267
+        - {dir: vla-post-training_bofn_proprio_ablation_tasks1_molmo_v0, index: 1}  # molmo_366
+        - {dir: vla-post-training_bofn_proprio_ablation_tasks1_molmo_v0, index: 2}  # molmo_138
+        - {dir: vla-post-training_bofn_proprio_ablation_tasks1_molmo_v0, index: 3}  # molmo_143

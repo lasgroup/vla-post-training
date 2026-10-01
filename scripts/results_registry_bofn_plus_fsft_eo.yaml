@@ -1,0 +1,81 @@
+# bofn_plus_fsft_eo (expert-only fine-tuning) multitask results registry
+# =====================================================================
+# Same structure as results_registry_bofn_plus_fsft.yaml but for the
+# expert-only twin runs: pi05_{env}_online_aw_sft_expert_only with
+# n_samples=32, awr_loss_weight=0, filtered_sft_weight=1, and PaliGemma
+# LLM stack 0 + SigLIP img tower frozen (only the action expert / stack 1
+# + action-projection MLPs receive gradients). Otherwise the schedule
+# mirrors the tasks8 Molmo EO run (5 rounds = 250k steps, single final
+# eval at 249999, buffer_capacity=250000).
+#
+# Structure:  <domain>: <num_tasks>: <seed>: <dir | null>
+#
+# Task-count layout mirrors bofn_plus_fsft:
+#   libero num_tasks=1 : indices 0-3 are the four single-task runs.
+#   libero num_tasks=4/16: share a tasks4-16 dir per seed (idx 0 = 4, idx 1 = 16).
+#   molmo  num_tasks=8 : index 0 = "8 inst x cat 1", index 1 = "1 inst x cat 1-8".
+#   molmo  num_tasks=1 : four single-task runs (molmo_267/366/138/143) spread
+#                        over two dirs -- see the molmo: 1: entry below.
+# =====================================================================
+
+results_root: /capstor/store/cscs/swissai/a0220/ralfroemer/results
+
+libero:
+  1:
+    0: vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_libero_v0_seed0
+    1: vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_libero_v0_seed1
+    2: vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_libero_v0_seed2
+  # DONE 2026-09-05: idx 0 (4 tasks) and idx 1 (16 tasks) of the tasks4-16 dirs
+  # both have the final eval at 499998 for all 3 seeds. (The earlier "no eval
+  # logged / 250k config bug" note referred to the pre-fix job 3211908 runs and
+  # no longer applies -- these are the 500k re-runs, jobs 3224709-3224714.)
+  4:
+    0: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed0
+    1: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed1
+    2: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed2
+  16:
+    0: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed0
+    1: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed1
+    2: vla-post-training_multitask_tasks4-16_bofn_plus_fsft_eo_libero_v0_seed2
+  64:
+    # DONE 2026-09-13: all 3 seeds have the final eval at 499999.
+    0: vla-post-training_multitask_tasks64_bofn_plus_fsft_eo_libero_v0_seed0
+    1: vla-post-training_multitask_tasks64_bofn_plus_fsft_eo_libero_v0_seed1
+    2: vla-post-training_multitask_tasks64_bofn_plus_fsft_eo_libero_v0_seed2
+
+molmo:
+  1:
+    # The four molmo_1 single-task runs, split across two group dirs: the
+    # original sweep ran only molmo_138 (index 0 of the first dir), the `_rest`
+    # sweep adds molmo_267 / molmo_366 / molmo_143 (indices 0/1/2 of the second).
+    # Consumers must aggregate every index of every listed dir, as for libero 1.
+    0: [vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed0_rest]
+    1: [vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed1_rest]
+    2: [vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2,
+        vla-post-training_multitask_tasks1_bofn_plus_fsft_eo_molmo_v0_seed2_rest]
+  4:
+    # DONE 2026-09-04: all 3 seeds have mid-eval at 249999 and final at 499998.
+    0: vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks4_bofn_plus_fsft_eo_molmo_v0_seed2
+  8:
+    # index 0 ("8 inst x cat 1") is DONE 2026-09-04: all 3 seeds have the
+    # mid-eval at 249999 and final at 499998 (overall SR 0.3984/0.4010/0.3919).
+    # index 1 ("1 inst x cat 1-8") is DONE 2026-09-08: all 3 seeds have the
+    # mid-eval at 249999 and final at 499998 (jobs 3298145/46/47 COMPLETED).
+    # NOTE: 249999 appears twice in index-1 eval history -- the 2026-09-05 rewind
+    # resumed exactly on the eval step, so the mid-eval ran again. Use the later one.
+    0: vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks8_bofn_plus_fsft_eo_molmo_v0_seed2
+  # DONE 2026-09-07: all 3 seeds have the mid-eval at 249999 and final at 499998.
+  16:
+    0: vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed0
+    1: vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed1
+    2: vla-post-training_multitask_tasks16_bofn_plus_fsft_eo_molmo_v0_seed2
+  64:
+    0: null
+    1: null
+    2: null
