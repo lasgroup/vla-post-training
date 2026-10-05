@@ -302,6 +302,14 @@ class CollectionConfig:
     eval_interval: int = 300
     num_eval_rollouts: int = 32
     max_episode_steps: int = 400  # used to auto-compute value bounds
+    # Seconds after process start at which a collection round pauses: finished episodes
+    # are saved, the job exits for requeue and the next allocation collects only the
+    # remaining rollouts. For rounds longer than one allocation. None: rounds always
+    # run to completion.
+    max_runtime: int | None = None
+    # Seconds between progress saves within a collection round; collection continues
+    # after each save, so a crash loses at most this much. None: no periodic saves.
+    checkpoint_interval: int | None = None
 
     def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers

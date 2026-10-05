@@ -91,6 +91,11 @@ cd {shlex.quote(cwd)}
 # job startup (uv cache writes fail with EDQUOT).
 ulimit -c 0
 
+# Mount the host's EGL libraries into the container. Without the graphics
+# capability the image's bundled libEGL_nvidia is used, which breaks headless
+# rendering on GPUs 1-3 whenever it lags the host driver (since 2026-10-02).
+export NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+
 # Consecutive-crash counter. Reset on any clean exit or planned requeue, so a
 # long run that requeues many times at walltime keeps its full crash budget.
 CRASH_STATE={shlex.quote(crash_state)}

@@ -95,6 +95,30 @@ def main(config: _config.OnlineTrainConfig):
         dynamic_ncols=True,
     )
 
+    # A collection round paused by collect.max_runtime resumes at the same step.
+    resume_state = getattr(agent, "_resume_state", None) if agent._resuming else None
+    collection_progress = None if resume_state is None else resume_state.collection_progress
+    if collection_progress is not None:
+        assert collection_progress["step"] == start_step, (collection_progress, start_step)
+
+    def collection_out_of_time():
+        return (
+            config.collect.max_runtime is not None
+            and (time.monotonic() - _PROCESS_START_TIME) >= config.collect.max_runtime
+        )
+
+    # Collection pauses at collect.max_runtime (save, exit for requeue) and every
+    # collect.checkpoint_interval (save, keep collecting), so a crash loses at most
+    # one interval of rollouts.
+    should_pause = None
+    part_start_time = time.monotonic()
+    if config.collect.max_runtime is not None or config.collect.checkpoint_interval is not None:
+        def should_pause():
+            return collection_out_of_time() or (
+                config.collect.checkpoint_interval is not None
+                and (time.monotonic() - part_start_time) >= config.collect.checkpoint_interval
+            )
+
     infos = []
     for step in pbar:
 
@@ -104,12 +128,26 @@ def main(config: _config.OnlineTrainConfig):
                 env_fn=env_fn,
                 config=config,
             )
-            collect_info, n_collected_episodes = collect_data(
-                agent=agent,
-                env=env,
-                config=config,
-                step=step,
-            )
+            while True:
+                part_start_time = time.monotonic()
+                collect_info, n_collected_episodes, collection_progress = collect_data(
+                    agent=agent,
+                    env=env,
+                    config=config,
+                    step=step,
+                    progress=collection_progress,
+                    should_pause=should_pause,
+                )
+                if collection_progress is None:
+                    break
+                save_epoch_state(
+                    agent, config, prepare_for_resume=True, collection_progress=collection_progress
+                )
+                if collection_out_of_time():
+                    env.close()
+                    logging.info("Exiting at step %d mid-collection for requeue.", step)
+                    sys.exit(REQUEUE_EXIT_CODE)
+                logging.info("Checkpointed collection at step %d; continuing.", step)
             env.close()
             logger.log_metrics(collect_info, step=step)
             if n_collected_episodes > 0:

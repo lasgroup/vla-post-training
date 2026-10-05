@@ -1,4 +1,5 @@
-from typing import Any
+import logging
+from typing import Any, Callable
 import jax
 import numpy as np
 from src.envs.venv import BaseVectorEnv
@@ -115,25 +116,47 @@ def evaluate_policy(
 
 
 def collect_data(
-    agent: Agent, env: BaseVectorEnv, config, step: int
+    agent: Agent,
+    env: BaseVectorEnv,
+    config,
+    step: int,
+    progress: dict | None = None,
+    should_pause: Callable[[], bool] | None = None,
 ):
+    """Collect one round of rollouts.
+
+    Returns `(metrics, collected_episodes, progress)`. `progress` is None once the
+    round is complete. If `should_pause` returns True, the round stops between env
+    steps, drops the episodes still in flight and returns `metrics=None` plus the
+    per-task counts so far; passing that `progress` back in (after a requeue)
+    collects only the remaining rollouts.
+    """
+    part = 0 if progress is None else progress["part"]
     agent.start_data_collection(step=step)
-    env.seed(config.seed + step)
+    env.seed(config.seed + step + part)
 
     total_episodes = 0
     total_successes = 0
     tasks = set(config.collect.tasks)
     episodes_per_task = {k: 0 for k in tasks}
     successes_per_task = {k: 0 for k in tasks}
-    
+    if progress is not None:
+        episodes_per_task.update(progress["episodes_per_task"])
+        successes_per_task.update(progress["successes_per_task"])
+
     num_rollouts_per_task = config.collect.num_rollouts
     if step == 0 and config.collect.num_initial_rollouts is not None:
         num_rollouts_per_task += config.collect.num_initial_rollouts
-    num_rollouts = num_rollouts_per_task * len(config.collect.tasks)
 
+    # Queue the rollouts still missing, in task order. Tasks may repeat in the list.
+    already_done = dict(episodes_per_task)
     repeated_task_ids = []
     for t in config.collect.tasks:
-        repeated_task_ids.extend([t] * num_rollouts_per_task)
+        skip = min(already_done[t], num_rollouts_per_task)
+        already_done[t] -= skip
+        repeated_task_ids.extend([t] * (num_rollouts_per_task - skip))
+    num_rollouts = len(repeated_task_ids)
+    paused = False
 
     with tqdm.tqdm(total=num_rollouts) as pbar:
 
@@ -149,6 +172,11 @@ def collect_data(
         obs, info = env.reset(options={"task_id": current_task_ids})
 
         while total_episodes < num_rollouts:
+            # Every part finishes at least env_num episodes, so a run whose time
+            # budget is already used up at startup still makes progress.
+            if should_pause is not None and total_episodes >= env.env_num and should_pause():
+                paused = True
+                break
             action_chunk = agent.sample_actions(
                 obs,
                 task_description=info["task_description"],
@@ -213,9 +241,29 @@ def collect_data(
 
             obs = next_obs
 
+    # Drops the episodes still in flight if the round was paused.
     collected_episodes = agent.end_data_collection(step=step)
 
     agent.total_collected_episodes += total_episodes
+    if paused:
+        logging.info(
+            "Paused collection at step %d after part %d: %d/%d rollouts of the round done.",
+            step, part, sum(episodes_per_task.values()), num_rollouts_per_task * len(config.collect.tasks),
+        )
+        progress = {
+            "step": step,
+            "part": part + 1,
+            "episodes_per_task": episodes_per_task,
+            "successes_per_task": successes_per_task,
+        }
+        return None, collected_episodes, progress
+
+    if part > 0:
+        # Round finished across several parts: report it over all of them.
+        total_episodes = sum(episodes_per_task.values())
+        total_successes = sum(successes_per_task.values())
     metrics = {"success_rate": float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0}
     metrics.update({f"success_rate/{task}": successes_per_task[task] / episodes_per_task[task] if episodes_per_task[task] > 0 else 0.0 for task in tasks})
-    return metrics, collected_episodes
+    if part > 0:
+        metrics["collect/num_parts"] = part + 1
+    return metrics, collected_episodes, None

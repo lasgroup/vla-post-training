@@ -14,6 +14,8 @@ class ResumeState:
     replay_shard_dir: Path
     agent_rng_state_json: str
     replay_rng_state_json: str
+    # Set while a collection round is paused mid-way (see collect.max_runtime).
+    collection_progress: dict | None = None
 
 
 def _checkpoint_dir(config: Any) -> Path:
@@ -28,8 +30,13 @@ def replay_shard_dir(config: Any) -> Path:
     return _runtime_state_dir(config) / "replay_shards"
 
 
-def replay_shard_path(config: Any, step: int) -> Path:
-    return replay_shard_dir(config) / f"step_{int(step):08d}.h5"
+def replay_shard_path(config: Any, step: int, collection_part: int | None = None) -> Path:
+    # A paused collection round saves `step_<S>_c<part>.h5`: the round-boundary shard
+    # `step_<S>.h5` already holds the previous round's data, and restore_shards loads
+    # shards in sorted order, where "step_<S>.h5" < "step_<S>_c01.h5" < "step_<S+1>.h5".
+    if collection_part is None:
+        return replay_shard_dir(config) / f"step_{int(step):08d}.h5"
+    return replay_shard_dir(config) / f"step_{int(step):08d}_c{int(collection_part):02d}.h5"
 
 
 def resume_state_path(config: Any) -> Path:
@@ -69,9 +76,13 @@ def save_epoch_state(
     agent: Any,
     config: Any,
     prepare_for_resume: bool = False,
+    collection_progress: dict | None = None,
 ) -> ResumeState | None:
     step = agent.training_steps
-    agent.save_checkpoint(step=step)
+    # A paused collection round has not changed the policy or critic since the
+    # round-boundary save at this step, so only round 0 (step 0, never saved) needs one.
+    if collection_progress is None or step not in agent._checkpoint_manager.all_steps():
+        agent.save_checkpoint(step=step)
     agent._checkpoint_manager.wait_until_finished()
     # The RL-state checkpointer (critic/value/normalizer) is a SEPARATE async
     # checkpointer and is NOT covered by the manager's wait above. Callers exit
@@ -89,7 +100,8 @@ def save_epoch_state(
         logging.info("Saved checkpoint at step %d to %s", step, _checkpoint_dir(config))
         return
 
-    shard_path = replay_shard_path(config, step)
+    collection_part = None if collection_progress is None else collection_progress["part"]
+    shard_path = replay_shard_path(config, step, collection_part)
     agent._online_data_buffer.save_shard(shard_path)
     manifest_path = resume_state_path(config)
     payload = {
@@ -99,6 +111,8 @@ def save_epoch_state(
         "replay_shard_dir": str(replay_shard_dir(config)),
         "replay_rng_state_json": agent._online_data_buffer.rng_state_json(),
     }
+    if collection_progress is not None:
+        payload["collection_progress"] = collection_progress
     _atomic_write_text(manifest_path, json.dumps(payload, indent=2, sort_keys=True))
     logging.info(
         "Saved resumable epoch state at step %d (manifest=%s)",

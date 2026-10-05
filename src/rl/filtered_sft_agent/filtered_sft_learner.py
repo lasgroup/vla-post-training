@@ -41,7 +41,7 @@ from src.envs.wrappers import (
 from src.envs.venv import SubprocVectorEnv, DummyVectorEnv
 from src.rl.agent import Agent, EnvFn
 from src.rl.prefix_embedding import PREFIX_EMBEDDING_NAME
-from src.training.runtime_state import load_resume_state
+from src.training.runtime_state import load_resume_state, resume_state_path
 
 
 def filtered_sft_wrap_env(
@@ -271,6 +271,18 @@ class FilteredSFTLearner(Agent):
                 resume=self._config.resume,
             )
         )
+        # openpi treats a lone step-0 checkpoint as "nothing to resume". The only
+        # step-0 save comes from pausing round 0 mid-collection (collect.max_runtime),
+        # and that run must resume.
+        if (
+            self._config.resume
+            and not self._resuming
+            and tuple(self._checkpoint_manager.all_steps()) == (0,)
+            and resume_state_path(self._config).exists()
+            and load_resume_state(self._config).collection_progress is not None
+        ):
+            logging.info("Resuming round-0 collection paused at step 0.")
+            self._resuming = True
 
         # initialize data loader
         assert 0.0 <= self._config.rl.online_ratio <= 1.0, "Online ratio must be between 0 and 1."
