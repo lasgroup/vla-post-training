@@ -129,4 +129,4 @@ Episode files are `h5df` format (HDF5). The existing `save_shard`/`restore_shard
 - Interactive node: `clariden-ln004`. Run `uv run` directly here for testing.
 - HuggingFace cache: `/capstor/scratch/cscs/ralfroemer/huggingface/`. Use `HF_LEROBOT_HOME=.../lerobot` (not `LEROBOT_HOME` — that's deprecated in lerobot 0.3.3).
 - Checkpoints: `/capstor/scratch/cscs/ralfroemer/checkpoints/`.
-- SLURM account: `a143`.
+- SLURM account: `ab037` (storage: a0220; nothing should depend on a143 any more).

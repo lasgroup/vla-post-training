@@ -78,8 +78,9 @@ class _RegisteredPolicyAdapter:
 
 @dataclasses.dataclass(frozen=True)
 class MolmoSpacesGymConfig:
-    benchmark_dir: str = (
-        "/capstor/store/cscs/swissai/a143/molmospaces/assets/benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231"
+    benchmark_dir: str = os.path.join(
+        os.environ.get("MLSPACES_ASSETS_DIR", "/capstor/store/cscs/swissai/a0220/ralfroemer/molmospaces/assets"),
+        "benchmarks/molmospaces-bench-v1/procthor-10k/FrankaPickDroidMiniBench/FrankaPickDroidMiniBench_json_benchmark_20251231",
     )
     eval_config_cls: str = (
         "molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig"

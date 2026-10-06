@@ -4,7 +4,7 @@
 # cd vla-post-training
 # podman build . -f docker/vla-pt.Dockerfile -t vla-pt
 # enroot import -x mount -o vla-pt.sqsh podman://vla-pt:latest
-# mv vla-pt.sqsh /capstor/store/cscs/swissai/a143/project-vla-pt
+# mv vla-pt.sqsh /capstor/store/cscs/swissai/a0220/project-vla-pt
 
 # Run the container:
 # podman run --rm -it --network=host -v .:/app --gpus=all vla-pt zsh
