@@ -148,6 +148,14 @@ def main(config: _config.OnlineTrainConfig):
                     logging.info("Exiting at step %d mid-collection for requeue.", step)
                     sys.exit(REQUEUE_EXIT_CODE)
                 logging.info("Checkpointed collection at step %d; continuing.", step)
+                # Fresh env workers for every part: Molmo workers grow by ~2-3 GB/h
+                # each and would otherwise OOM the node late in an allocation.
+                env.close()
+                env = filtered_sft_wrap_env(
+                    env_fn=make_env(config, config.collect.tasks, num_devices=num_devices),
+                    config=config,
+                )
+                logging.info("Recreated collection env workers at step %d.", step)
             env.close()
             logger.log_metrics(collect_info, step=step)
             if n_collected_episodes > 0:
