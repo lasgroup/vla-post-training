@@ -87,8 +87,12 @@ def run_round(agent, config, step: int, progress: dict | None):
     caller then exits with PARALLEL_EXIT_CODE.
     """
     main_dir = Path(config.checkpoint_dir)
-    k_total = config.collect.num_collectors
-    slices = task_slices(list(config.collect.tasks), k_total)
+    # A round keeps the split it was launched with, so num_collectors can be changed
+    # between rounds (it then applies from the next round on).
+    plan_path = _parallel_dir(main_dir) / f"plan_step{step:08d}.json"
+    plan = json.loads(plan_path.read_text()) if plan_path.exists() else {"attempts": 0}
+    k_total = plan.get("num_collectors", config.collect.num_collectors)
+    slices = plan.get("slices") or task_slices(list(config.collect.tasks), k_total)
     n_target = _rollouts_per_task(config, step)
     done_eps = dict((progress or {}).get("episodes_per_task", {}))
     done_succ = dict((progress or {}).get("successes_per_task", {}))
@@ -110,8 +114,6 @@ def run_round(agent, config, step: int, progress: dict | None):
     if len(markers) == k_total:
         return _merge(agent, config, step, progress, markers)
 
-    plan_path = _parallel_dir(main_dir) / f"plan_step{step:08d}.json"
-    plan = json.loads(plan_path.read_text()) if plan_path.exists() else {"attempts": 0}
     if plan["attempts"] >= MAX_ATTEMPTS:
         raise RuntimeError(
             f"parallel collection at step {step}: slices {sorted(set(range(k_total)) - set(markers))} "
