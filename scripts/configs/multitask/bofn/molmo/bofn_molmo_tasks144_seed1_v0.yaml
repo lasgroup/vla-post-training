@@ -11,6 +11,8 @@ params:
   max_runtime: [39600]
   collect.max_runtime: [39600]
   collect.checkpoint_interval: [7200]
+  # From round 10 on (2026-10-14): each round is split over 4 collector jobs, merged in task order.
+  collect.num_collectors: [4]
 
   collect.env_num: [8]
   collect.eval_env_num: [8]
