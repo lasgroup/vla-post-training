@@ -27,6 +27,7 @@ DEFAULT_PARTITION = "normal"
 # renderer during collection; raise (e.g. 0.9) when policy training needs more.
 DEFAULT_MEM_FRACTION = 0.85
 REQUEUE_EXIT_CODE = 42
+PARALLEL_EXIT_CODE = 43  # src/training/parallel_collect.py
 # How many times in a row a job may crash (non-zero exit that is not the
 # graceful requeue code) before the launcher stops retrying it.
 MAX_CRASH_RETRIES = 3
@@ -107,6 +108,17 @@ child_status=0
 if [[ "$child_status" -eq 0 ]]; then
   rm -f "$CRASH_STATE"
   exit 0
+fi
+
+if [[ "$child_status" -eq {PARALLEL_EXIT_CODE} ]]; then
+  # exp.py handed this collection round to parallel collector jobs: submit them and
+  # a copy of this job that resumes after them (see src/training/parallel_collect.py).
+  rm -f "$CRASH_STATE"
+  if bash "$(dirname "$CRASH_STATE")/parallel_launch.sh"; then
+    exit 0
+  fi
+  echo "[$(date --iso-8601=seconds)] Failed to launch parallel collectors for job ${{SLURM_JOB_ID}}." >&2
+  exit "$child_status"
 fi
 
 if [[ "$child_status" -eq {REQUEUE_EXIT_CODE} ]]; then

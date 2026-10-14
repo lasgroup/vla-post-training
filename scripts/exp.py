@@ -64,6 +64,7 @@ from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
 from src.training.collect import collect_data, evaluate_policy
 from src.training.runtime_state import save_epoch_state, load_resume_state
+from src.training import parallel_collect
 from src.training.utils import init_logging, Logger
 
 
@@ -119,10 +120,27 @@ def main(config: _config.OnlineTrainConfig):
                 and (time.monotonic() - part_start_time) >= config.collect.checkpoint_interval
             )
 
+    # Parallel collection (collect.num_collectors): the training job hands each round
+    # to collector jobs; a collector job (collect.collector_index) collects one slice
+    # of the tasks and exits. See src/training/parallel_collect.py.
+    is_collector = config.collect.collector_index is not None
+    delegate_collection = bool(config.collect.num_collectors) and not is_collector
+    if is_collector:
+        parallel_collect.start_collector(agent, config)
+
     infos = []
     for step in pbar:
 
-        if step % config.collect.collect_interval == 0:
+        if step % config.collect.collect_interval == 0 and delegate_collection:
+            merged = parallel_collect.run_round(agent, config, step, collection_progress)
+            if merged is None:
+                logging.info("Exiting at step %d to launch parallel collectors.", step)
+                sys.exit(parallel_collect.PARALLEL_EXIT_CODE)
+            collect_info, n_collected_episodes = merged
+            collection_progress = None
+            logger.log_metrics(collect_info, step=step)
+
+        elif step % config.collect.collect_interval == 0:
             env_fn = make_env(config, config.collect.tasks, num_devices=num_devices)
             env = filtered_sft_wrap_env(
                 env_fn=env_fn,
@@ -157,6 +175,9 @@ def main(config: _config.OnlineTrainConfig):
                 )
                 logging.info("Recreated collection env workers at step %d.", step)
             env.close()
+            if is_collector:
+                parallel_collect.finish_collector(agent, config, step, collect_info, n_collected_episodes)
+                sys.exit(0)
             logger.log_metrics(collect_info, step=step)
             if n_collected_episodes > 0:
                 logging.info(

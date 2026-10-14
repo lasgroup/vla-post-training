@@ -103,6 +103,12 @@ def save_epoch_state(
     collection_part = None if collection_progress is None else collection_progress["part"]
     shard_path = replay_shard_path(config, step, collection_part)
     agent._online_data_buffer.save_shard(shard_path)
+    write_resume_manifest(agent, config, collection_progress)
+
+
+def write_resume_manifest(agent: Any, config: Any, collection_progress: dict | None = None) -> None:
+    """Write resume_state.json for the agent's current step (no checkpoint/shard save)."""
+    step = agent.training_steps
     manifest_path = resume_state_path(config)
     payload = {
         "step": step,

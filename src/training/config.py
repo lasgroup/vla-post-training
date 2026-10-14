@@ -310,6 +310,15 @@ class CollectionConfig:
     # Seconds between progress saves within a collection round; collection continues
     # after each save, so a crash loses at most this much. None: no periodic saves.
     checkpoint_interval: int | None = None
+    # Split each collection round over this many collector jobs (contiguous slices of
+    # `tasks`, merged in list order so FIFO eviction is unchanged). The training job
+    # submits them and waits; see src/training/parallel_collect.py. None: collect
+    # in-process.
+    num_collectors: int | None = None
+    # Set only on collector jobs: which slice to collect, and the training run's
+    # checkpoint dir to deliver the data to.
+    collector_index: int | None = None
+    parallel_main_dir: str | None = None
 
     def expand_tasks(self, tasks: str) -> list[str]:
         # Expand task ranges and handle multipliers

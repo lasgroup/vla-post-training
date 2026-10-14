@@ -133,7 +133,9 @@ def collect_data(
     """
     part = 0 if progress is None else progress["part"]
     agent.start_data_collection(step=step)
-    env.seed(config.seed + step + part)
+    # Parallel collectors (collect.collector_index) each get their own env seeds.
+    collector_offset = 0 if config.collect.collector_index is None else 1000 * (config.collect.collector_index + 1)
+    env.seed(config.seed + step + part + collector_offset)
 
     total_episodes = 0
     total_successes = 0
