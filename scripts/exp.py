@@ -47,7 +47,9 @@ import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
+import os
 import platform
+import threading
 
 from flax.training import common_utils
 import jax
@@ -62,7 +64,7 @@ from src.rl.filtered_sft_agent.filtered_sft_learner import FilteredSFTLearner
 from src.rl.filtered_sft_agent.filtered_sft_learner import filtered_sft_wrap_env
 from src.rl.ogpo.ogpo_learner import OGPOAgentLearner
 import src.training.config as _config
-from src.training.collect import collect_data, evaluate_policy
+from src.training.collect import collect_data, evaluate_policy, heartbeat, HEARTBEAT
 from src.training.runtime_state import save_epoch_state, load_resume_state
 from src.training import parallel_collect
 from src.training.utils import init_logging, Logger
@@ -128,6 +130,21 @@ def main(config: _config.OnlineTrainConfig):
     if is_collector:
         parallel_collect.start_collector(agent, config)
 
+    if config.collect.checkpoint_interval is not None:
+        # Env creation/reset can hang without ever erroring (seen once: Molmo workers
+        # stuck after "starting"). Exit with an error after 30 min without collection
+        # progress so the job wrapper's crash-retry requeues it on a fresh node.
+        def _stall_watchdog(limit=int(os.environ.get("COLLECT_STALL_LIMIT", 1800))):
+            while True:
+                time.sleep(60)
+                t = HEARTBEAT["t"]
+                if t is not None and time.monotonic() - t > limit:
+                    logging.error("No collection progress for %d s; exiting so the job is retried.", limit)
+                    logging.shutdown()
+                    os._exit(1)
+
+        threading.Thread(target=_stall_watchdog, daemon=True).start()
+
     infos = []
     for step in pbar:
 
@@ -141,6 +158,7 @@ def main(config: _config.OnlineTrainConfig):
             logger.log_metrics(collect_info, step=step)
 
         elif step % config.collect.collect_interval == 0:
+            heartbeat()
             env_fn = make_env(config, config.collect.tasks, num_devices=num_devices)
             env = filtered_sft_wrap_env(
                 env_fn=env_fn,
@@ -169,12 +187,14 @@ def main(config: _config.OnlineTrainConfig):
                 # Fresh env workers for every part: Molmo workers grow by ~2-3 GB/h
                 # each and would otherwise OOM the node late in an allocation.
                 env.close()
+                heartbeat()
                 env = filtered_sft_wrap_env(
                     env_fn=make_env(config, config.collect.tasks, num_devices=num_devices),
                     config=config,
                 )
                 logging.info("Recreated collection env workers at step %d.", step)
             env.close()
+            heartbeat(active=False)
             if is_collector:
                 parallel_collect.finish_collector(agent, config, step, collect_info, n_collected_episodes)
                 sys.exit(0)

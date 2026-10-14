@@ -1,10 +1,20 @@
 import logging
+import time
 from typing import Any, Callable
 import jax
 import numpy as np
 from src.envs.venv import BaseVectorEnv
 from src.rl.agent import Agent
 import tqdm_loggable.auto as tqdm
+
+
+# Monotonic time of the last sign of collection progress (None outside collection);
+# read by the stall watchdog in scripts/exp.py.
+HEARTBEAT = {"t": None}
+
+
+def heartbeat(active: bool = True) -> None:
+    HEARTBEAT["t"] = time.monotonic() if active else None
 
 
 def _shift_window(
@@ -174,6 +184,7 @@ def collect_data(
         obs, info = env.reset(options={"task_id": current_task_ids})
 
         while total_episodes < num_rollouts:
+            heartbeat()
             # Every part finishes at least env_num episodes, so a run whose time
             # budget is already used up at startup still makes progress.
             if should_pause is not None and total_episodes >= env.env_num and should_pause():
