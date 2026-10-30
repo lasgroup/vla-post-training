@@ -1,0 +1,599 @@
+{
+  "description": "Illustrative selected examples; aggregate performance comes from the experiment figure.",
+  "timing": "Native simulator speed. The shorter clip holds its final frame until the longer clip ends.",
+  "checkpoint_steps": {
+    "64": 499999,
+    "144": 750000
+  },
+  "validated_episodes": 108,
+  "sampling_plan": [
+    {
+      "training_seed": 0,
+      "task_id": 140,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 0,
+      "task_id": 155,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 0,
+      "task_id": 226,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 0,
+      "task_id": 345,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 0,
+      "task_id": 357,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "matched_initial_states": 12
+    },
+    {
+      "training_seed": 1,
+      "task_id": 155,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 1,
+      "task_id": 226,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 1,
+      "task_id": 345,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 1,
+      "task_id": 357,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 2,
+      "task_id": 140,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 2,
+      "task_id": 155,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 2,
+      "task_id": 226,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 2,
+      "task_id": 345,
+      "matched_initial_states": 3
+    },
+    {
+      "training_seed": 2,
+      "task_id": 357,
+      "matched_initial_states": 3
+    }
+  ],
+  "sampling_note": "The initial 90-episode sample contained no 64-failure/144-success atomizer pair. A fixed additional nine matched initial states were then recorded for training seed 1 with the same checkpoints, adding 18 episodes. Every attempted rollout is retained; these are selected qualitative examples.",
+  "recorded_pairs": [
+    {
+      "training_seed": 0,
+      "task_id": 140,
+      "episode": 0,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 140,
+      "episode": 1,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 140,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 155,
+      "episode": 0,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 155,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 155,
+      "episode": 2,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 226,
+      "episode": 0,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 226,
+      "episode": 1,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 226,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 345,
+      "episode": 0,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 345,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 345,
+      "episode": 2,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 357,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 357,
+      "episode": 1,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 0,
+      "task_id": 357,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 0,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 1,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 3,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 4,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 5,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 6,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 7,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 8,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 9,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 10,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 11,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 155,
+      "episode": 0,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 155,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 155,
+      "episode": 2,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 226,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 226,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 226,
+      "episode": 2,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 345,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 345,
+      "episode": 1,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 345,
+      "episode": 2,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 357,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 357,
+      "episode": 1,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 1,
+      "task_id": 357,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 140,
+      "episode": 0,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 140,
+      "episode": 1,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 140,
+      "episode": 2,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 155,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 155,
+      "episode": 1,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 155,
+      "episode": 2,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 226,
+      "episode": 0,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 226,
+      "episode": 1,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 226,
+      "episode": 2,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 345,
+      "episode": 0,
+      "success_64": true,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 345,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 345,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 357,
+      "episode": 0,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 357,
+      "episode": 1,
+      "success_64": false,
+      "success_144": false,
+      "identical_initial_images": true
+    },
+    {
+      "training_seed": 2,
+      "task_id": 357,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true
+    }
+  ],
+  "examples": [
+    {
+      "training_seed": 1,
+      "task_id": 140,
+      "episode": 3,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true,
+      "object": "Atomizer",
+      "selection_rule": "first paired 64-failure/144-success example in training-seed/episode order",
+      "files": [
+        "atomizer-exterior.mp4",
+        "atomizer-wrist.mp4"
+      ],
+      "combined_file": "atomizer-both.mp4"
+    },
+    {
+      "training_seed": 1,
+      "task_id": 226,
+      "episode": 1,
+      "success_64": false,
+      "success_144": true,
+      "identical_initial_images": true,
+      "object": "Wine bottle",
+      "selection_rule": "manually selected matching outcome pair for visual clarity; all audited outcomes are included",
+      "files": [
+        "wine-bottle-exterior.mp4",
+        "wine-bottle-wrist.mp4"
+      ],
+      "combined_file": "wine-bottle-both.mp4"
+    },
+    {
+      "training_seed": 1,
+      "task_id": 345,
+      "episode": 1,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true,
+      "object": "Fork",
+      "selection_rule": "first paired success/success example in training-seed/episode order",
+      "files": [
+        "fork-exterior.mp4",
+        "fork-wrist.mp4"
+      ],
+      "combined_file": "fork-both.mp4"
+    },
+    {
+      "training_seed": 0,
+      "task_id": 155,
+      "episode": 0,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true,
+      "object": "Knife",
+      "selection_rule": "first pair with the same outcome in training-seed/episode order",
+      "files": [
+        "knife-exterior.mp4",
+        "knife-wrist.mp4"
+      ],
+      "combined_file": "knife-both.mp4"
+    },
+    {
+      "training_seed": 0,
+      "task_id": 357,
+      "episode": 2,
+      "success_64": true,
+      "success_144": true,
+      "identical_initial_images": true,
+      "object": "Remote control",
+      "selection_rule": "first paired success/success example in training-seed/episode order",
+      "files": [
+        "remote-control-exterior.mp4",
+        "remote-control-wrist.mp4"
+      ],
+      "combined_file": "remote-control-both.mp4"
+    }
+  ],
+  "camera_layout": "Wrist above exterior; 64 tasks on the left, 144 on the right. All four views share one playback timeline."
+}

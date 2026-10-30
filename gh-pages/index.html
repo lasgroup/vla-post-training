@@ -53,7 +53,6 @@
   <section class="hero" id="top" aria-labelledby="paper-title">
     <div class="hero-body">
       <div class="container is-max-desktop has-text-centered">
-        <p class="eyebrow">Generalist robot learning</p>
         <h1 class="title is-1 publication-title" id="paper-title">Reinforcement Learning Enables Scaling <span>Generalist Robot Policy Improvement</span></h1>
         <!-- <p class="publication-venue">ICLR 2027 <span>· Submission</span></p> -->
         <div class="publication-authors"><span class="author"><a href="https://openreview.net/profile?id=~Micha%C5%82_Korniak1">Michal Korniak</a><sup>1</sup></span>
@@ -102,20 +101,13 @@
     <div class="container is-max-desktop">
       <div class="teaser-layout">
         <div class="teaser-story">
-          <p class="eyebrow">The central finding</p>
-          <h2 id="teaser-title">More diverse experience.<br><span>More general improvement.</span></h2>
-          <p>With enough task diversity, critic-guided reinforcement learning moves beyond specialization—and improves a robot’s performance on tasks it has never trained on.</p>
+          <h2 id="teaser-title">Diverse experience leads to<br><span>general improvement.</span></h2>
           <div class="teaser-scenes"><figure class="scene"><img src="static/images/molmo-70.jpg" alt="MolmoSpaces robot manipulation scene: Training: box" loading="lazy" width="624" height="352"><figcaption>Training: box</figcaption></figure><figure class="scene"><img src="static/images/molmo-273.jpg" alt="MolmoSpaces robot manipulation scene: New scene: box" loading="lazy" width="624" height="352"><figcaption>New scene: box</figcaption></figure><figure class="scene"><img src="static/images/molmo-357.jpg" alt="MolmoSpaces robot manipulation scene: New object: remote control" loading="lazy" width="624" height="352"><figcaption>New object: remote control</figcaption></figure></div>
-          <p class="micro-caption">Evaluated in simulated manipulation environments.</p>
         </div>
-        <div class="teaser-chart"><figure class="paper-figure"><a class="figure-link" href="static/figures/unseen-objects.svg" data-zoom aria-label="Enlarge: Success on unseen objects rises with task diversity from 1 to 144 training tasks, with BoN improving more strongly than FSFT."><img width="621" height="642" src="static/figures/unseen-objects.svg" alt="Success on unseen objects rises with task diversity from 1 to 144 training tasks, with BoN improving more strongly than FSFT." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>From forgetting to generalization.</strong> MolmoSpaces, unseen objects. <a href="static/figures/unseen-objects.svg">SVG ↗</a></figcaption></figure></div>
+        <div class="teaser-chart"><figure class="paper-figure"><a class="figure-link" href="static/figures/unseen-objects.svg" data-zoom aria-label="Enlarge: Success on unseen objects rises with task diversity from 1 to 144 training tasks, with BoN improving more strongly than FSFT."><img width="621" height="642" src="static/figures/unseen-objects.svg" alt="Success on unseen objects rises with task diversity from 1 to 144 training tasks, with BoN improving more strongly than FSFT." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>From forgetting to generalization.</strong> MolmoSpaces, unseen objects.</figcaption></figure></div>
       </div>
     </div>
   </section>
-
-  <nav class="section-nav" aria-label="Page sections"><div>
-    <a href="#tldr">TL;DR</a><a href="#motivation">Motivation</a><a href="#evaluation">Evaluation</a><a href="#results">Results</a><a href="#highlights">Highlights</a>
-  </div></nav>
 
   <section class="section band" id="tldr" aria-labelledby="tldr-title">
     <div class="container reading-width">
@@ -127,13 +119,6 @@
     </div>
   </section>
 
-  <section class="section" id="motivation" aria-labelledby="motivation-title">
-    <div class="container reading-width">
-      <h2 class="section-title" id="motivation-title">Motivation</h2>
-      <p class="section-lead">Generalization in post-training generalist policies</p>
-      <div class="content"><p>Online post-training often improves a robot on one deployment task while degrading its performance elsewhere. We ask whether experience across many tasks can improve the whole policy: both on the tasks it practices and on related tasks it has never encountered during post-training.</p></div>
-    </div>
-  </section>
 
   <section class="section" id="evaluation" aria-labelledby="evaluation-title">
     <div class="container is-max-desktop">
@@ -153,18 +138,82 @@
     <div class="container is-max-desktop">
       <h2 class="section-title" id="results-title">Results</h2>
       <p class="section-lead">Generalist improvement scales with task diversity</p>
-      <figure class="paper-figure"><a class="figure-link" href="static/figures/scaling.svg" data-zoom aria-label="Enlarge: MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, 64, and 144 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects."><img width="1666" height="589" src="static/figures/scaling.svg" alt="MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, 64, and 144 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>BoN generalizes beyond the training tasks.</strong> Final success rates as the training set grows. Orange: BoN; blue: FSFT; dashed: base policy. Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/scaling.svg">SVG ↗</a></figcaption></figure>
+      <figure class="paper-figure"><a class="figure-link" href="static/figures/scaling.svg" data-zoom aria-label="Enlarge: MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, 64, and 144 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects."><img width="1666" height="589" src="static/figures/scaling.svg" alt="MolmoSpaces success rates for FSFT and BoN across 1, 4, 16, 64, and 144 training tasks, evaluated on seen tasks, unseen scenes, and unseen objects." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>BoN generalizes beyond the training tasks.</strong> Final success rates as the training set grows. Orange: BoN; blue: FSFT; dashed: base policy. Mean and 95% stratified bootstrap confidence intervals over three seeds.</figcaption></figure>
       <div class="result-detail">
         <div><p class="eyebrow">What kind of diversity matters?</p><h3>Transfer follows the training distribution</h3><p>Diversifying scenes helps transfer to new scenes; diversifying objects helps transfer to new objects. Only scaling object diversity surpasses the base policy on both axes in this comparison.</p><p>Generalization depends on the kinds of behaviors a robot practices, as well as how many tasks it sees.</p></div>
-        <figure class="paper-figure"><a class="figure-link" href="static/figures/generalization.svg" data-zoom aria-label="Enlarge: Generalization when scaling scene diversity versus object diversity."><img width="1073" height="581" src="static/figures/generalization.svg" alt="Generalization when scaling scene diversity versus object diversity." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Diversification transfers best along its own axis.</strong> Mean and 95% stratified bootstrap confidence intervals over three seeds. <a href="static/figures/generalization.svg">SVG ↗</a></figcaption></figure>
+        <figure class="paper-figure"><a class="figure-link" href="static/figures/generalization.svg" data-zoom aria-label="Enlarge: Generalization when scaling scene diversity versus object diversity."><img width="1073" height="581" src="static/figures/generalization.svg" alt="Generalization when scaling scene diversity versus object diversity." loading="lazy" decoding="async"><span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span></a><figcaption><strong>Diversification transfers best along its own axis.</strong> Mean and 95% stratified bootstrap confidence intervals over three seeds.</figcaption></figure>
       </div>
     </div>
   </section>
 
-  <section class="section band" id="highlights" aria-labelledby="highlights-title">
-    <div class="container reading-width">
-      <h2 class="section-title" id="highlights-title">Highlights</h2>
-      <div class="takeaways"><p><span>01</span><strong>Multi-task improvement is possible.</strong> A single generalist policy can improve across a diverse collection of training tasks.</p><p><span>02</span><strong>Value learning enables transfer.</strong> With sufficient task diversity, critic-guided refinement transitions from forgetting to generalization.</p><p><span>03</span><strong>The task distribution matters.</strong> Diverse manipulation behaviors are essential for transferring to new objects.</p></div>
+  <section class="section" id="shape-transfer" aria-labelledby="shape-transfer-title">
+    <div class="container is-max-desktop">
+      <h2 class="section-title" id="shape-transfer-title">Generalization analysis</h2>
+      <p class="section-lead">Transfer to related object shapes</p>
+      <div class="shape-evidence">
+        <div>
+          <p>Scaling from <strong>64 to 144 training tasks</strong> introduces four additional object categories:</p>
+          <ul class="added-categories" id="added-training-objects" aria-label="Additional training object categories">
+            <li><div class="object-photo"><img src="static/images/salt-shaker-closeup.png" alt="Salt shaker: actual MolmoSpaces training object" loading="lazy" width="1024" height="1024"></div><span>Salt shaker</span></li>
+            <li><div class="object-photo"><img src="static/images/soap-dispenser-closeup.png" alt="Soap dispenser: actual MolmoSpaces training object" loading="lazy" width="1024" height="1024"></div><span>Soap dispenser</span></li>
+            <li><div class="object-photo"><img src="static/images/mug-closeup.png" alt="Mug: actual MolmoSpaces training object" loading="lazy" width="1024" height="1024"></div><span>Mug</span></li>
+            <li><div class="object-photo"><img src="static/images/fruit-closeup.png" alt="Fruit &amp; vegetables: actual MolmoSpaces training object" loading="lazy" width="1024" height="1024"></div><span>Fruit &amp; vegetables</span></li>
+          </ul>
+          <p>The per-object results show higher BoN success on unseen <strong>atomizers and wine bottles</strong>, while performance on knives, forks, and remote controls changes little. This pattern is consistent with transfer across similar object shapes.</p>
+        </div>
+        <figure class="paper-figure">
+          <a class="figure-link" href="static/figures/shape-transfer.svg" data-zoom aria-label="Enlarge success rates for six unseen object categories">
+            <img src="static/figures/shape-transfer.svg" alt="Per-object success rates: from 64 to 144 training tasks, BoN improves on atomizers and wine bottles, with little change on forks, knives, and remote controls." loading="lazy" decoding="async">
+            <span class="zoom-label" aria-hidden="true">↗ Enlarge figure</span>
+          </a>
+          <figcaption>Aggregate results on unseen objects. Orange: BoN; blue: FSFT; dashed: base policy.</figcaption>
+        </figure>
+      </div>
+      <div class="rollout-blocks" id="rollout-viewer" role="region" aria-roledescription="carousel" aria-label="Generalization comparisons">
+        <div class="rollout-carousel-controls" hidden>
+          <button class="rollout-arrow" type="button" data-rollout-prev aria-label="Previous comparison">←</button>
+          <div class="rollout-carousel-tabs" role="tablist" aria-label="Choose a comparison">
+            <button type="button" role="tab" id="improvement-tab" aria-controls="improvement-slide" aria-selected="true" tabindex="0">Improvement</button>
+            <button type="button" role="tab" id="little-change-tab" aria-controls="little-change-slide" aria-selected="false" tabindex="-1">Little change</button>
+          </div>
+          <button class="rollout-arrow" type="button" data-rollout-next aria-label="Next comparison">→</button>
+        </div>
+        <article class="rollout-viewer" data-rollout-viewer data-default-task="226" id="improvement-slide" role="tabpanel" aria-labelledby="improvement-tab">
+          <header class="rollout-block-heading">
+              <h3 id="improvement-title">Improvement with more objects</h3>
+            <p>Adding salt shakers and soap dispensers introduces bottle-like shapes, consistent with improved transfer to atomizers and wine bottles.</p>
+          </header>
+          <div class="rollout-toolbar">
+            <div class="rollout-objects" role="group" aria-label="Choose an object: improvement with more objects">
+              <button type="button" data-rollout-task="140" aria-pressed="false">Atomizer</button>
+              <button type="button" data-rollout-task="226" aria-pressed="true">Wine bottle</button>
+            </div>
+          </div>
+          <video class="rollout-video" controls muted loop playsinline preload="none" width="1248" height="762"
+            poster="static/videos/molmo/wine-bottle-both.jpg" src="static/videos/molmo/wine-bottle-both.mp4"
+            aria-label="BoN wine bottle rollouts with 64 and 144 training tasks, synchronized wrist and exterior cameras">
+            Your browser does not support embedded video. <a href="static/videos/molmo/wine-bottle-both.mp4">Download the comparison.</a>
+          </video>
+        </article>
+        <article class="rollout-viewer" data-rollout-viewer data-default-task="345" id="little-change-slide" role="tabpanel" aria-labelledby="little-change-tab">
+          <header class="rollout-block-heading">
+              <h3 id="little-change-title">Little additional improvement</h3>
+            <p>Forks, knives, and remote controls change little, consistent with similar shapes already being represented in training.</p>
+          </header>
+          <div class="rollout-toolbar">
+            <div class="rollout-objects" role="group" aria-label="Choose an object: little additional improvement">
+              <button type="button" data-rollout-task="345" aria-pressed="true">Fork</button>
+              <button type="button" data-rollout-task="155" aria-pressed="false">Knife</button>
+              <button type="button" data-rollout-task="357" aria-pressed="false">Remote control</button>
+            </div>
+          </div>
+          <video class="rollout-video" controls muted loop playsinline preload="none" width="1248" height="762"
+            poster="static/videos/molmo/fork-both.jpg" src="static/videos/molmo/fork-both.mp4"
+            aria-label="BoN fork rollouts with 64 and 144 training tasks, synchronized wrist and exterior cameras">
+            Your browser does not support embedded video. <a href="static/videos/molmo/fork-both.mp4">Download the comparison.</a>
+          </video>
+        </article>
+      </div>
     </div>
   </section>
 
