@@ -1,0 +1,5 @@
+assets: /home/mananaga/OGPO/.venv/lib/python3.11/site-packages/libero/libero/./assets
+bddl_files: /home/mananaga/OGPO/.venv/lib/python3.11/site-packages/libero/libero/./bddl_files
+benchmark_root: /home/mananaga/OGPO/.venv/lib/python3.11/site-packages/libero/libero
+datasets: /home/mananaga/OGPO/.venv/lib/python3.11/site-packages/libero/libero/../datasets
+init_states: /home/mananaga/OGPO/.venv/lib/python3.11/site-packages/libero/libero/./init_files

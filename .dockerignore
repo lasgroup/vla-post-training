@@ -1,0 +1,67 @@
+# Virtual environments
+.venv
+venv
+env
+
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*.so
+*.a
+*.o
+
+# Build artifacts
+build
+dist
+*.egg-info
+.eggs
+
+# Data / outputs (never bake into image)
+wandb
+logs
+outputs
+checkpoints
+ckpts
+artifacts
+results
+runs
+tmp
+cache
+.cache
+data
+datasets
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.npz
+*.npy
+*.pkl
+*.joblib
+
+# Media
+*.mp4
+*.avi
+*.mov
+*.png
+*.pdf
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.whl
+
+# Misc
+.DS_Store
+*.swp
+*.swo
+.ipynb_checkpoints
+MUJOCO_LOG.TXT
+secrets.env
+.claude
