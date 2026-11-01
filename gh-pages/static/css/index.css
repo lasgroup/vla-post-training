@@ -327,7 +327,8 @@ strong {
 }
 .task-gallery {
   display:grid;
-  grid-template-columns:2fr 1fr 1fr;
+  /* Side columns sized so their images match the training images, given gap == divider padding (+1px border) */
+  grid-template-columns:1fr calc((100% - 6px) / 4) calc((100% - 6px) / 4);
   gap:23px;
   margin-top:32px;
 }
@@ -781,7 +782,7 @@ body.figure-open {
   }
   .task-gallery {
     grid-template-columns:1fr 1fr;
-    gap:24px 14px;
+    gap:24px 8px;
   }
   .task-group.training {
     grid-column:1/-1;
